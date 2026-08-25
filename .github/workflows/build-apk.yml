@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -14,68 +14,57 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find Android project ZIP
-        id: find_zip
+      - name: Find fixed Android ZIP
         shell: bash
         run: |
-          echo "Files in repository:"
-          find . -maxdepth 3 -type f -print | sort
+          set -e
 
-          ZIP=""
+          ZIP_FILE="RKMS_Connect_Android_FCM_FINAL_V9_FIXED.zip"
 
-          ZIP=$(find . -maxdepth 2 -type f \
-            \( -iname "*FCM*FINAL*V9*.zip" -o -iname "*FCM*FINAL*.zip" \) \
-            -print -quit)
-
-          if [ -z "$ZIP" ]; then
-            ZIP=$(find . -maxdepth 2 -type f -iname "*.zip" -print -quit)
-          fi
-
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: No Android ZIP file found in repository."
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: $ZIP_FILE not found in repository."
+            echo "Files in repository:"
+            find . -maxdepth 3 -type f -print
             exit 1
           fi
 
-          echo "Android ZIP found:"
-          echo "$ZIP"
-
-          echo "zip_path=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "Found: $ZIP_FILE"
 
       - name: Extract Android project
+        shell: bash
         run: |
+          set -e
+
           rm -rf build-project
           mkdir -p build-project
 
-          unzip -q "${{ steps.find_zip.outputs.zip_path }}" -d build-project
+          unzip -q "RKMS_Connect_Android_FCM_FINAL_V9_FIXED.zip" \
+            -d build-project
 
-          echo "Extracted project files:"
-          find build-project -maxdepth 4 -type f | sort | head -300
+          echo "Extracted files:"
+          find build-project -maxdepth 3 -type f -print
 
-      - name: Find Android project
-        id: find_project
+      - name: Locate Android project
+        id: android_project
         shell: bash
         run: |
-          PROJECT_DIR=""
+          set -e
 
-          PROJECT_DIR=$(find build-project -type f -name "settings.gradle" -print -quit | xargs -r dirname)
+          PROJECT_DIR="build-project/rkms_android"
 
-          if [ -z "$PROJECT_DIR" ]; then
-            PROJECT_DIR=$(find build-project -type f -name "settings.gradle.kts" -print -quit | xargs -r dirname)
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android Gradle project was not found."
-            echo "Searching for Gradle files:"
-            find build-project -type f \
-              \( -name "settings.gradle" -o -name "settings.gradle.kts" -o -name "build.gradle" -o -name "build.gradle.kts" \) \
-              -print
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
+            echo "ERROR: settings.gradle not found."
+            find build-project -name settings.gradle -print
             exit 1
           fi
 
-          echo "Android project found at:"
-          echo "$PROJECT_DIR"
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "ERROR: app/build.gradle not found."
+            exit 1
+          fi
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Android project: $PROJECT_DIR"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -88,37 +77,69 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build debug APK
-        working-directory: ${{ steps.find_project.outputs.project_dir }}
-        run: |
-          gradle --no-daemon --stacktrace assembleDebug
-
-      - name: Find generated APK
-        id: find_apk
+      - name: Verify Android Gradle files
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
         shell: bash
         run: |
-          APK=$(find "${{ steps.find_project.outputs.project_dir }}" \
-            -type f -name "*.apk" \
-            -print -quit)
+          set -e
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
+          echo "===== settings.gradle ====="
+          cat settings.gradle
+
+          echo "===== root build.gradle ====="
+          cat build.gradle
+
+          echo "===== app/build.gradle ====="
+          cat app/build.gradle
+
+          echo "===== google-services.json ====="
+          if [ -f app/google-services.json ]; then
+            echo "google-services.json found."
+          else
+            echo "ERROR: app/google-services.json not found."
             exit 1
           fi
 
-          echo "APK generated:"
-          echo "$APK"
+      - name: Build debug APK
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
 
-          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Find generated APK
+        id: apk
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          APK_FILE="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)"
+
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: APK was not generated."
+            find app/build/outputs -type f -print || true
+            exit 1
+          fi
+
+          echo "APK found: $APK_FILE"
+          echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Rename APK
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
         run: |
-          cp "${{ steps.find_apk.outputs.apk_path }}" \
+          set -e
+
+          cp "${{ steps.apk.outputs.apk_path }}" \
              "RKMS-Connect-FCM-FINAL-V9.apk"
+
+          ls -lh "RKMS-Connect-FCM-FINAL-V9.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Connect-FCM-FINAL-V9
-          path: RKMS-Connect-FCM-FINAL-V9.apk
+          path: ${{ steps.android_project.outputs.project_dir }}/RKMS-Connect-FCM-FINAL-V9.apk
           if-no-files-found: error
