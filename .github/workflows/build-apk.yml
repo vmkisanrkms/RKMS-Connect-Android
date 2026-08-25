@@ -8,66 +8,74 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract Android project
+      - name: Check V9 source ZIP
         run: |
-          mkdir -p build-project
-          unzip -q RKMS_Connect_Android_New_Project_With_Logo.zip -d build-project
+          test -f RKMS_Connect_Android_FCM_FINAL_V9.zip
+          echo "V9 ZIP found."
 
-      - name: Set up Java
+      - name: Extract and locate Android project
+        run: |
+          rm -rf build-project
+          mkdir -p build-project
+
+          unzip -q RKMS_Connect_Android_FCM_FINAL_V9.zip -d build-project
+
+          PROJECT_DIR=$(find build-project -type f -name "settings.gradle" -print -quit | xargs dirname)
+
+          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "Android project not found."
+            find build-project -maxdepth 4 -type f | head -100
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Android project found at:"
+          echo "$PROJECT_DIR"
+
+      - name: Verify Android project
+        run: |
+          test -f "$PROJECT_DIR/settings.gradle"
+          test -f "$PROJECT_DIR/build.gradle"
+          test -f "$PROJECT_DIR/app/build.gradle"
+          test -f "$PROJECT_DIR/app/google-services.json"
+
+          echo "Android project verification successful."
+
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Find Android project
-        shell: bash
-        run: |
-          SETTINGS=$(find "$GITHUB_WORKSPACE/build-project" -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
-
-          if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Android project settings.gradle not found."
-            echo "Files found in extracted project:"
-            find "$GITHUB_WORKSPACE/build-project" -maxdepth 5 -type f | head -200
-            exit 1
-          fi
-
-          ANDROID_DIR=$(dirname "$SETTINGS")
-
-          echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
-
-          echo "Android project found at:"
-          echo "$ANDROID_DIR"
-
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.13'
+          gradle-version: '8.9'
 
       - name: Build Debug APK
-        run: gradle --no-daemon assembleDebug
-        working-directory: ${{ env.ANDROID_DIR }}
-
-      - name: Find generated APK
-        shell: bash
         run: |
-          APK=$(find "$ANDROID_DIR" -type f -name "*.apk" | head -n 1)
+          cd "$PROJECT_DIR"
+          gradle --no-daemon --stacktrace :app:assembleDebug
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
+      - name: Verify APK
+        run: |
+          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "APK was not created."
             exit 1
           fi
 
-          echo "APK found:"
-          echo "$APK"
-
-          cp "$APK" "$GITHUB_WORKSPACE/RKMS-Connect-APK.apk"
+          echo "APK successfully created:"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Connect-APK
-          path: RKMS-Connect-APK.apk
+          name: RKMS-Connect-V9-APK
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
