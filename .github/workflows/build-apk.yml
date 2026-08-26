@@ -14,27 +14,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check V4 Android ZIP
+      - name: Verify V5 source ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE="RKMS_Connect_Android_WEBSITE_SYNC_FCM_V4_FINAL.zip"
+          ZIP_FILE="RKMS_Connect_Android_WEBSITE_SYNC_FCM_V5_FINAL.zip"
+
+          echo "Checking source ZIP..."
+          echo "Expected: $ZIP_FILE"
 
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: $ZIP_FILE not found in repository."
+            echo "ERROR: $ZIP_FILE was not found."
             echo ""
-            echo "Repository files:"
-            find . -maxdepth 3 -type f -print
+            echo "ZIP files found in repository:"
+            find . -type f -name "*.zip" -print
             exit 1
           fi
 
-          echo "======================================"
-          echo "Found Android source ZIP:"
+          echo ""
+          echo "Source ZIP found:"
           ls -lh "$ZIP_FILE"
-          echo "======================================"
 
-      - name: Extract V4 Android project
+      - name: Extract V5 source
         shell: bash
         run: |
           set -e
@@ -43,14 +45,12 @@ jobs:
           mkdir -p build-project
 
           unzip -q \
-            "RKMS_Connect_Android_WEBSITE_SYNC_FCM_V4_FINAL.zip" \
+            "RKMS_Connect_Android_WEBSITE_SYNC_FCM_V5_FINAL.zip" \
             -d build-project
 
-          echo "======================================"
+          echo ""
           echo "Extracted project:"
-          echo "======================================"
-
-          find build-project/rkms_android -maxdepth 3 -type f -print
+          find build-project/rkms_android -maxdepth 3 -type f -print | sort
 
       - name: Verify Android project
         id: android_project
@@ -60,51 +60,153 @@ jobs:
 
           PROJECT_DIR="build-project/rkms_android"
 
-          echo "Checking project: $PROJECT_DIR"
+          echo "Checking: $PROJECT_DIR"
 
-          if [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
-            echo "ERROR: settings.gradle not found."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/build.gradle" ]; then
-            echo "ERROR: root build.gradle not found."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
-            echo "ERROR: app/build.gradle not found."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/app/google-services.json" ]; then
-            echo "ERROR: app/google-services.json not found."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml" ]; then
-            echo "ERROR: AndroidManifest.xml not found."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/app/src/main/java/org/rkms/connect/MainActivity.java" ]; then
-            echo "ERROR: MainActivity.java not found."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/app/src/main/assets/index.html" ]; then
-            echo "ERROR: assets/index.html not found."
-            exit 1
-          fi
+          test -f "$PROJECT_DIR/settings.gradle"
+          test -f "$PROJECT_DIR/build.gradle"
+          test -f "$PROJECT_DIR/app/build.gradle"
+          test -f "$PROJECT_DIR/app/google-services.json"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
           echo ""
-          echo "======================================"
-          echo "ANDROID PROJECT VERIFIED"
-          echo "======================================"
-          echo "Project: $PROJECT_DIR"
+          echo "Android project verification: PASSED"
+
+      - name: Verify actual WebView website
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "Checking WebView runtime..."
+
+          test -f "app/src/main/assets/www/index.html"
+          test -f "app/src/main/assets/www/app.js"
+          test -f "app/src/main/assets/www/styles.css"
+          test -f "app/src/main/assets/www/config.js"
+
           echo ""
+          echo "Website runtime files:"
+          find app/src/main/assets/www -maxdepth 2 -type f -print | sort
+
+          echo ""
+          echo "Website runtime size:"
+          du -sh app/src/main/assets/www
+
+      - name: Verify WebView points to current website
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          MAIN_ACTIVITY="app/src/main/java/org/rkms/connect/MainActivity.java"
+
+          test -f "$MAIN_ACTIVITY"
+
+          if ! grep -q "android_asset/www/index.html" "$MAIN_ACTIVITY"; then
+            echo "ERROR: MainActivity is not opening assets/www/index.html"
+            exit 1
+          fi
+
+          echo "WebView target verification: PASSED"
+
+      - name: Verify no conflicting root website copies
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          for FILE in index.html app.js styles.css config.js; do
+            if [ -f "app/src/main/assets/$FILE" ]; then
+              echo "ERROR: Conflicting root asset found:"
+              echo "app/src/main/assets/$FILE"
+              exit 1
+            fi
+          done
+
+          echo "No conflicting root website copies found."
+
+      - name: Verify Book Zoom
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          MAIN_ACTIVITY="app/src/main/java/org/rkms/connect/MainActivity.java"
+
+          if ! grep -q "setSupportZoom(true)" "$MAIN_ACTIVITY"; then
+            echo "ERROR: WebView support zoom is not enabled."
+            exit 1
+          fi
+
+          if ! grep -q "setBuiltInZoomControls(true)" "$MAIN_ACTIVITY"; then
+            echo "ERROR: Built-in zoom controls are not enabled."
+            exit 1
+          fi
+
+          echo "Book Zoom verification: PASSED"
+
+      - name: Verify Firebase and notifications
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "Checking Firebase configuration..."
+
+          test -f "app/google-services.json"
+
+          echo "Searching for FirebaseMessagingService..."
+
+          if ! grep -R -q "FirebaseMessagingService" \
+            app/src/main/java; then
+            echo "ERROR: FirebaseMessagingService not found."
+            exit 1
+          fi
+
+          echo "Checking notification permission..."
+
+          if ! grep -q "POST_NOTIFICATIONS" \
+            app/src/main/AndroidManifest.xml; then
+            echo "ERROR: POST_NOTIFICATIONS permission not found."
+            exit 1
+          fi
+
+          echo ""
+          echo "Firebase/notification verification: PASSED"
+
+      - name: Verify important website sections
+        working-directory: ${{ steps.android_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          APP_JS="app/src/main/assets/www/app.js"
+          INDEX="app/src/main/assets/www/index.html"
+
+          test -f "$APP_JS"
+          test -f "$INDEX"
+
+          echo "Checking website runtime code..."
+
+          if ! grep -qi "chat" "$APP_JS" "$INDEX"; then
+            echo "WARNING: Chat marker not found."
+          fi
+
+          if ! grep -qiE "digital|digital.?id" "$APP_JS" "$INDEX"; then
+            echo "WARNING: Digital ID marker not found."
+          fi
+
+          if ! grep -qiE "appointment|niukti|नियुक्ति" "$APP_JS" "$INDEX"; then
+            echo "WARNING: Appointment marker not found."
+          fi
+
+          if ! grep -qiE "leadership|राष्ट्रीय नेतृत्व" "$APP_JS" "$INDEX"; then
+            echo "WARNING: Leadership marker not found."
+          fi
+
+          echo "Website section verification completed."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -117,117 +219,38 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Verify Gradle and Android files
-        working-directory: ${{ steps.android_project.outputs.project_dir }}
+      - name: Show build environment
         shell: bash
         run: |
-          set -e
-
-          echo "======================================"
-          echo "JAVA VERSION"
-          echo "======================================"
+          echo "=============================="
+          echo "JAVA"
+          echo "=============================="
           java -version
 
           echo ""
-          echo "======================================"
-          echo "GRADLE VERSION"
-          echo "======================================"
+          echo "=============================="
+          echo "GRADLE"
+          echo "=============================="
           gradle --version
 
-          echo ""
-          echo "======================================"
-          echo "ROOT build.gradle"
-          echo "======================================"
-          cat build.gradle
-
-          echo ""
-          echo "======================================"
-          echo "settings.gradle"
-          echo "======================================"
-          cat settings.gradle
-
-          echo ""
-          echo "======================================"
-          echo "APP build.gradle"
-          echo "======================================"
-          cat app/build.gradle
-
-          echo ""
-          echo "======================================"
-          echo "GOOGLE SERVICES"
-          echo "======================================"
-          ls -lh app/google-services.json
-
-          echo ""
-          echo "======================================"
-          echo "MAIN ACTIVITY"
-          echo "======================================"
-          grep -n "android_asset/www/index.html" \
-            app/src/main/java/org/rkms/connect/MainActivity.java
-
-          echo ""
-          echo "======================================"
-          echo "FCM FILES"
-          echo "======================================"
-          find app/src/main/java/org/rkms/connect \
-            -maxdepth 1 \
-            -type f \
-            -name '*FCM*' \
-            -o -name '*Notification*' \
-            -print
-
-          echo ""
-          echo "======================================"
-          echo "WEB ASSETS"
-          echo "======================================"
-          find app/src/main/assets -maxdepth 2 -type f | sort | head -100
-
-      - name: Verify website bundle inside APK source
+      - name: Clean project
         working-directory: ${{ steps.android_project.outputs.project_dir }}
         shell: bash
         run: |
           set -e
 
-          echo "Checking bundled website..."
+          gradle \
+            --no-daemon \
+            clean
 
-          if [ ! -d "app/src/main/assets/www" ]; then
-            echo "ERROR: app/src/main/assets/www directory not found."
-            exit 1
-          fi
-
-          if [ ! -f "app/src/main/assets/www/index.html" ]; then
-            echo "ERROR: bundled www/index.html not found."
-            exit 1
-          fi
-
-          echo ""
-          echo "Bundled website files:"
-          find app/src/main/assets/www -maxdepth 2 -type f | sort | head -150
-
-          echo ""
-          echo "Website bundle size:"
-          du -sh app/src/main/assets/www
-
-          echo ""
-          echo "Website index found:"
-          ls -lh app/src/main/assets/www/index.html
-
-      - name: Clean previous build
-        working-directory: ${{ steps.android_project.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -e
-
-          gradle --no-daemon clean
-
-      - name: Build debug APK
+      - name: Build Debug APK
         working-directory: ${{ steps.android_project.outputs.project_dir }}
         shell: bash
         run: |
           set -e
 
           echo "======================================"
-          echo "BUILDING RKMS CONNECT V4 FCM APK"
+          echo "BUILDING RKMS CONNECT V5"
           echo "======================================"
 
           gradle \
@@ -236,7 +259,7 @@ jobs:
             --warning-mode all \
             assembleDebug
 
-      - name: Verify generated APK
+      - name: Find generated APK
         id: apk
         working-directory: ${{ steps.android_project.outputs.project_dir }}
         shell: bash
@@ -251,7 +274,10 @@ jobs:
             exit 1
           fi
 
-          APK_FILE="$(find "$APK_DIR" -type f -name '*.apk' | head -n 1)"
+          APK_FILE="$(find "$APK_DIR" \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
 
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: APK was not generated."
@@ -261,32 +287,30 @@ jobs:
 
           echo ""
           echo "======================================"
-          echo "APK GENERATED SUCCESSFULLY"
+          echo "APK GENERATED"
           echo "======================================"
+
           ls -lh "$APK_FILE"
 
           echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Rename APK
+      - name: Rename final APK
         working-directory: ${{ steps.android_project.outputs.project_dir }}
-        shell: bash
         run: |
           set -e
 
-          SOURCE_APK="${{ steps.apk.outputs.apk_path }}"
-          FINAL_APK="RKMS-Connect-WEBSITE-SYNC-FCM-V4.apk"
+          cp \
+            "${{ steps.apk.outputs.apk_path }}" \
+            "RKMS-Connect-WEBSITE-SYNC-FCM-V5.apk"
 
-          cp "$SOURCE_APK" "$FINAL_APK"
+          echo ""
+          echo "Final APK:"
+          ls -lh "RKMS-Connect-WEBSITE-SYNC-FCM-V5.apk"
 
-          echo "======================================"
-          echo "FINAL APK"
-          echo "======================================"
-          ls -lh "$FINAL_APK"
-
-      - name: Upload APK artifact
+      - name: Upload final APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Connect-WEBSITE-SYNC-FCM-V4
-          path: ${{ steps.android_project.outputs.project_dir }}/RKMS-Connect-WEBSITE-SYNC-FCM-V4.apk
+          name: RKMS-Connect-WEBSITE-SYNC-FCM-V5
+          path: ${{ steps.android_project.outputs.project_dir }}/RKMS-Connect-WEBSITE-SYNC-FCM-V5.apk
           if-no-files-found: error
           retention-days: 30
