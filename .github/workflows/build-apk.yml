@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -14,21 +14,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find fixed Android ZIP
+      - name: Check Android ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE="RKMS_Connect_Android_FCM_FINAL_V9_FIXED.zip"
+          ZIP_FILE="RKMS_Connect_Android_FCM_FINAL_V9_SPLASH_FINAL_DOWNLOAD.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
             echo "ERROR: $ZIP_FILE not found in repository."
-            echo "Files in repository:"
-            find . -maxdepth 3 -type f -print
+            echo "ZIP files currently in repository:"
+            find . -maxdepth 2 -type f -iname "*.zip" -print
             exit 1
           fi
 
-          echo "Found: $ZIP_FILE"
+          echo "Found Android source:"
+          echo "$ZIP_FILE"
 
       - name: Extract Android project
         shell: bash
@@ -38,11 +39,12 @@ jobs:
           rm -rf build-project
           mkdir -p build-project
 
-          unzip -q "RKMS_Connect_Android_FCM_FINAL_V9_FIXED.zip" \
+          unzip -q \
+            "RKMS_Connect_Android_FCM_FINAL_V9_SPLASH_FINAL_DOWNLOAD.zip" \
             -d build-project
 
-          echo "Extracted files:"
-          find build-project -maxdepth 3 -type f -print
+          echo "Android project files:"
+          find build-project -maxdepth 4 -type f -print | sort
 
       - name: Locate Android project
         id: android_project
@@ -54,7 +56,9 @@ jobs:
 
           if [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
             echo "ERROR: settings.gradle not found."
-            find build-project -name settings.gradle -print
+            find build-project \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              -print
             exit 1
           fi
 
@@ -64,7 +68,9 @@ jobs:
           fi
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Android project: $PROJECT_DIR"
+
+          echo "Android project found:"
+          echo "$PROJECT_DIR"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -72,33 +78,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Verify Android Gradle files
+      - name: Verify Android project
         working-directory: ${{ steps.android_project.outputs.project_dir }}
         shell: bash
         run: |
           set -e
 
-          echo "===== settings.gradle ====="
-          cat settings.gradle
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/google-services.json
 
-          echo "===== root build.gradle ====="
-          cat build.gradle
-
-          echo "===== app/build.gradle ====="
-          cat app/build.gradle
-
-          echo "===== google-services.json ====="
-          if [ -f app/google-services.json ]; then
-            echo "google-services.json found."
-          else
-            echo "ERROR: app/google-services.json not found."
-            exit 1
-          fi
+          echo "Android project verification PASSED."
 
       - name: Build debug APK
         working-directory: ${{ steps.android_project.outputs.project_dir }}
@@ -106,7 +102,11 @@ jobs:
         run: |
           set -e
 
-          gradle --no-daemon --stacktrace assembleDebug
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all \
+            :app:assembleDebug
 
       - name: Find generated APK
         id: apk
@@ -115,29 +115,39 @@ jobs:
         run: |
           set -e
 
-          APK_FILE="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)"
+          APK_FILE="$(find app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
 
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: APK was not generated."
-            find app/build/outputs -type f -print || true
+
+            echo "Available build output:"
+            find app/build/outputs -type f -print 2>/dev/null || true
+
             exit 1
           fi
 
-          echo "APK found: $APK_FILE"
+          echo "APK successfully generated:"
+          ls -lh "$APK_FILE"
+
           echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Rename APK
+      - name: Prepare final APK
         working-directory: ${{ steps.android_project.outputs.project_dir }}
         shell: bash
         run: |
           set -e
 
-          cp "${{ steps.apk.outputs.apk_path }}" \
-             "RKMS-Connect-FCM-FINAL-V9.apk"
+          cp \
+            "${{ steps.apk.outputs.apk_path }}" \
+            "RKMS-Connect-FCM-FINAL-V9.apk"
 
+          echo "Final APK:"
           ls -lh "RKMS-Connect-FCM-FINAL-V9.apk"
 
-      - name: Upload APK
+      - name: Upload final APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Connect-FCM-FINAL-V9
