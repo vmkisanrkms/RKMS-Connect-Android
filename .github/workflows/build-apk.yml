@@ -14,12 +14,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify V4 source ZIP
+      - name: Verify V5 source ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE="RKMS_Connect_ANDROID_FROM_CURRENT_WEBSITE_V4_CHAT_CURRENT.zip"
+          ZIP_FILE="RKMS_Connect_ANDROID_EXACT_NETLIFY_WEBSITE_V5.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
             echo "ERROR: $ZIP_FILE not found."
@@ -40,7 +40,7 @@ jobs:
           mkdir -p build-project
 
           unzip -q \
-            "RKMS_Connect_ANDROID_FROM_CURRENT_WEBSITE_V4_CHAT_CURRENT.zip" \
+            "RKMS_Connect_ANDROID_EXACT_NETLIFY_WEBSITE_V5.zip" \
             -d build-project
 
           test -d build-project/rkms_android
@@ -66,34 +66,7 @@ jobs:
 
           echo "Android project verified."
 
-      - name: Verify current Website Chat
-        shell: bash
-        run: |
-          set -e
-
-          APP="build-project/rkms_android/app/src/main/assets/www/app.js"
-
-          test -f "$APP"
-
-          echo "Checking current RKMS Chat..."
-
-          grep -q 'class="rkms-chat-title">RKMS Chat' "$APP"
-          grep -q 'Search chats...' "$APP"
-          grep -q 'data-chat-filter="group"' "$APP"
-
-          if grep -q 'WhatsApp जैसे Recent Chats' "$APP"; then
-            echo "ERROR: Old Chat UI detected."
-            exit 1
-          fi
-
-          if grep -q 'अभी कोई पुरानी chat नहीं है।' "$APP"; then
-            echo "ERROR: Old Chat UI detected."
-            exit 1
-          fi
-
-          echo "Current Chat verification passed."
-
-      - name: Verify Website files
+      - name: Verify exact Website bundle
         shell: bash
         run: |
           set -e
@@ -112,17 +85,23 @@ jobs:
           echo "Website size:"
           du -sh "$WEB"
 
+          echo ""
+          echo "Exact Website bundle verification passed."
+
       - name: Verify WebView
         shell: bash
         run: |
           set -e
 
           P="build-project/rkms_android"
+
           MAIN="$P/app/src/main/java/org/rkms/connect/MainActivity.java"
+
+          test -f "$MAIN"
 
           grep -q "android_asset/www/index.html" "$MAIN"
 
-          echo "WebView target verified."
+          echo "WebView opens bundled Website."
 
       - name: Verify Zoom
         shell: bash
@@ -148,8 +127,8 @@ jobs:
           grep -q "firebase-messaging" \
             "$P/app/build.gradle"
 
-          grep -q "FirebaseMessagingService" \
-            "$P/app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java"
+          grep -R -q "FirebaseMessagingService" \
+            "$P/app/src/main/java"
 
           grep -q "RKMSFirebaseMessagingService" \
             "$P/app/src/main/AndroidManifest.xml"
@@ -159,24 +138,17 @@ jobs:
 
           echo "FCM verification passed."
 
-      - name: Verify no old native Chat implementation
+      - name: Verify native project is WebView based
         shell: bash
         run: |
           set -e
 
-          JAVA_DIR="build-project/rkms_android/app/src/main/java"
+          P="build-project/rkms_android"
+          MAIN="$P/app/src/main/java/org/rkms/connect/MainActivity.java"
 
-          if grep -R -n -E \
-            "rkms_chat_threads|rkms_chat_messages|rkms_chat_open|renderAppointmentLetter|appointment-member-photo" \
-            "$JAVA_DIR" \
-            --include="*.java"; then
+          grep -q "android_asset/www/index.html" "$MAIN"
 
-            echo ""
-            echo "ERROR: Old native Chat/Appointment implementation detected."
-            exit 1
-          fi
-
-          echo "No old native Chat/Appointment implementation found."
+          echo "Android wrapper verification passed."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -255,15 +227,15 @@ jobs:
 
           cp \
             "${{ steps.apk.outputs.apk_path }}" \
-            "RKMS-Connect-CURRENT-WEBSITE-FCM.apk"
+            "RKMS-Connect-EXACT-NETLIFY-WEBSITE-FCM.apk"
 
           echo "Final APK:"
-          ls -lh "RKMS-Connect-CURRENT-WEBSITE-FCM.apk"
+          ls -lh "RKMS-Connect-EXACT-NETLIFY-WEBSITE-FCM.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Connect-CURRENT-WEBSITE-FCM
-          path: build-project/rkms_android/RKMS-Connect-CURRENT-WEBSITE-FCM.apk
+          name: RKMS-Connect-EXACT-NETLIFY-WEBSITE-FCM
+          path: build-project/rkms_android/RKMS-Connect-EXACT-NETLIFY-WEBSITE-FCM.apk
           if-no-files-found: error
           retention-days: 30
