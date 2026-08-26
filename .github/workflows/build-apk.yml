@@ -3,87 +3,96 @@ name: Build RKMS Connect APK
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Set up Gradle
+      - name: Install Android SDK
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Find and extract project ZIP
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: ZIP file not found in repository root"
+            exit 1
+          fi
+
+          echo "Using ZIP:"
+          echo "$ZIP_FILE"
+
+          mkdir -p android_project
+
+          unzip -q "$ZIP_FILE" -d android_project
+
+          echo "Extracted project:"
+          ls -la android_project
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -e
+
+          test -f android_project/settings.gradle
+          test -f android_project/build.gradle
+          test -d android_project/app
+
+          echo "Android project verified successfully."
+          echo ""
+          echo "Project files:"
+          ls -la android_project
+
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
 
-      - name: Find Android project
+      - name: Build APK
+        working-directory: android_project
+        run: |
+          gradle --no-daemon clean assembleDebug
+
+      - name: Verify APK
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=$(find . -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -print -quit | xargs -r dirname)
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: settings.gradle not found"
-            exit 1
-          fi
-
-          echo "Android project found at: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Check Android project
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-
-          echo "Project directory:"
-          pwd
-
-          echo "Project files:"
-          ls -la
-
-          test -d app
-          test -f settings.gradle || test -f settings.gradle.kts
-          test -f build.gradle || test -f build.gradle.kts
-
-      - name: Build debug APK
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-
-          gradle --no-daemon assembleDebug
-
-      - name: Find APK
-        shell: bash
-        run: |
-          set -e
-
-          APK=$(find "$PROJECT_DIR" -type f -path "*/build/outputs/apk/debug/*.apk" -print -quit)
+          APK=$(find android_project/app/build/outputs/apk/debug \
+            -type f -name "*.apk" \
+            -print -quit)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated"
             exit 1
           fi
 
-          echo "APK found:"
+          echo "APK generated successfully:"
           echo "$APK"
-
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Connect-WebView-Debug
-          path: ${{ env.APK_PATH }}
+          path: android_project/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
