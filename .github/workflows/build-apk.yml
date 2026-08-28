@@ -1,17 +1,71 @@
-      # =========================================================
-      # FIND ANDROID PROJECT - ROBUST AUTO DETECTION
-      # =========================================================
+name: RKMS Connect Android Build
 
-      - name: Find Android project automatically
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_VERSION: "8.10.2"
+
+jobs:
+  build:
+    name: Build RKMS Connect
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ---------------------------------------------------------
+      # CHECKOUT
+      # ---------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ---------------------------------------------------------
+      # JAVA 17
+      # ---------------------------------------------------------
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+
+      # ---------------------------------------------------------
+      # ANDROID SDK
+      # ---------------------------------------------------------
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      - name: Install Android SDK 35
         shell: bash
         run: |
           set -e
 
-          echo ""
-          echo "================================================"
-          echo "RKMS Android Project Auto Detection"
-          echo "================================================"
-          echo ""
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-35"
+          sdkmanager "build-tools;35.0.0"
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+
+      # ---------------------------------------------------------
+      # FIND / EXTRACT RKMS SOURCE
+      #
+      # Does NOT assume rkms_android path.
+      # Does NOT use broken find expression.
+      # ---------------------------------------------------------
+      - name: Locate RKMS Android project
+        shell: bash
+        run: |
+          set -e
 
           python3 <<'PY'
           import os
@@ -22,56 +76,80 @@
 
           ROOT = os.getcwd()
 
-          def is_android_project(path):
-              settings1 = os.path.join(path, "settings.gradle")
-              settings2 = os.path.join(path, "settings.gradle.kts")
-              app_gradle = os.path.join(path, "app", "build.gradle")
-              app_gradle_kts = os.path.join(path, "app", "build.gradle.kts")
-
-              return (
-                  (os.path.isfile(settings1) or os.path.isfile(settings2))
-                  and
-                  (os.path.isfile(app_gradle) or os.path.isfile(app_gradle_kts))
+          def is_project(directory):
+              settings = (
+                  os.path.isfile(os.path.join(directory, "settings.gradle"))
+                  or
+                  os.path.isfile(os.path.join(directory, "settings.gradle.kts"))
               )
 
+              app_gradle = (
+                  os.path.isfile(
+                      os.path.join(directory, "app", "build.gradle")
+                  )
+                  or
+                  os.path.isfile(
+                      os.path.join(directory, "app", "build.gradle.kts")
+                  )
+              )
+
+              return settings and app_gradle
+
+
+          def search_project(root):
+              for current, dirs, files in os.walk(root):
+
+                  dirs[:] = [
+                      d for d in dirs
+                      if d != ".git"
+                      and d != "node_modules"
+                      and d != "build"
+                      and d != ".gradle"
+                  ]
+
+                  if is_project(current):
+                      return os.path.abspath(current)
+
+              return None
+
+
+          print("")
+          print("==============================================")
+          print("Searching repository for Android project")
+          print("==============================================")
+          print("")
+
+
           # -----------------------------------------------------
-          # 1. Search normal repository directories
+          # 1. Search repository directly
           # -----------------------------------------------------
 
-          print("Searching repository directories...")
+          project = search_project(ROOT)
 
-          project = None
+          if project:
+              print("Android project found directly:")
+              print(project)
 
-          for current, dirs, files in os.walk(ROOT):
-
-              if ".git" in current.split(os.sep):
-                  continue
-
-              if "build" in current.split(os.sep):
-                  continue
-
-              if is_android_project(current):
-                  project = os.path.abspath(current)
-                  print("Android project found directly:")
-                  print(project)
-                  break
 
           # -----------------------------------------------------
           # 2. If not found, search ZIP files
           # -----------------------------------------------------
 
-          if project is None:
+          if not project:
 
               print("")
               print("No Android project found directly.")
-              print("Searching ZIP files...")
+              print("Searching repository ZIP files...")
+              print("")
 
               zip_files = []
 
               for current, dirs, files in os.walk(ROOT):
 
-                  if ".git" in current.split(os.sep):
-                      continue
+                  dirs[:] = [
+                      d for d in dirs
+                      if d != ".git"
+                  ]
 
                   for filename in files:
 
@@ -81,181 +159,618 @@
                               os.path.join(current, filename)
                           )
 
-              # Prefer V7 source
+
+              # Prefer V7 professional source
               zip_files.sort(
-                  key=lambda x: (
+                  key=lambda p: (
                       "V7_PROFESSIONAL_RELEASE_READY_SOURCE"
-                      not in os.path.basename(x),
-                      os.path.basename(x)
+                      not in os.path.basename(p),
+                      os.path.basename(p)
                   )
               )
 
-              print("")
+
               print("ZIP files found:")
 
               for z in zip_files:
-                  print(" - " + z)
+                  print(" -", z)
+
 
               if not zip_files:
+
                   print("")
                   print("ERROR: No ZIP source found.")
                   sys.exit(1)
 
+
+              extract_root = os.path.join(
+                  tempfile.gettempdir(),
+                  "rkms-source"
+              )
+
+
+              if os.path.exists(extract_root):
+                  shutil.rmtree(extract_root)
+
+
+              os.makedirs(extract_root)
+
+
               # -------------------------------------------------
-              # Try ZIP files one by one
+              # Try ZIPs until Android project is found
               # -------------------------------------------------
 
               for zip_path in zip_files:
 
                   print("")
-                  print("Checking ZIP:")
+                  print("Checking:")
                   print(zip_path)
 
                   try:
 
-                      with zipfile.ZipFile(zip_path, "r") as z:
+                      with zipfile.ZipFile(zip_path, "r") as archive:
 
-                          names = z.namelist()
+                          names = archive.namelist()
 
-                          settings_names = [
-                              n for n in names
-                              if not n.endswith("/")
-                              and os.path.basename(n)
-                              in (
+                          has_settings = any(
+                              os.path.basename(n) in (
                                   "settings.gradle",
                                   "settings.gradle.kts"
                               )
-                          ]
+                              for n in names
+                          )
 
-                          candidates = []
-
-                          for settings in settings_names:
-
-                              parent = os.path.dirname(settings)
-
-                              gradle1 = (
-                                  parent + "/app/build.gradle"
+                          has_app_gradle = any(
+                              (
+                                  "/app/build.gradle" in n
+                                  or
+                                  n.endswith("app/build.gradle")
+                                  or
+                                  "/app/build.gradle.kts" in n
+                                  or
+                                  n.endswith("app/build.gradle.kts")
                               )
+                              for n in names
+                          )
 
-                              gradle2 = (
-                                  parent + "/app/build.gradle.kts"
-                              )
 
-                              if (
-                                  gradle1 in names
-                                  or gradle2 in names
-                              ):
+                          if not (has_settings and has_app_gradle):
 
-                                  candidates.append(parent)
-
-                          if not candidates:
                               print(
-                                  "No Android Gradle project in this ZIP."
+                                  "Not an Android Gradle source ZIP."
                               )
+
                               continue
 
-                          selected = candidates[0]
 
-                          extract_dir = os.path.join(
-                              tempfile.gettempdir(),
-                              "rkms_android_source"
-                          )
+                          archive.extractall(extract_root)
 
-                          if os.path.exists(extract_dir):
-                              shutil.rmtree(extract_dir)
-
-                          os.makedirs(extract_dir)
-
-                          print("")
-                          print("Extracting:")
-                          print(zip_path)
-
-                          z.extractall(extract_dir)
-
-                          project_path = os.path.join(
-                              extract_dir,
-                              selected
-                          )
-
-                          project_path = os.path.abspath(
-                              project_path
-                          )
-
-                          if not is_android_project(project_path):
-                              print(
-                                  "Extracted project verification failed."
-                              )
-                              continue
-
-                          project = project_path
-
-                          print("")
-                          print("Android project found inside ZIP:")
-                          print(project)
-
-                          break
 
                   except zipfile.BadZipFile:
 
                       print("Invalid ZIP. Skipping.")
+                      continue
 
-                  except Exception as exc:
 
-                      print(
-                          "ZIP check failed:",
-                          repr(exc)
-                      )
+                  project = search_project(extract_root)
+
+
+                  if project:
+
+                      print("")
+                      print("Android project found inside ZIP:")
+                      print(project)
+
+                      break
+
 
           # -----------------------------------------------------
-          # 3. Final verification
+          # 3. Final check
           # -----------------------------------------------------
 
-          if project is None:
+          if not project:
 
               print("")
-              print("================================================")
-              print("ERROR: ANDROID GRADLE PROJECT NOT FOUND")
-              print("================================================")
+              print("==============================================")
+              print("ERROR: Android Gradle project NOT FOUND")
+              print("==============================================")
               print("")
 
               print("Repository contents:")
 
               for current, dirs, files in os.walk(ROOT):
 
-                  if ".git" in current.split(os.sep):
-                      continue
+                  dirs[:] = [
+                      d for d in dirs
+                      if d != ".git"
+                  ]
 
                   for filename in files:
 
-                      relative = os.path.relpath(
-                          os.path.join(current, filename),
-                          ROOT
+                      path = os.path.join(
+                          current,
+                          filename
                       )
 
-                      print(relative)
+                      print(
+                          os.path.relpath(
+                              path,
+                              ROOT
+                          )
+                      )
 
               sys.exit(1)
 
+
           # -----------------------------------------------------
-          # 4. Export path to GitHub Actions
+          # 4. Export project path
           # -----------------------------------------------------
 
-          github_env = os.environ.get("GITHUB_ENV")
+          github_env = os.environ["GITHUB_ENV"]
 
-          if not github_env:
-              print("GITHUB_ENV is not available.")
-              sys.exit(1)
+          with open(
+              github_env,
+              "a",
+              encoding="utf-8"
+          ) as f:
 
-          with open(github_env, "a", encoding="utf-8") as f:
               f.write(
                   "ANDROID_PROJECT_DIR="
                   + project
                   + "\n"
               )
 
+
           print("")
-          print("================================================")
-          print("ANDROID PROJECT READY")
+          print("==============================================")
+          print("ANDROID PROJECT SELECTED")
           print(project)
-          print("================================================")
+          print("==============================================")
           PY
+
+
+      # ---------------------------------------------------------
+      # SHOW DETECTED PROJECT
+      # ---------------------------------------------------------
+      - name: Show detected project
+        shell: bash
+        run: |
+          set -e
+
+          echo ""
+          echo "Android project:"
+          echo "$ANDROID_PROJECT_DIR"
+
+          echo ""
+          echo "Project structure:"
+
+          python3 - <<'PY'
+          import os
+
+          root = os.environ["ANDROID_PROJECT_DIR"]
+
+          for current, dirs, files in os.walk(root):
+
+              dirs[:] = [
+                  d for d in dirs
+                  if d not in (
+                      ".git",
+                      ".gradle",
+                      "build"
+                  )
+              ]
+
+              for f in files:
+                  path = os.path.join(current, f)
+                  print(
+                      os.path.relpath(
+                          path,
+                          root
+                      )
+                  )
+          PY
+
+
+      # ---------------------------------------------------------
+      # VERIFY ANDROID PROJECT
+      # ---------------------------------------------------------
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$ANDROID_PROJECT_DIR"
+
+          test -f "$PROJECT/settings.gradle" || \
+          test -f "$PROJECT/settings.gradle.kts"
+
+          test -f "$PROJECT/build.gradle" || \
+          test -f "$PROJECT/build.gradle.kts"
+
+          test -f "$PROJECT/app/build.gradle" || \
+          test -f "$PROJECT/app/build.gradle.kts"
+
+          test -f "$PROJECT/app/src/main/AndroidManifest.xml"
+
+          echo "Android project verification: PASS"
+
+
+      # ---------------------------------------------------------
+      # VERIFY FIREBASE
+      # ---------------------------------------------------------
+      - name: Verify Firebase configuration
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$ANDROID_PROJECT_DIR"
+
+          test -f "$PROJECT/app/google-services.json"
+
+          echo "google-services.json: PASS"
+
+
+      # ---------------------------------------------------------
+      # VERIFY WEBSITE
+      # ---------------------------------------------------------
+      - name: Verify bundled RKMS website
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$ANDROID_PROJECT_DIR"
+
+          INDEX="$(
+            python3 - <<'PY'
+          import os
+
+          root = os.environ["ANDROID_PROJECT_DIR"]
+
+          for current, dirs, files in os.walk(
+              os.path.join(root, "app", "src", "main", "assets")
+          ):
+
+              if "index.html" in files:
+                  print(
+                      os.path.join(
+                          current,
+                          "index.html"
+                      )
+                  )
+                  break
+          PY
+          )"
+
+          test -n "$INDEX"
+          test -f "$INDEX"
+
+          echo "Website index:"
+          echo "$INDEX"
+
+          echo "Bundled RKMS website: PASS"
+
+
+      # ---------------------------------------------------------
+      # GRADLE
+      # ---------------------------------------------------------
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+
+      # ---------------------------------------------------------
+      # BUILD ENVIRONMENT
+      # ---------------------------------------------------------
+      - name: Show build environment
+        shell: bash
+        run: |
+          echo "Java:"
+          java -version
+
+          echo ""
+          echo "Gradle:"
+          gradle --version
+
+          echo ""
+          echo "Android SDK:"
+          sdkmanager --list_installed | grep -E \
+            "platforms;android-35|build-tools;35.0.0|platform-tools" || true
+
+
+      # ---------------------------------------------------------
+      # GRADLE VALIDATION
+      # ---------------------------------------------------------
+      - name: Validate Gradle project
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          gradle tasks \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+
+      # ---------------------------------------------------------
+      # DEBUG APK
+      # ---------------------------------------------------------
+      - name: Build Debug APK
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          gradle clean assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+
+      # ---------------------------------------------------------
+      # VERIFY DEBUG APK
+      # ---------------------------------------------------------
+      - name: Verify Debug APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="$ANDROID_PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          echo ""
+          echo "=============================================="
+          echo "DEBUG APK CREATED"
+          echo "=============================================="
+
+          ls -lh "$APK"
+
+
+      # ---------------------------------------------------------
+      # UPLOAD DEBUG APK
+      # ---------------------------------------------------------
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-Connect-Debug-APK
+          path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+
+      # ---------------------------------------------------------
+      # RELEASE SIGNING CHECK
+      # ---------------------------------------------------------
+      - name: Check release signing secrets
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+        run: |
+
+          if [ -n "$KEYSTORE" ] && \
+             [ -n "$STORE_PASSWORD" ] && \
+             [ -n "$KEY_ALIAS" ] && \
+             [ -n "$KEY_PASSWORD" ]; then
+
+            echo "available=true" >> "$GITHUB_OUTPUT"
+
+            echo "Release signing: AVAILABLE"
+
+          else
+
+            echo "available=false" >> "$GITHUB_OUTPUT"
+
+            echo "Release signing: NOT CONFIGURED"
+
+          fi
+
+
+      # ---------------------------------------------------------
+      # DECODE RELEASE KEYSTORE
+      # ---------------------------------------------------------
+      - name: Decode release keystore
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
+        run: |
+
+          set -e
+
+          echo "$KEYSTORE_BASE64" | base64 --decode \
+            > "$RUNNER_TEMP/rkms-release.jks"
+
+          test -s "$RUNNER_TEMP/rkms-release.jks"
+
+          echo "Release keystore: READY"
+
+
+      # ---------------------------------------------------------
+      # RELEASE APK
+      # ---------------------------------------------------------
+      - name: Build Release APK
+        if: steps.signing.outputs.available == 'true'
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/rkms-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+        run: |
+
+          set -e
+
+          gradle assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+
+      # ---------------------------------------------------------
+      # PLAY STORE AAB
+      # ---------------------------------------------------------
+      - name: Build Play Store AAB
+        if: steps.signing.outputs.available == 'true'
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/rkms-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+        run: |
+
+          set -e
+
+          gradle bundleRelease \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+
+      # ---------------------------------------------------------
+      # VERIFY RELEASE
+      # ---------------------------------------------------------
+      - name: Verify Release APK and AAB
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+
+          set -e
+
+          APK="$(
+            python3 - <<'PY'
+          import os
+
+          root = os.environ["ANDROID_PROJECT_DIR"]
+
+          directory = os.path.join(
+              root,
+              "app",
+              "build",
+              "outputs",
+              "apk",
+              "release"
+          )
+
+          for current, dirs, files in os.walk(directory):
+              for f in files:
+                  if f.endswith(".apk"):
+                      print(
+                          os.path.join(
+                              current,
+                              f
+                          )
+                      )
+                      raise SystemExit
+          PY
+          )"
+
+
+          AAB="$(
+            python3 - <<'PY'
+          import os
+
+          root = os.environ["ANDROID_PROJECT_DIR"]
+
+          directory = os.path.join(
+              root,
+              "app",
+              "build",
+              "outputs",
+              "bundle",
+              "release"
+          )
+
+          for current, dirs, files in os.walk(directory):
+              for f in files:
+                  if f.endswith(".aab"):
+                      print(
+                          os.path.join(
+                              current,
+                              f
+                          )
+                      )
+                      raise SystemExit
+          PY
+          )"
+
+
+          test -n "$APK"
+          test -n "$AAB"
+
+          echo ""
+          echo "RELEASE APK:"
+          ls -lh "$APK"
+
+          echo ""
+          echo "PLAY STORE AAB:"
+          ls -lh "$AAB"
+
+
+      # ---------------------------------------------------------
+      # UPLOAD RELEASE APK
+      # ---------------------------------------------------------
+      - name: Upload Release APK
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-Connect-Release-APK
+          path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+
+      # ---------------------------------------------------------
+      # UPLOAD PLAY STORE AAB
+      # ---------------------------------------------------------
+      - name: Upload Play Store AAB
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-Connect-PlayStore-AAB
+          path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+          retention-days: 30
+
+
+      # ---------------------------------------------------------
+      # SUMMARY
+      # ---------------------------------------------------------
+      - name: Final summary
+        shell: bash
+        run: |
+
+          echo ""
+          echo "=============================================="
+          echo "       RKMS CONNECT BUILD SUMMARY"
+          echo "=============================================="
+          echo ""
+
+          echo "Android project detection: PASS"
+          echo "Android SDK 35: PASS"
+          echo "JDK 17: PASS"
+          echo "Gradle: PASS"
+          echo "Debug APK: PASS"
+
+          if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
+            echo "Release APK: PASS"
+            echo "Play Store AAB: PASS"
+          else
+            echo "Release APK: WAITING FOR SIGNING"
+            echo "Play Store AAB: WAITING FOR SIGNING"
+          fi
+
+          echo ""
+          echo "=============================================="
