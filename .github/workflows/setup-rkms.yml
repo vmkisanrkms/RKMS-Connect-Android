@@ -1,4 +1,4 @@
-name: Build RKMS Connect
+name: Build RKMS Connect APK
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build RKMS Connect APK
+    name: Build RKMS Connect
     runs-on: ubuntu-latest
 
     steps:
@@ -27,44 +27,79 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Verify Android project
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-35"
+          sdkmanager "build-tools;35.0.0"
+
+      - name: Verify RKMS Android project
         shell: bash
         run: |
           set -e
 
-          echo "Checking RKMS Android project..."
+          echo "===== RKMS PROJECT CHECK ====="
 
           test -f settings.gradle
           test -f build.gradle
           test -f app/build.gradle
           test -f app/google-services.json
           test -d app/src/main
+          test -d app/src/main/java
+          test -d app/src/main/res
+          test -d app/src/main/assets/www
 
-          echo "Android project structure OK."
+          echo "settings.gradle       OK"
+          echo "build.gradle          OK"
+          echo "app/build.gradle      OK"
+          echo "google-services.json  OK"
+          echo "Java source           OK"
+          echo "Resources             OK"
+          echo "RKMS website          OK"
 
-      - name: Make Gradle executable
-        run: chmod +x ./gradlew
+      - name: Show Gradle environment
+        shell: bash
+        run: |
+          set -e
+          echo "===== GRADLE VERSION ====="
+          gradle --version
 
       - name: Validate Gradle project
-        run: ./gradlew --version
+        shell: bash
+        run: |
+          set -e
+          gradle tasks --no-daemon
 
       - name: Clean project
-        run: ./gradlew clean
+        shell: bash
+        run: |
+          set -e
+          gradle clean --no-daemon
 
       - name: Build Debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace
+        shell: bash
+        run: |
+          set -e
+          gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Find generated APK
+      - name: Verify generated APK
         shell: bash
         run: |
           set -e
 
-          echo "Generated APK files:"
-          find app/build/outputs/apk -type f -name "*.apk" -print
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          test -f app/build/outputs/apk/debug/app-debug.apk
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: Debug APK was not generated."
+            echo "Searching for APK files:"
+            find . -type f -name "*.apk" -print
+            exit 1
+          fi
 
-      - name: Upload Debug APK
+          echo "APK FOUND:"
+          ls -lh "$APK"
+
+      - name: Upload RKMS Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Connect-Debug-APK
