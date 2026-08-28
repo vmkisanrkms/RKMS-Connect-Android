@@ -1,341 +1,377 @@
-package org.rkms.connect;
-
-import android.content.Context;
-import android.provider.Settings;
-import android.util.Log;
-
-import com.google.firebase.messaging.FirebaseMessaging;
-
-import org.json.JSONObject;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-
-public final class FCMTokenRegistrar {
-
-    private static final String TAG = "RKMS_FCM";
-
-    private static final String FCM_FUNCTION_URL =
-            "https://kzczivaydandiqgnzfeg.supabase.co/functions/v1/rkms-fcm-push";
-
-    private FCMTokenRegistrar() {
-    }
-
-
-    public static void register(
-            Context context,
-            String accessToken
-    ) {
-
-        if (context == null ||
-                accessToken == null ||
-                accessToken.isEmpty()) {
-            return;
-        }
-
-        FirebaseMessaging
-                .getInstance()
-                .getToken()
-                .addOnSuccessListener(token ->
-                        registerWithToken(
-                                context,
-                                accessToken,
-                                token
-                        )
-                )
-                .addOnFailureListener(error ->
-                        Log.w(
-                                TAG,
-                                "FCM token request failed",
-                                error
-                        )
-                );
-    }
-
-
-    public static void registerWithToken(
-            Context context,
-            String accessToken,
-            String token
-    ) {
-
-        if (context == null ||
-                accessToken == null ||
-                accessToken.isEmpty() ||
-                token == null ||
-                token.isEmpty()) {
-            return;
-        }
-
-        post(
-                context,
-                accessToken,
-                "register_token",
-                token
-        );
-    }
-
-
-    public static void unregister(
-            Context context,
-            String accessToken
-    ) {
-
-        if (context == null ||
-                accessToken == null ||
-                accessToken.isEmpty()) {
-            return;
-        }
-
-        FirebaseMessaging
-                .getInstance()
-                .getToken()
-                .addOnSuccessListener(token -> {
-
-                    if (token != null &&
-                            !token.isEmpty()) {
+name: Build RKMS Connect
 
-                        post(
-                                context,
-                                accessToken,
-                                "unregister_token",
-                                token
-                        );
-                    }
-                })
-                .addOnFailureListener(error ->
-                        Log.w(
-                                TAG,
-                                "Unable to get FCM token for unregister",
-                                error
-                        )
-                );
-    }
+on:
+  workflow_dispatch:
 
+  push:
+    branches:
+      - main
 
-    private static void post(
-            Context context,
-            String accessToken,
-            String action,
-            String token
-    ) {
+permissions:
+  contents: read
 
-        new Thread(() -> {
+jobs:
+  build:
 
-            HttpURLConnection connection = null;
+    name: Build RKMS Connect
+    runs-on: ubuntu-latest
 
-            try {
+    steps:
 
-                URL url = new URL(
-                        FCM_FUNCTION_URL
-                );
+      - name: Checkout
+        uses: actions/checkout@v4
 
-                connection =
-                        (HttpURLConnection)
-                                url.openConnection();
 
-                connection.setRequestMethod("POST");
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
 
-                connection.setConnectTimeout(
-                        10000
-                );
 
-                connection.setReadTimeout(
-                        15000
-                );
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-                connection.setDoOutput(true);
 
-                connection.setRequestProperty(
-                        "Content-Type",
-                        "application/json; charset=UTF-8"
-                );
+      - name: Install Android SDK 35
+        run: |
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-35"
+          sdkmanager "build-tools;35.0.0"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
-                connection.setRequestProperty(
-                        "Accept",
-                        "application/json"
-                );
 
-                connection.setRequestProperty(
-                        "Authorization",
-                        "Bearer " + accessToken
-                );
+      # ========================================================
+      # FIND ANDROID PROJECT
+      # ========================================================
 
+      - name: Locate Android project
+        shell: bash
+        run: |
+          set -e
 
-                String deviceId = "";
+          echo "Searching repository..."
 
-                try {
+          PROJECT=""
 
-                    String value =
-                            Settings.Secure.getString(
-                                    context.getContentResolver(),
-                                    Settings.Secure.ANDROID_ID
-                            );
+          for SETTINGS in $(git ls-files | grep -E '(^|/)settings\.gradle(\.kts)?$' || true); do
 
-                    if (value != null) {
-                        deviceId = value;
-                    }
+            DIR="$(dirname "$SETTINGS")"
 
-                } catch (Throwable ignored) {
-                    deviceId = "";
-                }
+            if [ -f "$DIR/app/build.gradle" ] || \
+               [ -f "$DIR/app/build.gradle.kts" ]; then
 
+              PROJECT="$DIR"
+              break
 
-                JSONObject payload =
-                        new JSONObject();
+            fi
 
-                payload.put(
-                        "action",
-                        action
-                );
+          done
 
-                payload.put(
-                        "fcm_token",
-                        token
-                );
 
-                payload.put(
-                        "device_id",
-                        deviceId
-                );
+          if [ -z "$PROJECT" ]; then
 
-                payload.put(
-                        "platform",
-                        "android"
-                );
+            echo "No direct Android project found."
 
-                payload.put(
-                        "app_version",
-                        BuildConfig.VERSION_NAME
-                );
+            echo "Searching ZIP files..."
 
+            ZIP=""
 
-                byte[] data =
-                        payload
-                                .toString()
-                                .getBytes(
-                                        StandardCharsets.UTF_8
-                                );
+            for FILE in $(git ls-files | grep -Ei '\.zip$' || true); do
 
+              if echo "$FILE" | grep -q "V7_PROFESSIONAL_RELEASE_READY_SOURCE"; then
+                ZIP="$FILE"
+                break
+              fi
 
-                try (OutputStream output =
-                             connection.getOutputStream()) {
+              if [ -z "$ZIP" ]; then
+                ZIP="$FILE"
+              fi
 
-                    output.write(data);
-                    output.flush();
-                }
+            done
 
 
-                int responseCode =
-                        connection.getResponseCode();
+            if [ -z "$ZIP" ]; then
 
+              echo "ERROR: No Android project or ZIP source found."
 
-                InputStream input;
+              echo ""
+              echo "Repository files:"
+              git ls-files
 
-                if (responseCode >= 400) {
-                    input =
-                            connection.getErrorStream();
-                } else {
-                    input =
-                            connection.getInputStream();
-                }
+              exit 1
 
+            fi
 
-                String responseBody =
-                        readResponse(input);
 
+            echo "Using ZIP:"
+            echo "$ZIP"
 
-                if (responseCode >= 400) {
 
-                    Log.w(
-                            TAG,
-                            "Token "
-                                    + action
-                                    + " failed HTTP "
-                                    + responseCode
-                                    + ": "
-                                    + responseBody
-                    );
+            rm -rf "$RUNNER_TEMP/rkms-source"
+            mkdir -p "$RUNNER_TEMP/rkms-source"
 
-                } else {
+            unzip -q "$ZIP" -d "$RUNNER_TEMP/rkms-source"
 
-                    Log.d(
-                            TAG,
-                            "Token "
-                                    + action
-                                    + " registered successfully: "
-                                    + responseBody
-                    );
-                }
 
+            for SETTINGS in \
+              $(git -C "$RUNNER_TEMP/rkms-source" ls-files 2>/dev/null | \
+                grep -E '(^|/)settings\.gradle(\.kts)?$' || true); do
 
-            } catch (Exception error) {
+              DIR="$(dirname "$SETTINGS")"
 
-                Log.w(
-                        TAG,
-                        "Token "
-                                + action
-                                + " network failure",
-                        error
-                );
+              if [ -f "$RUNNER_TEMP/rkms-source/$DIR/app/build.gradle" ] || \
+                 [ -f "$RUNNER_TEMP/rkms-source/$DIR/app/build.gradle.kts" ]; then
 
-            } finally {
+                PROJECT="$RUNNER_TEMP/rkms-source/$DIR"
+                break
 
-                if (connection != null) {
-                    connection.disconnect();
-                }
-            }
+              fi
 
-        }).start();
-    }
+            done
 
 
-    private static String readResponse(
-            InputStream input
-    ) {
+            if [ -z "$PROJECT" ]; then
 
-        if (input == null) {
-            return "";
-        }
+              SETTINGS_FILE="$(find "$RUNNER_TEMP/rkms-source" -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit)"
 
-        StringBuilder result =
-                new StringBuilder();
+              if [ -n "$SETTINGS_FILE" ]; then
 
-        try (
-                BufferedReader reader =
-                        new BufferedReader(
-                                new InputStreamReader(
-                                        input,
-                                        StandardCharsets.UTF_8
-                                )
-                        )
-        ) {
+                DIR="$(dirname "$SETTINGS_FILE")"
 
-            String line;
+                if [ -f "$DIR/app/build.gradle" ] || \
+                   [ -f "$DIR/app/build.gradle.kts" ]; then
 
-            while (
-                    (line = reader.readLine())
-                            != null
-            ) {
+                  PROJECT="$DIR"
 
-                result.append(line);
-            }
+                fi
 
-        } catch (IOException error) {
+              fi
 
-            Log.w(
-                    TAG,
-                    "Unable to read FCM response",
-                    error
-            );
-        }
+            fi
 
-        return result.toString();
-    }
-}
+          fi
+
+
+          if [ -z "$PROJECT" ]; then
+
+            echo "ERROR: Android Gradle project NOT FOUND."
+
+            echo ""
+            echo "Repository files:"
+            git ls-files
+
+            exit 1
+
+          fi
+
+
+          PROJECT="$(realpath "$PROJECT")"
+
+          echo ""
+          echo "=========================================="
+          echo "ANDROID PROJECT FOUND"
+          echo "$PROJECT"
+          echo "=========================================="
+          echo ""
+
+          echo "ANDROID_PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+
+
+      # ========================================================
+      # VERIFY PROJECT
+      # ========================================================
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$ANDROID_PROJECT_DIR"
+
+          if [ ! -f "$PROJECT/settings.gradle" ] && \
+             [ ! -f "$PROJECT/settings.gradle.kts" ]; then
+
+            echo "ERROR: settings.gradle not found."
+            exit 1
+
+          fi
+
+
+          if [ ! -f "$PROJECT/app/build.gradle" ] && \
+             [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
+
+            echo "ERROR: app/build.gradle not found."
+            exit 1
+
+          fi
+
+
+          if [ ! -f "$PROJECT/app/src/main/AndroidManifest.xml" ]; then
+
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+
+          fi
+
+
+          echo "Android project verification: PASS"
+
+
+      # ========================================================
+      # VERIFY FIREBASE
+      # ========================================================
+
+      - name: Verify Firebase
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$ANDROID_PROJECT_DIR"
+
+          if [ -f "$PROJECT/app/google-services.json" ]; then
+
+            echo "google-services.json: PASS"
+
+          else
+
+            echo "ERROR: google-services.json not found."
+            exit 1
+
+          fi
+
+
+      # ========================================================
+      # VERIFY WEBSITE
+      # ========================================================
+
+      - name: Verify bundled website
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$ANDROID_PROJECT_DIR"
+
+          INDEX="$PROJECT/app/src/main/assets/www/index.html"
+
+          if [ ! -f "$INDEX" ]; then
+
+            echo "ERROR: RKMS website index.html not found:"
+            echo "$INDEX"
+
+            exit 1
+
+          fi
+
+          echo "Bundled RKMS website: PASS"
+
+
+      # ========================================================
+      # GRADLE
+      # ========================================================
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+
+      # ========================================================
+      # GRADLE VALIDATION
+      # ========================================================
+
+      - name: Validate Gradle project
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        run: |
+          set -e
+
+          if [ -f "./gradlew" ]; then
+
+            chmod +x ./gradlew
+
+            ./gradlew tasks \
+              --no-daemon \
+              --stacktrace
+
+          else
+
+            gradle tasks \
+              --no-daemon \
+              --stacktrace
+
+          fi
+
+
+      # ========================================================
+      # BUILD DEBUG APK
+      # ========================================================
+
+      - name: Build Debug APK
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        run: |
+          set -e
+
+          if [ -f "./gradlew" ]; then
+
+            chmod +x ./gradlew
+
+            ./gradlew clean assembleDebug \
+              --no-daemon \
+              --stacktrace
+
+          else
+
+            gradle clean assembleDebug \
+              --no-daemon \
+              --stacktrace
+
+          fi
+
+
+      # ========================================================
+      # VERIFY APK
+      # ========================================================
+
+      - name: Verify Debug APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="$ANDROID_PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+
+            echo "ERROR: Debug APK was not created."
+            exit 1
+
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "DEBUG APK CREATED"
+          echo "=========================================="
+
+          ls -lh "$APK"
+
+
+      # ========================================================
+      # UPLOAD APK
+      # ========================================================
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-Connect-Debug-APK
+          path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+
+      # ========================================================
+      # FINAL
+      # ========================================================
+
+      - name: Build summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "RKMS CONNECT DEBUG BUILD: SUCCESS"
+          echo "=========================================="
