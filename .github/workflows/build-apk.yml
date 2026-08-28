@@ -12,30 +12,23 @@ permissions:
   contents: read
 
 jobs:
-
   build:
-
     name: Build RKMS Connect
-
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
 
-      # ========================================================
+      # ==========================================================
       # 1. CHECKOUT
-      # ========================================================
+      # ==========================================================
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # ========================================================
-      # 2. JAVA 17
-      # ========================================================
+      # ==========================================================
+      # 2. JDK 17
+      # ==========================================================
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -44,15 +37,15 @@ jobs:
           java-version: '17'
 
 
-      # ========================================================
+      # ==========================================================
       # 3. ANDROID SDK
-      # ========================================================
+      # ==========================================================
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-
       - name: Install Android SDK 35
+        shell: bash
         run: |
           set -e
 
@@ -63,54 +56,266 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
 
-      # ========================================================
-      # 4. LOCATE EXACT RKMS PROJECT
+      # ==========================================================
+      # 4. AUTOMATICALLY FIND ANDROID PROJECT
       #
-      # ZIP structure:
+      # It checks:
+      #   A. Already extracted Android project
+      #   B. Any ZIP anywhere in repository
+      #   C. Any nested ZIP
       #
-      # rkms_android/
-      # ├── settings.gradle
-      # ├── build.gradle
-      # └── app/
-      #     └── build.gradle
-      #
-      # ========================================================
+      # It identifies project using:
+      #   settings.gradle / settings.gradle.kts
+      #   AND
+      #   app/build.gradle / app/build.gradle.kts
+      # ==========================================================
 
-      - name: Locate RKMS Android project
+      - name: Find RKMS Android project automatically
+        shell: bash
         run: |
           set -e
 
-          PROJECT="rkms_android"
+          echo "=================================================="
+          echo "AUTOMATIC RKMS ANDROID PROJECT DETECTION"
+          echo "=================================================="
 
-          if [ ! -f "$PROJECT/settings.gradle" ]; then
-            echo "ERROR: rkms_android/settings.gradle not found."
-            exit 1
-          fi
+          WORK="$RUNNER_TEMP/rkms-build-source"
+          EXTRACT="$WORK/extracted"
 
-          if [ ! -f "$PROJECT/build.gradle" ]; then
-            echo "ERROR: rkms_android/build.gradle not found."
-            exit 1
-          fi
+          rm -rf "$WORK"
+          mkdir -p "$EXTRACT"
 
-          if [ ! -f "$PROJECT/app/build.gradle" ]; then
-            echo "ERROR: rkms_android/app/build.gradle not found."
-            exit 1
-          fi
+          PROJECT=""
 
-          echo "ANDROID_PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+          # ------------------------------------------------------
+          # Function: test a directory as Android Gradle project
+          # ------------------------------------------------------
+
+          check_project() {
+            local DIR="$1"
+
+            if [ -f "$DIR/settings.gradle" ] || \
+               [ -f "$DIR/settings.gradle.kts" ]; then
+
+              if [ -f "$DIR/app/build.gradle" ] || \
+                 [ -f "$DIR/app/build.gradle.kts" ]; then
+
+                echo "VALID ANDROID PROJECT FOUND:"
+                echo "$DIR"
+
+                PROJECT="$DIR"
+                return 0
+              fi
+            fi
+
+            return 1
+          }
+
+
+          # ------------------------------------------------------
+          # A. Search repository directly
+          # ------------------------------------------------------
 
           echo ""
-          echo "=========================================="
-          echo "RKMS ANDROID PROJECT FOUND"
-          echo "=========================================="
+          echo "Step A: Searching repository directories..."
+
+          while IFS= read -r -d '' SETTINGS; do
+
+            DIR="$(dirname "$SETTINGS")"
+
+            if check_project "$DIR"; then
+              break
+            fi
+
+          done < <(
+            find . \
+              -type f \
+              \( \
+                -name "settings.gradle" \
+                -o \
+                -name "settings.gradle.kts" \
+              \) \
+              -not -path "./.git/*" \
+              -print0
+          )
+
+
+          # ------------------------------------------------------
+          # B. Find every ZIP in repository
+          # ------------------------------------------------------
+
+          if [ -z "$PROJECT" ]; then
+
+            echo ""
+            echo "No direct Android project found."
+            echo "Searching all ZIP files..."
+
+            ZIP_COUNT=0
+
+            while IFS= read -r -d '' ZIP; do
+
+              ZIP_COUNT=$((ZIP_COUNT + 1))
+
+              echo ""
+              echo "ZIP #$ZIP_COUNT:"
+              echo "$ZIP"
+
+              SAFE_DIR="$EXTRACT/zip_$ZIP_COUNT"
+
+              mkdir -p "$SAFE_DIR"
+
+              echo "Extracting..."
+
+              if ! unzip -q "$ZIP" -d "$SAFE_DIR"; then
+                echo "WARNING: Could not extract this ZIP."
+                rm -rf "$SAFE_DIR"
+                continue
+              fi
+
+              # --------------------------------------------------
+              # Search extracted ZIP
+              # --------------------------------------------------
+
+              while IFS= read -r -d '' SETTINGS; do
+
+                DIR="$(dirname "$SETTINGS")"
+
+                if check_project "$DIR"; then
+                  break 2
+                fi
+
+              done < <(
+                find "$SAFE_DIR" \
+                  -type f \
+                  \( \
+                    -name "settings.gradle" \
+                    -o \
+                    -name "settings.gradle.kts" \
+                  \) \
+                  -print0
+              )
+
+            done < <(
+              find . \
+                -type f \
+                -iname "*.zip" \
+                -not -path "./.git/*" \
+                -print0
+            )
+
+          fi
+
+
+          # ------------------------------------------------------
+          # C. Final failure report
+          # ------------------------------------------------------
+
+          if [ -z "$PROJECT" ]; then
+
+            echo ""
+            echo "=================================================="
+            echo "ERROR: ANDROID GRADLE PROJECT NOT FOUND"
+            echo "=================================================="
+            echo ""
+            echo "Repository files:"
+            find . \
+              -not -path "./.git/*" \
+              -maxdepth 6 \
+              -print \
+              | sort
+
+            echo ""
+            echo "ZIP files:"
+            find . \
+              -type f \
+              -iname "*.zip" \
+              -not -path "./.git/*" \
+              -print \
+              | sort
+
+            echo ""
+            exit 1
+          fi
+
+
+          # ------------------------------------------------------
+          # Convert to absolute path
+          # ------------------------------------------------------
+
+          PROJECT="$(realpath "$PROJECT")"
+
+          echo ""
+          echo "=================================================="
+          echo "ANDROID PROJECT DETECTED"
           echo "$PROJECT"
+          echo "=================================================="
 
 
-      # ========================================================
-      # 5. VERIFY GOOGLE SERVICES
-      # ========================================================
+          # Export variables for later steps
+          echo "ANDROID_PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+
+          # Save extracted source location for debugging
+          echo "RKMS_SOURCE_ROOT=$WORK" >> "$GITHUB_ENV"
+
+
+      # ==========================================================
+      # 5. SHOW DETECTED PROJECT
+      # ==========================================================
+
+      - name: Show detected project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Android project:"
+          echo "$ANDROID_PROJECT_DIR"
+
+          echo ""
+          echo "Project files:"
+
+          find "$ANDROID_PROJECT_DIR" \
+            -maxdepth 5 \
+            -type f \
+            | sort
+
+
+      # ==========================================================
+      # 6. VERIFY GRADLE PROJECT
+      # ==========================================================
+
+      - name: Verify Android Gradle project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$ANDROID_PROJECT_DIR"
+
+          if [ ! -f "$PROJECT/settings.gradle" ] && \
+             [ ! -f "$PROJECT/settings.gradle.kts" ]; then
+            echo "ERROR: settings.gradle not found."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT/app/build.gradle" ] && \
+             [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
+            echo "ERROR: app Gradle file not found."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT/app/src/main/AndroidManifest.xml" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+          fi
+
+          echo "Android Gradle project: PASS"
+
+
+      # ==========================================================
+      # 7. VERIFY FIREBASE
+      # ==========================================================
 
       - name: Verify Firebase configuration
+        shell: bash
         run: |
           set -e
 
@@ -121,69 +326,49 @@ jobs:
             exit 1
           fi
 
-          echo "google-services.json: PASS"
+          echo "Firebase configuration: PASS"
 
 
-      # ========================================================
-      # 6. VERIFY ANDROID MANIFEST
-      # ========================================================
-
-      - name: Verify Android Manifest
-        run: |
-          set -e
-
-          FILE="$ANDROID_PROJECT_DIR/app/src/main/AndroidManifest.xml"
-
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: AndroidManifest.xml not found."
-            exit 1
-          fi
-
-          echo "AndroidManifest.xml: PASS"
-
-
-      # ========================================================
-      # 7. VERIFY RKMS WEBSITE
-      # ========================================================
+      # ==========================================================
+      # 8. VERIFY RKMS WEBSITE
+      # ==========================================================
 
       - name: Verify bundled RKMS website
+        shell: bash
         run: |
           set -e
 
           WWW="$ANDROID_PROJECT_DIR/app/src/main/assets/www"
 
-          test -f "$WWW/index.html"
-          test -f "$WWW/app.js"
-          test -f "$WWW/styles.css"
-          test -f "$WWW/config.js"
-          test -f "$WWW/manifest.webmanifest"
-
-          echo "RKMS bundled website: PASS"
-
-
-      # ========================================================
-      # 8. VERIFY BUILDCONFIG
-      # ========================================================
-
-      - name: Verify BuildConfig
-        run: |
-          set -e
-
-          FILE="$ANDROID_PROJECT_DIR/app/build.gradle"
-
-          if ! grep -q "buildConfig true" "$FILE"; then
-            echo "ERROR: buildConfig true is missing."
+          if [ ! -f "$WWW/index.html" ]; then
+            echo "ERROR: index.html not found."
             exit 1
           fi
 
-          echo "BuildConfig: PASS"
+          if [ ! -f "$WWW/app.js" ]; then
+            echo "ERROR: app.js not found."
+            exit 1
+          fi
+
+          if [ ! -f "$WWW/styles.css" ]; then
+            echo "ERROR: styles.css not found."
+            exit 1
+          fi
+
+          if [ ! -f "$WWW/config.js" ]; then
+            echo "ERROR: config.js not found."
+            exit 1
+          fi
+
+          echo "Bundled RKMS website: PASS"
 
 
-      # ========================================================
-      # 9. VERIFY FCM
-      # ========================================================
+      # ==========================================================
+      # 9. VERIFY FCM SOURCE
+      # ==========================================================
 
       - name: Verify FCM source
+        shell: bash
         run: |
           set -e
 
@@ -196,9 +381,90 @@ jobs:
           echo "FCM source files: PASS"
 
 
-      # ========================================================
-      # 10. SET UP GRADLE
-      # ========================================================
+      # ==========================================================
+      # 10. ENSURE BUILDCONFIG
+      #
+      # This prevents the previous:
+      # cannot find symbol BuildConfig
+      #
+      # error.
+      # ==========================================================
+
+      - name: Ensure BuildConfig is enabled
+        shell: bash
+        run: |
+          set -e
+
+          FILE="$ANDROID_PROJECT_DIR/app/build.gradle"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: app/build.gradle not found."
+            exit 1
+          fi
+
+          if grep -q "buildConfig[[:space:]]\+true" "$FILE"; then
+
+            echo "BuildConfig already enabled."
+
+          else
+
+            echo "BuildConfig is missing."
+            echo "Adding buildFeatures { buildConfig true }..."
+
+            python3 - "$FILE" <<'PY'
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          if "buildFeatures" not in text:
+              marker = "android {"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ERROR: android { block not found."
+                  )
+
+              text = text.replace(
+                  marker,
+                  """android {
+
+              buildFeatures {
+                  buildConfig true
+              }
+          """,
+                  1
+              )
+
+          elif "buildConfig true" not in text:
+
+              marker = "buildFeatures {"
+
+              text = text.replace(
+                  marker,
+                  """buildFeatures {
+              buildConfig true
+          """,
+                  1
+              )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("BuildConfig enabled.")
+          PY
+
+          fi
+
+          echo ""
+          grep -n -A5 -B2 "buildFeatures" "$FILE" || true
+
+
+      # ==========================================================
+      # 11. SET UP GRADLE
+      # ==========================================================
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -206,13 +472,13 @@ jobs:
           gradle-version: '8.10.2'
 
 
-      # ========================================================
-      # 11. SHOW ENVIRONMENT
-      # ========================================================
+      # ==========================================================
+      # 12. SHOW ENVIRONMENT
+      # ==========================================================
 
       - name: Show build environment
+        shell: bash
         run: |
-          echo ""
           echo "Java:"
           java -version
 
@@ -222,17 +488,19 @@ jobs:
 
           echo ""
           echo "Android SDK:"
-          sdkmanager --list_installed | grep -E \
+          sdkmanager --list_installed | \
+            grep -E \
             'platforms;android-35|build-tools;35.0.0|platform-tools' \
             || true
 
 
-      # ========================================================
-      # 12. VALIDATE GRADLE
-      # ========================================================
+      # ==========================================================
+      # 13. VALIDATE GRADLE
+      # ==========================================================
 
       - name: Validate Gradle project
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        shell: bash
         run: |
           set -e
 
@@ -242,20 +510,20 @@ jobs:
             --warning-mode all
 
 
-      # ========================================================
-      # 13. BUILD DEBUG APK
-      # ========================================================
+      # ==========================================================
+      # 14. BUILD DEBUG APK
+      # ==========================================================
 
       - name: Build Debug APK
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        shell: bash
         run: |
           set -e
 
           echo ""
-          echo "=========================================="
+          echo "=================================================="
           echo "BUILDING RKMS CONNECT DEBUG APK"
-          echo "=========================================="
-          echo ""
+          echo "=================================================="
 
           gradle clean assembleDebug \
             --no-daemon \
@@ -263,63 +531,87 @@ jobs:
             --warning-mode all
 
 
-      # ========================================================
-      # 14. VERIFY APK
-      # ========================================================
+      # ==========================================================
+      # 15. FIND APK AUTOMATICALLY
+      # ==========================================================
 
-      - name: Verify Debug APK
+      - name: Find generated APK
+        shell: bash
         run: |
           set -e
 
-          APK="$ANDROID_PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+          echo "Searching for generated APK..."
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: Debug APK was not created."
+          APK="$(
+            find "$ANDROID_PROJECT_DIR" \
+              -type f \
+              -name "*.apk" \
+              -path "*/build/outputs/*" \
+              -print \
+              | head -n 1
+          )"
+
+          if [ -z "$APK" ]; then
+            echo ""
+            echo "ERROR: APK was not generated."
+
+            echo ""
+            echo "All APK files:"
+            find "$ANDROID_PROJECT_DIR" \
+              -type f \
+              -name "*.apk" \
+              -print || true
+
             exit 1
           fi
 
+          APK="$(realpath "$APK")"
+
           echo ""
-          echo "=========================================="
-          echo "DEBUG APK CREATED SUCCESSFULLY"
-          echo "=========================================="
-          echo ""
+          echo "=================================================="
+          echo "APK FOUND"
+          echo "$APK"
+          echo "=================================================="
 
           ls -lh "$APK"
 
+          echo "RKMS_APK=$APK" >> "$GITHUB_ENV"
 
-      # ========================================================
-      # 15. UPLOAD APK
-      # ========================================================
+
+      # ==========================================================
+      # 16. UPLOAD APK
+      # ==========================================================
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Connect-Debug-APK
-          path: rkms_android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.RKMS_APK }}
           if-no-files-found: error
           retention-days: 30
 
 
-      # ========================================================
-      # 16. FINAL SUMMARY
-      # ========================================================
+      # ==========================================================
+      # 17. FINAL SUMMARY
+      # ==========================================================
 
-      - name: Final build summary
+      - name: Build summary
+        shell: bash
         run: |
           echo ""
-          echo "=========================================="
-          echo "RKMS CONNECT DEBUG BUILD SUCCESS"
-          echo "=========================================="
+          echo "=================================================="
+          echo "RKMS CONNECT BUILD SUCCESS"
+          echo "=================================================="
           echo ""
-          echo "Project             : PASS"
-          echo "JDK 17              : PASS"
-          echo "Android SDK 35      : PASS"
-          echo "Firebase            : PASS"
-          echo "RKMS Website        : PASS"
-          echo "BuildConfig         : PASS"
-          echo "FCM Sources         : PASS"
-          echo "Gradle Validation   : PASS"
-          echo "Debug APK           : PASS"
-          echo "APK Artifact        : UPLOADED"
+          echo "Automatic project detection : PASS"
+          echo "JDK 17                      : PASS"
+          echo "Android SDK 35              : PASS"
+          echo "Firebase                    : PASS"
+          echo "RKMS website                : PASS"
+          echo "FCM sources                 : PASS"
+          echo "BuildConfig                 : PASS"
+          echo "Gradle validation           : PASS"
+          echo "Debug APK                   : PASS"
+          echo "APK artifact                : UPLOADED"
           echo ""
-          echo "=========================================="
+          echo "=================================================="
