@@ -1,4 +1,4 @@
-name: Build RKMS Connect APK
+name: RKMS Connect Android Build
 
 on:
   workflow_dispatch:
@@ -11,163 +11,110 @@ permissions:
   contents: read
 
 concurrency:
-  group: rkms-android-build-${{ github.ref }}
+  group: rkms-connect-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build RKMS Connect
+    name: Build RKMS Connect APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK
+      - name: Install Android SDK packages
         run: |
+          set -e
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-35"
           sdkmanager "build-tools;35.0.0"
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
-      - name: Locate Android project
+      - name: Verify project structure
         shell: bash
         run: |
           set -e
 
-          PROJECT=""
+          echo "Checking RKMS Android project..."
 
-          check_project() {
-            local DIR="$1"
-
-            if [ -f "$DIR/settings.gradle" ] || \
-               [ -f "$DIR/settings.gradle.kts" ]; then
-
-              if [ -f "$DIR/app/build.gradle" ] || \
-                 [ -f "$DIR/app/build.gradle.kts" ]; then
-
-                if [ -f "$DIR/app/src/main/AndroidManifest.xml" ]; then
-                  return 0
-                fi
-
-              fi
-            fi
-
-            return 1
+          test -f settings.gradle || {
+            echo "ERROR: settings.gradle not found"
+            exit 1
           }
 
-          # Current repository root
-          if check_project "."; then
-            PROJECT="$(pwd)"
-          fi
-
-          # Optional rkms_android folder
-          if [ -z "$PROJECT" ] && check_project "./rkms_android"; then
-            PROJECT="$(realpath ./rkms_android)"
-          fi
-
-          # Search remaining folders
-          if [ -z "$PROJECT" ]; then
-            while IFS= read -r -d '' SETTINGS; do
-              DIR="$(dirname "$SETTINGS")"
-
-              if check_project "$DIR"; then
-                PROJECT="$(realpath "$DIR")"
-                break
-              fi
-            done < <(
-              find . \
-                -type f \
-                \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-                -not -path "./.git/*" \
-                -not -path "*/build/*" \
-                -print0
-            )
-          fi
-
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: Android project not found."
-            echo "Expected app/ + settings.gradle."
-            find . -maxdepth 6 -type f \
-              -not -path "./.git/*" \
-              | sort
+          test -f build.gradle || {
+            echo "ERROR: build.gradle not found"
             exit 1
-          fi
+          }
 
-          echo "Android project:"
-          echo "$PROJECT"
+          test -f app/build.gradle || {
+            echo "ERROR: app/build.gradle not found"
+            exit 1
+          }
 
-          echo "ANDROID_PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+          test -f app/google-services.json || {
+            echo "ERROR: google-services.json not found"
+            exit 1
+          }
 
-      - name: Verify RKMS project
+          test -f app/src/main/AndroidManifest.xml || {
+            echo "ERROR: AndroidManifest.xml not found"
+            exit 1
+          }
+
+          test -f app/src/main/assets/www/index.html || {
+            echo "ERROR: Website index.html not found"
+            exit 1
+          }
+
+          echo "PROJECT STRUCTURE: PASS"
+
+      - name: Show project files
         shell: bash
         run: |
-          set -e
+          echo "===== RKMS PROJECT ====="
+          find . -maxdepth 4 -type f \
+            -not -path "./.git/*" \
+            -not -path "*/build/*" \
+            | sort
 
-          P="$ANDROID_PROJECT_DIR"
-
-          test -f "$P/settings.gradle" || \
-          test -f "$P/settings.gradle.kts"
-
-          test -f "$P/build.gradle" || \
-          test -f "$P/build.gradle.kts"
-
-          test -f "$P/app/build.gradle" || \
-          test -f "$P/app/build.gradle.kts"
-
-          test -f "$P/app/google-services.json"
-
-          test -f "$P/app/src/main/AndroidManifest.xml"
-
-          test -f "$P/app/src/main/assets/www/index.html"
-
-          test -f "$P/app/src/main/java/org/rkms/connect/MainActivity.java"
-
-          test -f "$P/app/src/main/java/org/rkms/connect/NotificationHelper.java"
-
-          test -f "$P/app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java"
-
-          test -f "$P/app/src/main/java/org/rkms/connect/FCMTokenRegistrar.java"
-
-          test -f "$P/app/src/main/java/org/rkms/connect/SessionStore.java"
-
-          echo "RKMS project verification: PASS"
-
-      - name: Set up Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
 
-      - name: Show Gradle version
+      - name: Check Gradle
         run: |
           gradle --version
 
-      - name: Validate Gradle project
-        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+      - name: Validate Gradle
         run: |
+          set -e
           gradle tasks \
             --no-daemon \
             --stacktrace
 
       - name: Clean project
-        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
         run: |
+          set -e
           gradle clean \
             --no-daemon \
             --stacktrace
 
       - name: Build Debug APK
-        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
         run: |
+          set -e
+
           gradle assembleDebug \
             --no-daemon \
             --stacktrace \
@@ -178,41 +125,47 @@ jobs:
         run: |
           set -e
 
-          APK="$(find "$ANDROID_PROJECT_DIR" \
+          APK="$(find app/build/outputs/apk \
             -type f \
             -name "*.apk" \
-            -path "*/build/outputs/*" \
             | head -n 1)"
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated."
-            find "$ANDROID_PROJECT_DIR" \
+            echo ""
+            echo "Build output:"
+            find app/build/outputs \
               -type f \
-              -name "*.apk" \
-              -print
+              2>/dev/null \
+              | sort || true
             exit 1
           fi
 
-          APK="$(realpath "$APK")"
+          echo "===================================="
+          echo "APK FOUND"
+          echo "===================================="
 
-          echo "APK FOUND:"
           echo "$APK"
-
           ls -lh "$APK"
 
-          echo "RKMS_APK=$APK" >> "$GITHUB_ENV"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
-      - name: Upload RKMS APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Connect-Debug-APK
-          path: ${{ env.RKMS_APK }}
+          name: RKMS-Connect-Final-Debug-APK
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30
 
-      - name: Build summary
+      - name: Build Success
         run: |
-          echo "===================================="
-          echo "RKMS CONNECT BUILD SUCCESS"
-          echo "===================================="
-          echo "APK artifact uploaded successfully."
+          echo "========================================"
+          echo " RKMS CONNECT BUILD SUCCESS"
+          echo "========================================"
+          echo ""
+          echo "Download from:"
+          echo "Actions → Run → Artifacts"
+          echo ""
+          echo "Artifact:"
+          echo "RKMS-Connect-Final-Debug-APK"
