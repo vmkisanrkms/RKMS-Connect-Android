@@ -206,4 +206,102 @@ jobs:
           gradle-version: "8.10.2"
 
       - name: Show environment
-        run
+        run: |
+          echo "===== JAVA ====="
+          java -version
+
+          echo ""
+          echo "===== GRADLE ====="
+          gradle --version
+
+      # IMPORTANT:
+      # Gradle commands MUST run inside the extracted Android project.
+      - name: Verify Gradle root
+        working-directory: build-project/rkms_android
+        shell: bash
+        run: |
+          set -e
+
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+
+          echo "Correct Gradle root:"
+          pwd
+
+          echo ""
+          echo "Gradle files:"
+          ls -la
+
+      - name: Clean project
+        working-directory: build-project/rkms_android
+        shell: bash
+        run: |
+          set -e
+
+          gradle \
+            --no-daemon \
+            clean
+
+      - name: Build Debug APK
+        working-directory: build-project/rkms_android
+        shell: bash
+        run: |
+          set -e
+
+          echo "Building from:"
+          pwd
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all \
+            assembleDebug
+
+      - name: Find generated APK
+        id: apk
+        working-directory: build-project/rkms_android
+        shell: bash
+        run: |
+          set -e
+
+          APK="$(find app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+
+            echo ""
+            echo "Build outputs:"
+            find app/build/outputs -type f -print || true
+
+            exit 1
+          fi
+
+          echo "APK found:"
+          ls -lh "$APK"
+
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Rename APK
+        working-directory: build-project/rkms_android
+        shell: bash
+        run: |
+          set -e
+
+          cp \
+            "${{ steps.apk.outputs.apk_path }}" \
+            "RKMS-Connect-CURRENT-WEBSITE-V6-FCM.apk"
+
+          echo "Final APK:"
+          ls -lh "RKMS-Connect-CURRENT-WEBSITE-V6-FCM.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-Connect-CURRENT-WEBSITE-V6-FCM
+          path: build-project/rkms_android/RKMS-Connect-CURRENT-WEBSITE-V6-FCM.apk
+          if-no-files-found: error
+          retention-days: 30
