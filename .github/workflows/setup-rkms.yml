@@ -1,1 +1,91 @@
+name: Setup RKMS Android Source
 
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find and extract RKMS source ZIP
+        shell: bash
+        run: |
+          set -e
+
+          ZIP="$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)"
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: RKMS source ZIP not found."
+            exit 1
+          fi
+
+          echo "Using source ZIP:"
+          echo "$ZIP"
+
+          mkdir -p /tmp/rkms_source
+          unzip -q "$ZIP" -d /tmp/rkms_source
+
+          PROJECT="$(find /tmp/rkms_source -type f -name settings.gradle -o -type f -name settings.gradle.kts | head -n 1)"
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: Android Gradle project not found inside ZIP."
+            find /tmp/rkms_source -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$PROJECT")"
+
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
+          # Copy Android project contents to repository root
+          cp -R "$PROJECT_DIR"/. .
+
+          # Remove uploaded ZIP after extraction
+          rm -f "$ZIP"
+
+          # Remove temporary README if present
+          rm -f README_UPLOAD.md
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -e
+
+          test -f settings.gradle || \
+          test -f settings.gradle.kts
+
+          test -f app/build.gradle || \
+          test -f app/build.gradle.kts
+
+          test -f app/src/main/AndroidManifest.xml
+
+          echo "================================="
+          echo "RKMS ANDROID PROJECT READY"
+          echo "================================="
+
+          find . -maxdepth 3 -type f | sort
+
+      - name: Commit Android source
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "RKMS Connect Builder"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "Setup RKMS Android source"
+            git push
+          fi
