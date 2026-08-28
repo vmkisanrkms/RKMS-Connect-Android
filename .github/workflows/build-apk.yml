@@ -1,46 +1,209 @@
-name: RKMS Connect V6 APK
+name: Build RKMS Connect APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout RKMS V6
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Verify V6 source ZIP
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE="RKMS_Connect_ANDROID_CURRENT_WEBSITE_V6.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: $ZIP_FILE not found."
+            echo "Available ZIP files:"
+            find . -maxdepth 2 -type f -name "*.zip" -print
+            exit 1
+          fi
+
+          echo "V6 source ZIP found:"
+          ls -lh "$ZIP_FILE"
+
+      - name: Extract Android project
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf build-project
+          mkdir -p build-project
+
+          unzip -q \
+            "RKMS_Connect_ANDROID_CURRENT_WEBSITE_V6.zip" \
+            -d build-project
+
+          test -d build-project/rkms_android
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -e
+
+          P="build-project/rkms_android"
+
+          test -f "$P/settings.gradle"
+          test -f "$P/build.gradle"
+          test -f "$P/app/build.gradle"
+          test -f "$P/app/google-services.json"
+          test -f "$P/app/src/main/AndroidManifest.xml"
+          test -f "$P/app/src/main/java/org/rkms/connect/MainActivity.java"
+          test -f "$P/app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java"
+
+          echo "Android project verified."
+
+      - name: Verify current Website bundle
+        shell: bash
+        run: |
+          set -e
+
+          WEB="build-project/rkms_android/app/src/main/assets/www"
+
+          test -f "$WEB/index.html"
+          test -f "$WEB/app.js"
+          test -f "$WEB/styles.css"
+          test -f "$WEB/config.js"
+
+          echo "Current Website files:"
+          find "$WEB" -type f -print | sort
+
+          echo ""
+          echo "Website size:"
+          du -sh "$WEB"
+
+      - name: Verify current Chat
+        shell: bash
+        run: |
+          set -e
+
+          APP="build-project/rkms_android/app/src/main/assets/www/app.js"
+
+          grep -q "Search chats" "$APP"
+
+          if grep -q "WhatsApp जैसे Recent Chats" "$APP"; then
+            echo "ERROR: Old WhatsApp-style Chat text detected."
+            exit 1
+          fi
+
+          echo "Current Chat verification passed."
+
+      - name: Verify current Appointment Letter
+        shell: bash
+        run: |
+          set -e
+
+          APP="build-project/rkms_android/app/src/main/assets/www/app.js"
+
+          grep -q "नियुक्ति पत्र" "$APP"
+
+          if grep -q "appointment-member-photo" "$APP"; then
+            echo "ERROR: Photo Appointment implementation detected."
+            exit 1
+          fi
+
+          echo "Current Appointment Letter verification passed."
+
+      - name: Verify current Digital ID
+        shell: bash
+        run: |
+          set -e
+
+          APP="build-project/rkms_android/app/src/main/assets/www/app.js"
+
+          grep -q "digital-member-photo" "$APP"
+          grep -q "Digital ID" "$APP"
+
+          echo "Current Digital ID verification passed."
+
+      - name: Verify current V. M. Singh address
+        shell: bash
+        run: |
+          set -e
+
+          APP="build-project/rkms_android/app/src/main/assets/www/app.js"
+
+          grep -q "W-127 Greater Kailash 2, Delhi, India, 110048" "$APP"
+
+          echo "Current V. M. Singh address verification passed."
+
+      - name: Verify WebView target
+        shell: bash
+        run: |
+          set -e
+
+          MAIN="build-project/rkms_android/app/src/main/java/org/rkms/connect/MainActivity.java"
+
+          grep -q "android_asset/www/index.html" "$MAIN"
+
+          echo "WebView target verified."
+
+      - name: Verify Zoom
+        shell: bash
+        run: |
+          set -e
+
+          MAIN="build-project/rkms_android/app/src/main/java/org/rkms/connect/MainActivity.java"
+
+          grep -q "setSupportZoom(true)" "$MAIN"
+          grep -q "setBuiltInZoomControls(true)" "$MAIN"
+
+          echo "Zoom verification passed."
+
+      - name: Verify FCM
+        shell: bash
+        run: |
+          set -e
+
+          P="build-project/rkms_android"
+
+          test -f "$P/app/google-services.json"
+
+          grep -q "firebase-messaging" "$P/app/build.gradle"
+          grep -R -q "FirebaseMessagingService" "$P/app/src/main/java"
+          grep -q "RKMSFirebaseMessagingService" "$P/app/src/main/AndroidManifest.xml"
+          grep -q "POST_NOTIFICATIONS" "$P/app/src/main/AndroidManifest.xml"
+
+          echo "FCM verification passed."
+
+      - name: Verify no old native implementation
+        shell: bash
+        run: |
+          set -e
+
+          JAVA_DIR="build-project/rkms_android/app/src/main/java"
+
+          if grep -R -n -E \
+            "rkms_chat_threads|rkms_chat_messages|renderAppointmentLetter|appointment-member-photo" \
+            "$JAVA_DIR" \
+            --include="*.java"; then
+
+            echo ""
+            echo "ERROR: Old native Chat/Appointment implementation detected."
+            exit 1
+          fi
+
+          echo "No old native Chat/Appointment implementation found."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
-        run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Set up Gradle
+      - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.10.2'
+          gradle-version: "8.10.2"
 
-      - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: RKMS-Connect-V6-debug-apk
-          path: '**/build/outputs/apk/debug/*.apk'
-          if-no-files-found: error
+      - name: Show environment
+        run
