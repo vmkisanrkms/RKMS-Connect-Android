@@ -1,112 +1,496 @@
-name: RKMS Connect Android Release
+name: RKMS Connect Android Build
 
 on:
+  workflow_dispatch:
+
   push:
-    branches: [ "main" ]
-    paths:
-      - "rkms_android/**"
-      - ".github/workflows/**"
+    branches:
+      - main
+      - master
 
   pull_request:
-    branches: [ "main" ]
-
-  workflow_dispatch:
+    branches:
+      - main
+      - master
 
 permissions:
   contents: read
 
+env:
+  GRADLE_VERSION: "8.10.2"
+  ANDROID_COMPILE_SDK: "35"
+  ANDROID_BUILD_TOOLS: "35.0.0"
+
 jobs:
   build:
+    name: RKMS Connect Build
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: rkms_android
-
     steps:
-      - name: Checkout
+
+      # =========================================================
+      # 1. CHECKOUT
+      # =========================================================
+      - name: Checkout source
         uses: actions/checkout@v4
 
+
+      # =========================================================
+      # 2. JAVA 17
+      # =========================================================
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
+
+      # =========================================================
+      # 3. ANDROID SDK
+      # =========================================================
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Verify Android project
+
+      # =========================================================
+      # 4. INSTALL ANDROID SDK 35
+      # =========================================================
+      - name: Install Android SDK 35
+        shell: bash
         run: |
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-          test -f app/google-services.json
-          test -f app/src/main/AndroidManifest.xml
+          set -e
 
-      - name: Make Gradle executable
-        run: chmod +x gradlew
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
-      - name: Clean
-        run: ./gradlew clean
+          yes | sdkmanager --licenses >/dev/null || true
 
+
+      # =========================================================
+      # 5. FIND ANDROID PROJECT
+      # =========================================================
+      - name: Locate RKMS Android project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Searching for Android Gradle project..."
+
+          PROJECT_DIR=""
+
+          while IFS= read -r settings_file; do
+
+            DIR="$(dirname "$settings_file")"
+
+            if [ -f "$DIR/app/build.gradle" ] || \
+               [ -f "$DIR/app/build.gradle.kts" ]; then
+              PROJECT_DIR="$DIR"
+              break
+            fi
+
+          done < <(
+            find . -maxdepth 6 -type f \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              -print
+          )
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: RKMS Android Gradle project was not found."
+
+            echo ""
+            echo "Available Gradle files:"
+            find . -maxdepth 6 -type f \
+              \( -name "settings.gradle" \
+              -o -name "settings.gradle.kts" \
+              -o -name "build.gradle" \
+              -o -name "build.gradle.kts" \) \
+              -print
+
+            exit 1
+          fi
+
+          PROJECT_DIR="${PROJECT_DIR#./}"
+
+          echo "ANDROID_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "======================================"
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+          echo "======================================"
+
+
+      # =========================================================
+      # 6. VERIFY PROJECT
+      # =========================================================
+      - name: Verify RKMS project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Android directory: $ANDROID_DIR"
+
+          test -f "$ANDROID_DIR/settings.gradle" || \
+          test -f "$ANDROID_DIR/settings.gradle.kts"
+
+          test -f "$ANDROID_DIR/build.gradle" || \
+          test -f "$ANDROID_DIR/build.gradle.kts"
+
+          test -f "$ANDROID_DIR/app/build.gradle" || \
+          test -f "$ANDROID_DIR/app/build.gradle.kts"
+
+          test -f "$ANDROID_DIR/app/google-services.json"
+
+          test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
+
+          test -f "$ANDROID_DIR/app/src/main/assets/www/index.html"
+
+          test -f "$ANDROID_DIR/app/src/main/assets/www/app.js"
+
+          test -f "$ANDROID_DIR/app/src/main/assets/www/styles.css"
+
+          echo ""
+          echo "RKMS project verification PASSED."
+
+
+      # =========================================================
+      # 7. VERIFY PACKAGE NAME
+      # =========================================================
+      - name: Verify RKMS application ID
+        shell: bash
+        run: |
+          set -e
+
+          APP_GRADLE="$ANDROID_DIR/app/build.gradle"
+
+          grep -q "applicationId 'org.rkms.connect'" "$APP_GRADLE" || \
+          grep -q 'applicationId "org.rkms.connect"' "$APP_GRADLE"
+
+          echo "Application ID verified:"
+          echo "org.rkms.connect"
+
+
+      # =========================================================
+      # 8. VERIFY FIREBASE
+      # =========================================================
+      - name: Verify Firebase and FCM
+        shell: bash
+        run: |
+          set -e
+
+          APP_GRADLE="$ANDROID_DIR/app/build.gradle"
+          MANIFEST="$ANDROID_DIR/app/src/main/AndroidManifest.xml"
+
+          grep -q "firebase-messaging" "$APP_GRADLE"
+
+          grep -q "RKMSFirebaseMessagingService" "$MANIFEST"
+
+          grep -q "POST_NOTIFICATIONS" "$MANIFEST"
+
+          echo "Firebase/FCM verification PASSED."
+
+
+      # =========================================================
+      # 9. VERIFY RKMS WEBSITE
+      # =========================================================
+      - name: Verify bundled RKMS website
+        shell: bash
+        run: |
+          set -e
+
+          WWW="$ANDROID_DIR/app/src/main/assets/www"
+
+          test -f "$WWW/index.html"
+          test -f "$WWW/app.js"
+          test -f "$WWW/styles.css"
+          test -f "$WWW/config.js"
+          test -f "$WWW/manifest.webmanifest"
+
+          echo "Bundled website verification PASSED."
+
+
+      # =========================================================
+      # 10. VERIFY INFORMATION CENTER
+      # =========================================================
+      - name: Verify Information Center
+        shell: bash
+        run: |
+          set -e
+
+          APP="$ANDROID_DIR/app/src/main/assets/www/app.js"
+
+          grep -q "rkms_get_public_notifications" "$APP"
+
+          grep -q "rkms_get_targeted_notifications" "$APP"
+
+          grep -q "rkms_manage_notifications" "$APP"
+
+          echo "Information Center verification PASSED."
+
+
+      # =========================================================
+      # 11. SET UP GRADLE
+      # =========================================================
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+
+      # =========================================================
+      # 12. SHOW ENVIRONMENT
+      # =========================================================
+      - name: Show build environment
+        shell: bash
+        run: |
+          echo "Java:"
+          java -version
+
+          echo ""
+          echo "Gradle:"
+          gradle --version
+
+          echo ""
+          echo "Android:"
+          adb --version || true
+
+
+      # =========================================================
+      # 13. CHECK GRADLE PROJECT
+      # =========================================================
+      - name: Validate Gradle project
+        working-directory: ${{ env.ANDROID_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          gradle tasks \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+
+      # =========================================================
+      # 14. DEBUG BUILD
+      # =========================================================
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Check Release signing secrets
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        working-directory: ${{ env.ANDROID_DIR }}
+        shell: bash
         run: |
-          test -n "$KEYSTORE_BASE64"
-          test -n "$KEYSTORE_PASSWORD"
-          test -n "$KEY_ALIAS"
-          test -n "$KEY_PASSWORD"
+          set -e
 
-      - name: Decode release keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          gradle clean assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+
+      # =========================================================
+      # 15. VERIFY DEBUG APK
+      # =========================================================
+      - name: Verify Debug APK
+        shell: bash
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/rkms-release.jks"
+          set -e
 
-      - name: Build Signed Release APK
-        env:
-          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/rkms-release.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          ./gradlew assembleRelease --stacktrace
+          APK="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
 
-      - name: Build Signed Release AAB
-        env:
-          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/rkms-release.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          ./gradlew bundleRelease --stacktrace
+          test -f "$APK"
 
+          echo ""
+          echo "Debug APK successfully created:"
+          ls -lh "$APK"
+
+
+      # =========================================================
+      # 16. UPLOAD DEBUG APK
+      # =========================================================
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: rkms-connect-debug-apk
-          path: rkms_android/app/build/outputs/apk/debug/*.apk
+          name: RKMS-Connect-Debug-APK
+          path: ${{ env.ANDROID_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          retention-days: 30
 
+
+      # =========================================================
+      # 17. CHECK RELEASE SECRETS
+      # =========================================================
+      - name: Check release signing secrets
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE" ] && \
+             [ -n "$STORE_PASSWORD" ] && \
+             [ -n "$KEY_ALIAS" ] && \
+             [ -n "$KEY_PASSWORD" ]; then
+
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "Release signing configuration is available."
+
+          else
+
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Release signing secrets are not configured."
+            echo "Release APK/AAB will be skipped."
+
+          fi
+
+
+      # =========================================================
+      # 18. CREATE RELEASE KEYSTORE
+      # =========================================================
+      - name: Decode release keystore
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -e
+
+          echo "$KEYSTORE_BASE64" | base64 --decode \
+            > "$RUNNER_TEMP/rkms-release.jks"
+
+          test -s "$RUNNER_TEMP/rkms-release.jks"
+
+          echo "Release keystore ready."
+
+
+      # =========================================================
+      # 19. RELEASE APK
+      # =========================================================
+      - name: Build signed Release APK
+        if: steps.signing.outputs.available == 'true'
+        working-directory: ${{ env.ANDROID_DIR }}
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/rkms-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+
+          gradle assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+
+      # =========================================================
+      # 20. RELEASE AAB
+      # =========================================================
+      - name: Build signed Release AAB
+        if: steps.signing.outputs.available == 'true'
+        working-directory: ${{ env.ANDROID_DIR }}
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/rkms-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+
+          gradle bundleRelease \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+
+      # =========================================================
+      # 21. VERIFY RELEASE FILES
+      # =========================================================
+      - name: Verify Release APK and AAB
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -e
+
+          APK="$(find \
+            "$ANDROID_DIR/app/build/outputs/apk/release" \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
+
+          AAB="$(find \
+            "$ANDROID_DIR/app/build/outputs/bundle/release" \
+            -type f \
+            -name "*.aab" \
+            -print -quit)"
+
+          test -n "$APK"
+          test -n "$AAB"
+
+          echo ""
+          echo "======================================"
+          echo "Release APK"
+          echo "======================================"
+          ls -lh "$APK"
+
+          echo ""
+          echo "======================================"
+          echo "Play Store AAB"
+          echo "======================================"
+          ls -lh "$AAB"
+
+
+      # =========================================================
+      # 22. UPLOAD RELEASE APK
+      # =========================================================
       - name: Upload Release APK
+        if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: rkms-connect-release-apk
-          path: rkms_android/app/build/outputs/apk/release/*.apk
+          name: RKMS-Connect-Release-APK
+          path: ${{ env.ANDROID_DIR }}/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+          retention-days: 30
 
+
+      # =========================================================
+      # 23. UPLOAD PLAY STORE AAB
+      # =========================================================
       - name: Upload Play Store AAB
+        if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: rkms-connect-release-aab
-          path: rkms_android/app/build/outputs/bundle/release/*.aab
+          name: RKMS-Connect-PlayStore-AAB
+          path: ${{ env.ANDROID_DIR }}/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
+          retention-days: 30
+
+
+      # =========================================================
+      # 24. FINAL SUMMARY
+      # =========================================================
+      - name: Build summary
+        shell: bash
+        run: |
+          echo ""
+          echo "=============================================="
+          echo "       RKMS CONNECT BUILD SUMMARY"
+          echo "=============================================="
+          echo ""
+          echo "Debug APK: PASS"
+
+          if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
+            echo "Release APK: PASS"
+            echo "Release AAB: PASS"
+            echo "Play Store AAB: READY"
+          else
+            echo "Release APK: NOT BUILT"
+            echo "Release AAB: NOT BUILT"
+            echo "Reason: release signing secrets are missing"
+          fi
+
+          echo ""
+          echo "=============================================="
