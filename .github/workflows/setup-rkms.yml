@@ -17,158 +17,193 @@ jobs:
 
     steps:
 
-      # 1. Get repository
+      # 1. Repository checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Check actual repository structure
-      - name: Check project structure
+      # 2. Find and extract the RKMS ZIP
+      - name: Extract RKMS project ZIP
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           echo "======================================"
-          echo "RKMS Connect Android Project Check"
+          echo "RKMS Connect ZIP Extract"
           echo "======================================"
 
-          echo ""
-          echo "Repository root:"
-          pwd
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name 'RKMS_Connect_*.zip' | head -n 1)"
 
-          echo ""
-          echo "Root files:"
-          ls -la
-
-          # Gradle project
-          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-            echo "ERROR: settings.gradle/settings.gradle.kts not found"
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: RKMS project ZIP not found."
+            echo ""
+            echo "ZIP files found:"
+            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name '*.zip' -print || true
             exit 1
           fi
 
-          if [ ! -f "build.gradle" ] && [ ! -f "build.gradle.kts" ]; then
-            echo "ERROR: root build.gradle/build.gradle.kts not found"
-            exit 1
-          fi
+          echo "Using ZIP:"
+          echo "$ZIP_FILE"
 
-          if [ ! -d "app" ]; then
-            echo "ERROR: app directory not found"
-            exit 1
-          fi
+          TMP_DIR="$RUNNER_TEMP/rkms-project"
+          rm -rf "$TMP_DIR"
+          mkdir -p "$TMP_DIR"
 
-          if [ ! -f "app/build.gradle" ] && [ ! -f "app/build.gradle.kts" ]; then
-            echo "ERROR: app Gradle file not found"
-            exit 1
-          fi
-
-          if [ ! -f "app/src/main/AndroidManifest.xml" ]; then
-            echo "ERROR: AndroidManifest.xml not found"
-            exit 1
-          fi
+          unzip -q "$ZIP_FILE" -d "$TMP_DIR"
 
           echo ""
-          echo "Project structure: PASS"
+          echo "ZIP extracted."
 
-      # 3. Java 17
+          # Find the directory containing settings.gradle
+          PROJECT_DIR="$(find "$TMP_DIR" -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit | xargs -r dirname)"
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: settings.gradle not found inside ZIP."
+            echo ""
+            echo "Extracted files:"
+            find "$TMP_DIR" -maxdepth 3 -type f | sort | head -200
+            exit 1
+          fi
+
+          echo "Android project directory:"
+          echo "$PROJECT_DIR"
+
+          # Copy project to repository root.
+          # Keep the GitHub workflow that is currently running.
+          rsync -a \
+            --exclude='.github/' \
+            "$PROJECT_DIR/" \
+            "$GITHUB_WORKSPACE/"
+
+          echo ""
+          echo "Project extracted to repository root."
+
+          echo ""
+          echo "Final project root:"
+          ls -la "$GITHUB_WORKSPACE"
+
+      # 3. Verify actual Android project
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "======================================"
+          echo "RKMS Android Project Verification"
+          echo "======================================"
+
+          test -f settings.gradle || test -f settings.gradle.kts
+          test -f build.gradle || test -f build.gradle.kts
+          test -f gradle.properties
+
+          test -d app
+
+          test -f app/build.gradle || test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
+
+          echo ""
+          echo "Android project: PASS"
+
+          echo ""
+          echo "Important files:"
+          find app/src/main/java -type f | sort
+          echo ""
+          find app/src/main/assets/www -maxdepth 2 -type f | sort | head -100
+
+      # 4. Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
-      # 4. Android SDK
+      # 5. Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # 5. Android SDK packages
-      - name: Install Android SDK
+      # 6. Install required SDK
+      - name: Install Android SDK packages
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-35"
           sdkmanager "build-tools;35.0.0"
 
-      # 6. Accept licenses
-      - name: Accept Android licenses
+      # 7. Accept licenses
+      - name: Accept Android SDK licenses
         shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
 
-      # 7. Gradle
+      # 8. Gradle
       - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      # 8. Show versions
+      # 9. Show environment
       - name: Show build environment
         shell: bash
         run: |
-          echo "Java version:"
+          echo "Java:"
           java -version
 
           echo ""
-          echo "Gradle version:"
+          echo "Gradle:"
           gradle --version
 
-          echo ""
-          echo "Android SDK:"
-          adb --version || true
-
-      # 9. Gradle validation
+      # 10. Validate Gradle
       - name: Validate Gradle project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           gradle --no-daemon tasks
 
-      # 10. Clean
+      # 11. Clean
       - name: Clean project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           gradle --no-daemon clean
 
-      # 11. Build APK
+      # 12. Build APK
       - name: Build Debug APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "Building RKMS Connect APK..."
+          echo "======================================"
+          echo "Building RKMS Connect APK"
+          echo "======================================"
 
           gradle --no-daemon assembleDebug
 
-      # 12. Verify APK
+      # 13. Verify APK
       - name: Verify APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          echo "Checking APK..."
-
           if [ ! -f "$APK" ]; then
-            echo ""
             echo "ERROR: APK was not generated."
             echo ""
-            echo "Available build files:"
-            find app/build -type f 2>/dev/null | sort || true
+            echo "Build directory:"
+            find app/build -type f | sort || true
             exit 1
           fi
 
           echo ""
           echo "======================================"
-          echo "APK BUILD SUCCESS"
+          echo "RKMS APK BUILD SUCCESS"
           echo "======================================"
 
           ls -lh "$APK"
 
-      # 13. Upload APK
-      - name: Upload RKMS APK
+      # 14. Upload APK
+      - name: Upload RKMS Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Connect-WebView-Debug
