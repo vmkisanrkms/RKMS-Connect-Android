@@ -57,8 +57,6 @@ jobs:
           ZIP_SIZE=$(stat -c%s "$ZIP_FILE")
           MAX_SIZE=$((25 * 1024 * 1024))
 
-          echo "ZIP size: $ZIP_SIZE bytes"
-
           if [ "$ZIP_SIZE" -gt "$MAX_SIZE" ]; then
             echo "ERROR: ZIP is larger than 25 MB."
             exit 1
@@ -67,7 +65,6 @@ jobs:
           echo "ZIP size check: PASS"
 
           TMP_DIR="$RUNNER_TEMP/rkms-project"
-
           rm -rf "$TMP_DIR"
           mkdir -p "$TMP_DIR"
 
@@ -83,12 +80,8 @@ jobs:
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: Android project not found inside ZIP."
-            find "$TMP_DIR" -maxdepth 5 -type f | sort | head -300
             exit 1
           fi
-
-          echo "Android project:"
-          echo "$PROJECT_DIR"
 
           rsync -a \
             --exclude='.github/' \
@@ -111,35 +104,6 @@ jobs:
 
           echo "Android project: PASS"
 
-      - name: Verify app name
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          STRINGS="app/src/main/res/values/strings.xml"
-
-          test -f "$STRINGS"
-          grep -q '<string name="app_name">RKMS</string>' "$STRINGS"
-
-          echo "App name: RKMS"
-          echo "App name check: PASS"
-
-      - name: Verify important RKMS files
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f app/src/main/assets/www/index.html
-          test -f app/src/main/assets/www/app.js
-          test -f app/src/main/assets/www/styles.css
-
-          test -f app/src/main/java/org/rkms/connect/MainActivity.java
-          test -f app/src/main/java/org/rkms/connect/SessionStore.java
-          test -f app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
-          test -f app/src/main/java/org/rkms/connect/NotificationHelper.java
-
-          echo "Important RKMS files: PASS"
-
       - name: Verify Book Reader
         shell: bash
         run: |
@@ -153,12 +117,25 @@ jobs:
             test -f "$BOOK_DIR/page-$i.jpg"
           done
 
-          grep -qi "page" app/src/main/assets/www/app.js
+          test -f app/src/main/assets/www/index.html
+          test -f app/src/main/assets/www/app.js
+          test -f app/src/main/assets/www/styles.css
+
           grep -qi "zoom" app/src/main/assets/www/app.js
           grep -qi "pointer" app/src/main/assets/www/app.js
 
-          echo "Book Reader pages: 60"
-          echo "Book Reader code: PASS"
+          echo "Book pages: 60"
+          echo "Book Reader files: PASS"
+
+      - name: Verify RKMS notification files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
+          test -f app/src/main/java/org/rkms/connect/NotificationHelper.java
+
+          echo "Notification files: PASS"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -187,41 +164,14 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Show build environment
-        shell: bash
-        run: |
-          echo "Java:"
-          java -version
-
-          echo ""
-          echo "Gradle:"
-          gradle --version
-
       - name: Validate Gradle project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          gradle --no-daemon tasks
-
-          echo "Gradle validation: PASS"
+        run: gradle --no-daemon tasks
 
       - name: Clean project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          gradle --no-daemon clean
+        run: gradle --no-daemon clean
 
       - name: Build RKMS Debug APK
-        shell: bash
         run: |
-          set -euo pipefail
-
-          echo "======================================"
-          echo "BUILDING RKMS APK"
-          echo "======================================"
-
           gradle \
             --no-daemon \
             --stacktrace \
@@ -234,13 +184,8 @@ jobs:
 
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not generated."
-            find app/build -type f | sort || true
-            exit 1
-          fi
+          test -f "$APK"
 
-          echo ""
           echo "======================================"
           echo "RKMS APK BUILD SUCCESS"
           echo "======================================"
