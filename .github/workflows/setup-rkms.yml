@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -28,45 +29,136 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name 'RKMS_Connect_*.zip' -print -quit)"
+          echo "======================================"
+          echo "RKMS APK BUILD"
+          echo "======================================"
+
+          ZIP_FILE="$(
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 1 \
+              -type f \
+              -name 'RKMS_Connect_*.zip' \
+              -print -quit
+          )"
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: RKMS_Connect_*.zip not found."
-            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name '*.zip' -print || true
+            echo "ERROR: RKMS ZIP not found."
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.zip' \
+              -print || true
             exit 1
           fi
 
+          echo "Using ZIP:"
+          echo "$ZIP_FILE"
+
+          ZIP_SIZE=$(stat -c%s "$ZIP_FILE")
+          MAX_SIZE=$((25 * 1024 * 1024))
+
+          echo "ZIP size: $ZIP_SIZE bytes"
+
+          if [ "$ZIP_SIZE" -gt "$MAX_SIZE" ]; then
+            echo "ERROR: ZIP is larger than 25 MB."
+            exit 1
+          fi
+
+          echo "ZIP size check: PASS"
+
           TMP_DIR="$RUNNER_TEMP/rkms-project"
+
           rm -rf "$TMP_DIR"
           mkdir -p "$TMP_DIR"
+
           unzip -q "$ZIP_FILE" -d "$TMP_DIR"
 
-          PROJECT_DIR="$(find "$TMP_DIR" -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit | xargs -r dirname)"
+          PROJECT_DIR="$(
+            find "$TMP_DIR" \
+              -type f \
+              \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
+              -print -quit |
+              xargs -r dirname
+          )"
+
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: Android project not found inside ZIP."
             find "$TMP_DIR" -maxdepth 5 -type f | sort | head -300
             exit 1
           fi
 
-          rsync -a --exclude='.github/' "$PROJECT_DIR/" "$GITHUB_WORKSPACE/"
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
+          rsync -a \
+            --exclude='.github/' \
+            "$PROJECT_DIR/" \
+            "$GITHUB_WORKSPACE/"
+
+          echo "Project extracted successfully."
 
       - name: Verify Android project
         shell: bash
         run: |
           set -euo pipefail
+
           test -f settings.gradle || test -f settings.gradle.kts
           test -f build.gradle || test -f build.gradle.kts
           test -f gradle.properties
           test -d app
           test -f app/build.gradle || test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
+
           echo "Android project: PASS"
 
-      - name: Verify app name RKMS
+      - name: Verify app name
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '<string name="app_name">RKMS</string>' app/src/main/res/values/strings.xml
+
+          STRINGS="app/src/main/res/values/strings.xml"
+
+          test -f "$STRINGS"
+          grep -q '<string name="app_name">RKMS</string>' "$STRINGS"
+
           echo "App name: RKMS"
+          echo "App name check: PASS"
+
+      - name: Verify important RKMS files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f app/src/main/assets/www/index.html
+          test -f app/src/main/assets/www/app.js
+          test -f app/src/main/assets/www/styles.css
+
+          test -f app/src/main/java/org/rkms/connect/MainActivity.java
+          test -f app/src/main/java/org/rkms/connect/SessionStore.java
+          test -f app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
+          test -f app/src/main/java/org/rkms/connect/NotificationHelper.java
+
+          echo "Important RKMS files: PASS"
+
+      - name: Verify Book Reader
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BOOK_DIR="app/src/main/assets/www/assets/book"
+
+          test -d "$BOOK_DIR"
+
+          for i in $(seq -w 1 60); do
+            test -f "$BOOK_DIR/page-$i.jpg"
+          done
+
+          grep -qi "page" app/src/main/assets/www/app.js
+          grep -qi "zoom" app/src/main/assets/www/app.js
+          grep -qi "pointer" app/src/main/assets/www/app.js
+
+          echo "Book Reader pages: 60"
+          echo "Book Reader code: PASS"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -82,7 +174,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Set up Gradle 8.10.2
@@ -90,24 +187,64 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Show build environment
+        shell: bash
+        run: |
+          echo "Java:"
+          java -version
+
+          echo ""
+          echo "Gradle:"
+          gradle --version
+
       - name: Validate Gradle project
-        run: gradle --no-daemon tasks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle --no-daemon tasks
+
+          echo "Gradle validation: PASS"
 
       - name: Clean project
-        run: gradle --no-daemon clean
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle --no-daemon clean
 
       - name: Build RKMS Debug APK
-        run: gradle --no-daemon assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "======================================"
+          echo "BUILDING RKMS APK"
+          echo "======================================"
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
+
           APK="app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            find app/build -type f | sort || true
+            exit 1
+          fi
+
+          echo ""
           echo "======================================"
           echo "RKMS APK BUILD SUCCESS"
           echo "======================================"
+
           ls -lh "$APK"
 
       - name: Upload RKMS APK
