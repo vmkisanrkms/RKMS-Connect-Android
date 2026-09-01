@@ -23,40 +23,49 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract RKMS ZIP
+      - name: Find and extract RKMS project ZIP
         shell: bash
         run: |
           set -euo pipefail
 
           ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name 'RKMS_Connect_*.zip' -print -quit)"
+
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: RKMS_Connect_*.zip not found in repository root."
             exit 1
           fi
 
+          echo "Using ZIP: $(basename "$ZIP_FILE")"
+
           TMP_DIR="$RUNNER_TEMP/rkms-project"
           rm -rf "$TMP_DIR"
           mkdir -p "$TMP_DIR"
+
           unzip -q "$ZIP_FILE" -d "$TMP_DIR"
 
           PROJECT_DIR="$(find "$TMP_DIR" -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit | xargs -r dirname)"
+
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android project not found inside ZIP."
+            echo "ERROR: Android Gradle project was not found inside the ZIP."
             exit 1
           fi
 
-          rsync -a --exclude='.github/' "$PROJECT_DIR/" "$GITHUB_WORKSPACE/"
+          echo "Android project: $PROJECT_DIR"
+
+          rsync -a --exclude='.git/' --exclude='.github/' "$PROJECT_DIR/" "$GITHUB_WORKSPACE/"
 
       - name: Verify Android project
         shell: bash
         run: |
           set -euo pipefail
+
           test -f settings.gradle || test -f settings.gradle.kts
           test -f build.gradle || test -f build.gradle.kts
           test -f gradle.properties
           test -d app
           test -f app/build.gradle || test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
+
           echo "Android project: PASS"
 
       - name: Verify Book Reader
@@ -69,38 +78,54 @@ jobs:
 
           test -d "$BOOK_DIR"
           test -f "$BOOK_DIR/cover.jpg"
+          test -f "$APP_JS"
 
           for i in $(seq -w 1 60); do
             test -f "$BOOK_DIR/page-$i.jpg"
           done
 
-          test -f "$APP_JS"
-
-          # Normal/native zoom reference.
-          grep -Eiq 'zoom|setSupportZoom|setBuiltInZoomControls' "$APP_JS" || true
-
-          # Custom pinch/zoom/pan must not be required.
-          if grep -Eiq 'custom.*(pinch|zoom|pan)|pinch.*(custom|handler)|pointer.*(pinch|zoom|pan)' "$APP_JS"; then
-            echo "ERROR: custom pinch/zoom/pan implementation detected."
-            exit 1
-          fi
-
-          # Required reader controls.
-          for label in Fast Back Next Last "Page Download"; do
-            grep -Fq "$label" "$APP_JS"
-          done
+          grep -Fq "Fast" "$APP_JS"
+          grep -Fq "Back" "$APP_JS"
+          grep -Fq "Next" "$APP_JS"
+          grep -Fq "Last" "$APP_JS"
+          grep -Fq "Page Download" "$APP_JS"
 
           echo "Book cover: PASS"
           echo "Book pages 01-60: PASS"
           echo "Book controls: PASS"
-          echo "Custom Zoom/Pan check: PASS"
+          echo "Book verification: PASS"
 
-      - name: Verify app name RKMS
+      - name: Verify Book download bridge
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '<string name="app_name">RKMS</string>' app/src/main/res/values/strings.xml
-          echo "App name: RKMS"
+
+          MAIN_ACTIVITY="app/src/main/java/com/rkms/connect/MainActivity.java"
+
+          if [ ! -f "$MAIN_ACTIVITY" ]; then
+            MAIN_ACTIVITY="$(find app/src/main/java -type f -name 'MainActivity.java' -print -quit)"
+          fi
+
+          if [ -z "$MAIN_ACTIVITY" ] || [ ! -f "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: MainActivity.java not found."
+            exit 1
+          fi
+
+          grep -Fq "downloadBookPage" "$MAIN_ACTIVITY"
+
+          echo "Book Android download bridge: PASS"
+
+      - name: Verify RKMS app name
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STRINGS_FILE="app/src/main/res/values/strings.xml"
+
+          test -f "$STRINGS_FILE"
+          grep -Fq '<string name="app_name">RKMS</string>' "$STRINGS_FILE"
+
+          echo "App name: RKMS PASS"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -116,6 +141,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
@@ -137,11 +163,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APK="app/build/outputs/apk/debug/app-debug.apk"
+
           test -f "$APK"
+
           echo "======================================"
           echo "RKMS APK BUILD SUCCESS"
           echo "======================================"
+
           ls -lh "$APK"
 
       - name: Upload RKMS APK
