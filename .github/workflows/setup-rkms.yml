@@ -114,9 +114,39 @@ jobs:
 
           echo "Checking zoom and pan..."
 
-          grep -Fq 'pointerdown' "$APP_JS"
-          grep -Fq 'pointermove' "$APP_JS"
-          grep -Fq 'book-page-viewport' "$APP_JS"
+          # The Book Reader may use either Pointer Events
+          # or Touch Events depending on the WebView/device.
+          if grep -Fq 'pointerdown' "$APP_JS" || \
+             grep -Fq 'touchstart' "$APP_JS"; then
+            echo "Zoom gesture start handler: PASS"
+          else
+            echo "ERROR: No pointerdown/touchstart gesture handler found."
+            exit 1
+          fi
+
+          if grep -Fq 'pointermove' "$APP_JS" || \
+             grep -Fq 'touchmove' "$APP_JS"; then
+            echo "Pan gesture move handler: PASS"
+          else
+            echo "ERROR: No pointermove/touchmove gesture handler found."
+            exit 1
+          fi
+
+          if grep -Fq 'book-page-viewport' "$APP_JS"; then
+            echo "Book page viewport: PASS"
+          else
+            echo "ERROR: book-page-viewport not found."
+            exit 1
+          fi
+
+          # Check for touch end / pointer end as an additional
+          # safeguard for the gesture implementation.
+          if grep -Fq 'pointerup' "$APP_JS" || \
+             grep -Fq 'touchend' "$APP_JS"; then
+            echo "Gesture end handler: PASS"
+          else
+            echo "WARNING: No pointerup/touchend handler found."
+          fi
 
           echo "Pinch-to-zoom / 1-finger pan: PASS"
           echo "Book verification: PASS"
@@ -126,7 +156,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          MAIN_ACTIVITY="$(find app/src/main/java -type f -name 'MainActivity.java' -print -quit)"
+          MAIN_ACTIVITY="$(
+            find app/src/main/java \
+              -type f \
+              -name 'MainActivity.java' \
+              -print -quit
+          )"
 
           if [ -z "$MAIN_ACTIVITY" ] || [ ! -f "$MAIN_ACTIVITY" ]; then
             echo "ERROR: MainActivity.java not found."
@@ -135,7 +170,7 @@ jobs:
 
           grep -Fq "downloadBookPage" "$MAIN_ACTIVITY"
 
-          echo "Book Android download bridge: PASS"
+          echo "Android Book download bridge: PASS"
 
       - name: Verify RKMS app name
         shell: bash
@@ -148,6 +183,42 @@ jobs:
           grep -Fq '<string name="app_name">RKMS</string>' "$STRINGS_FILE"
 
           echo "App name RKMS: PASS"
+
+      - name: Verify MainActivity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MAIN_ACTIVITY="$(
+            find app/src/main/java \
+              -type f \
+              -name 'MainActivity.java' \
+              -print -quit
+          )"
+
+          test -n "$MAIN_ACTIVITY"
+          test -f "$MAIN_ACTIVITY"
+
+          grep -Fq "WebView" "$MAIN_ACTIVITY"
+          grep -Fq "JavascriptInterface" "$MAIN_ACTIVITY"
+
+          echo "MainActivity WebView: PASS"
+
+      - name: Verify JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_JS="app/src/main/assets/www/app.js"
+
+          test -f "$APP_JS"
+
+          if command -v node >/dev/null 2>&1; then
+            node --check "$APP_JS"
+            echo "app.js syntax: PASS"
+          else
+            echo "Node.js not available; JavaScript syntax check skipped."
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
