@@ -36,8 +36,7 @@ jobs:
           )"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: RKMS source ZIP not found in repository root."
-            echo "Expected a file such as RKMS_CONNECT_FINAL_BOOK_ZOOM_FIXED_SOURCE.zip"
+            echo "ERROR: RKMS source ZIP not found."
             exit 1
           fi
 
@@ -56,7 +55,7 @@ jobs:
           )"
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android Gradle project was not found inside the ZIP."
+            echo "ERROR: Android Gradle project not found."
             exit 1
           fi
 
@@ -91,19 +90,35 @@ jobs:
           test -f "$BOOK_DIR/cover.jpg"
           test -f "$APP_JS"
 
+          echo "Checking book pages..."
+
           for i in $(seq -w 1 60); do
             test -f "$BOOK_DIR/page-$i.jpg"
           done
 
-          grep -Fq "Fast" "$APP_JS"
-          grep -Fq "Back" "$APP_JS"
-          grep -Fq "Next" "$APP_JS"
-          grep -Fq "Last" "$APP_JS"
-          grep -Fq "Page Download" "$APP_JS"
-
-          echo "Book cover: PASS"
           echo "Book pages 01-60: PASS"
-          echo "Book controls: PASS"
+
+          echo "Checking five reader controls..."
+
+          grep -Fq 'id="bookFirst"' "$APP_JS"
+          grep -Fq 'id="bookPrev"' "$APP_JS"
+          grep -Fq 'id="bookNext"' "$APP_JS"
+          grep -Fq 'id="bookLast"' "$APP_JS"
+          grep -Fq 'id="bookDownload"' "$APP_JS"
+
+          echo "Fast / First page control: PASS"
+          echo "Back / Previous page control: PASS"
+          echo "Next page control: PASS"
+          echo "Last page control: PASS"
+          echo "Page Download control: PASS"
+
+          echo "Checking zoom and pan..."
+
+          grep -Fq 'pointerdown' "$APP_JS"
+          grep -Fq 'pointermove' "$APP_JS"
+          grep -Fq 'book-page-viewport' "$APP_JS"
+
+          echo "Pinch-to-zoom / 1-finger pan: PASS"
           echo "Book verification: PASS"
 
       - name: Verify Book download bridge
@@ -111,11 +126,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          MAIN_ACTIVITY="app/src/main/java/com/rkms/connect/MainActivity.java"
-
-          if [ ! -f "$MAIN_ACTIVITY" ]; then
-            MAIN_ACTIVITY="$(find app/src/main/java -type f -name 'MainActivity.java' -print -quit)"
-          fi
+          MAIN_ACTIVITY="$(find app/src/main/java -type f -name 'MainActivity.java' -print -quit)"
 
           if [ -z "$MAIN_ACTIVITY" ] || [ ! -f "$MAIN_ACTIVITY" ]; then
             echo "ERROR: MainActivity.java not found."
@@ -136,7 +147,7 @@ jobs:
           test -f "$STRINGS_FILE"
           grep -Fq '<string name="app_name">RKMS</string>' "$STRINGS_FILE"
 
-          echo "App name: RKMS PASS"
+          echo "App name RKMS: PASS"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -153,7 +164,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Set up Gradle 8.10.2
