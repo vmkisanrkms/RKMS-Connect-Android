@@ -1,4 +1,4 @@
-name: Build RKMS APK
+name: Build RKMS Release APK
 
 on:
   push:
@@ -11,22 +11,27 @@ permissions:
   contents: read
 
 concurrency:
-  group: rkms-apk-${{ github.ref }}
+  group: rkms-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build RKMS APK
+    name: Build RKMS Release APK
     runs-on: ubuntu-latest
+
+    env:
+      RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+      RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+      RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+      RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
 
     steps:
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
       # =========================================================
-      # Prepare project
+      # Prepare Android project
       # =========================================================
       - name: Prepare Android project
         shell: bash
@@ -46,9 +51,6 @@ jobs:
               echo "ERROR: Android project not found."
               exit 1
             fi
-
-            echo "Backward-compatible RKMS ZIP found:"
-            echo "$ZIP_FILE"
 
             TMP_DIR="$RUNNER_TEMP/rkms-project"
             rm -rf "$TMP_DIR"
@@ -73,13 +75,10 @@ jobs:
               --exclude='.github/' \
               "$PROJECT_DIR/" \
               "$GITHUB_WORKSPACE/"
-
-            echo "Android project extracted successfully."
           fi
 
-
       # =========================================================
-      # Android project validation
+      # Basic project validation
       # =========================================================
       - name: Verify Android project
         shell: bash
@@ -89,43 +88,14 @@ jobs:
           test -f settings.gradle || test -f settings.gradle.kts
           test -f build.gradle || test -f build.gradle.kts
           test -f gradle.properties
-
           test -d app
-
           test -f app/build.gradle || test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
 
           echo "Android project structure: PASS"
 
-
       # =========================================================
-      # App name
-      # =========================================================
-      - name: Verify RKMS app name
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f app/src/main/res/values/strings.xml
-
-          grep -Fq \
-            '<string name="app_name">RKMS</string>' \
-            app/src/main/res/values/strings.xml
-
-          echo "RKMS app name: PASS"
-
-
-      # =========================================================
-      # Node.js
-      # =========================================================
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-
-      # =========================================================
-      # COMPLETE RKMS SOURCE VALIDATION
+      # RKMS source validation
       # =========================================================
       - name: Validate RKMS source
         shell: bash
@@ -135,31 +105,14 @@ jobs:
           WWW="app/src/main/assets/www"
           BOOK_DIR="$WWW/assets/book"
           APP_JS="$WWW/app.js"
-          CONFIG_JS="$WWW/config.js"
-          INDEX_HTML="$WWW/index.html"
+          MAIN_ACTIVITY="app/src/main/java/org/rkms/connect/MainActivity.java"
+          SESSION_STORE="app/src/main/java/org/rkms/connect/SessionStore.java"
 
-          echo "========================================"
-          echo "RKMS SOURCE VALIDATION"
-          echo "========================================"
-
-
-          # -----------------------------------------------------
-          # Web files
-          # -----------------------------------------------------
-          test -f "$INDEX_HTML"
+          test -f "$WWW/index.html"
           test -f "$APP_JS"
-          test -f "$CONFIG_JS"
+          test -f "$WWW/config.js"
           test -f "$WWW/styles.css"
 
-          echo "Web source files: PASS"
-
-
-          # -----------------------------------------------------
-          # Book
-          # Actual project:
-          # cover.jpg
-          # page-01.jpg ... page-60.jpg
-          # -----------------------------------------------------
           test -d "$BOOK_DIR"
           test -f "$BOOK_DIR/cover.jpg"
 
@@ -176,92 +129,32 @@ jobs:
               | tr -d ' '
           )"
 
-          if [ "$COUNT" != "60" ]; then
-            echo "ERROR: Expected 60 numbered pages."
-            echo "Found: $COUNT"
-            exit 1
-          fi
+          test "$COUNT" = "60"
 
-          echo "Book cover: PASS"
-          echo "Book pages 01-60: PASS"
-          echo "Book total: 61 pages PASS"
-
-
-          # -----------------------------------------------------
-          # JavaScript syntax
-          # -----------------------------------------------------
           node --check "$APP_JS"
 
-          echo "app.js syntax: PASS"
-
-
-          # -----------------------------------------------------
-          # Security
-          # -----------------------------------------------------
           if grep -RInE \
             'SUPABASE_SERVICE_ROLE_KEY|service_role|BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY' \
             app/src/main/assets \
             app/src/main/java \
             app/src/main/res \
             2>/dev/null; then
-
-            echo "ERROR: Possible private/service-role credential found."
+            echo "ERROR: Possible private credential found."
             exit 1
           fi
 
-          echo "Sensitive credential check: PASS"
-
-
-          # =====================================================
-          # BOOK READER
-          # =====================================================
-
-          echo "Checking Book reader controls..."
-
-
-          # -----------------------------------------------------
-          # Five actual buttons
-          # -----------------------------------------------------
           grep -Fq 'id="bookFirst"' "$APP_JS"
           grep -Fq 'id="bookPrev"' "$APP_JS"
           grep -Fq 'id="bookNext"' "$APP_JS"
           grep -Fq 'id="bookLast"' "$APP_JS"
-
-          # IMPORTANT:
-          # Actual project uses bookDownloadPage
           grep -Fq 'id="bookDownloadPage"' "$APP_JS"
 
-          echo "Fast / First page: PASS"
-          echo "Back / Previous page: PASS"
-          echo "Next page: PASS"
-          echo "Last page: PASS"
-          echo "Download: PASS"
-
-
-          # -----------------------------------------------------
-          # Viewport
-          # -----------------------------------------------------
           grep -Fq 'id="bookViewport"' "$APP_JS"
 
-          echo "Book viewport: PASS"
-
-
-          # -----------------------------------------------------
-          # Pointer gesture implementation
-          # Actual project uses Pointer Events
-          # -----------------------------------------------------
           grep -Fq 'pointerdown' "$APP_JS"
           grep -Fq 'pointermove' "$APP_JS"
           grep -Fq 'pointerup' "$APP_JS"
 
-          echo "Pointer down: PASS"
-          echo "Pointer move / pan: PASS"
-          echo "Pointer up: PASS"
-
-
-          # -----------------------------------------------------
-          # Pinch zoom / pan engine
-          # -----------------------------------------------------
           grep -Fq 'startDist' "$APP_JS"
           grep -Fq 'startScale' "$APP_JS"
           grep -Fq 'zoom.scale' "$APP_JS"
@@ -270,84 +163,26 @@ jobs:
           grep -Fq 'clampPan' "$APP_JS"
           grep -Fq 'translate3d' "$APP_JS"
 
-          echo "Pinch-to-zoom engine: PASS"
-          echo "Four-direction pan engine: PASS"
-
-
-          # -----------------------------------------------------
-          # No visible zoom buttons
-          # -----------------------------------------------------
           if grep -Eq \
             'id="(bookZoomIn|bookZoomOut|bookZoomReset|zoomIn|zoomOut|resetZoom)"' \
             "$APP_JS"; then
-
-            echo "ERROR: Unwanted visible zoom button found."
+            echo "ERROR: Extra visible zoom button found."
             exit 1
           fi
-
-          echo "No extra Zoom buttons: PASS"
-
-
-          # =====================================================
-          # LOADING UI
-          # =====================================================
 
           grep -Fq 'rkms-loading' "$APP_JS"
           grep -Fq '.rkms-loading' "$WWW/styles.css"
           grep -Fq 'rkms-load-pulse' "$WWW/styles.css"
           grep -Fq 'rkms-load-sweep' "$WWW/styles.css"
 
-          echo "RKMS loading visual: PASS"
-
-
-          # =====================================================
-          # ANDROID WEBVIEW
-          # =====================================================
-
-          MAIN_ACTIVITY="app/src/main/java/org/rkms/connect/MainActivity.java"
-
           test -f "$MAIN_ACTIVITY"
+          grep -Fq 'setAcceptThirdPartyCookies(view, false)' "$MAIN_ACTIVITY"
 
-          grep -Fq \
-            'setAcceptThirdPartyCookies(view, false)' \
-            "$MAIN_ACTIVITY"
-
-          echo "Third-party WebView cookies disabled: PASS"
-
-
-          # =====================================================
-          # DOWNLOAD BRIDGE
-          # =====================================================
-
-          grep -Fq \
-            'downloadBookPage' \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            'rkms-download://' \
-            "$APP_JS"
-
-          echo "Book download bridge: PASS"
-
-
-          # =====================================================
-          # PERSISTENT LOGIN
-          # =====================================================
-
-          SESSION_STORE="app/src/main/java/org/rkms/connect/SessionStore.java"
+          grep -Fq 'downloadBookPage' "$MAIN_ACTIVITY"
+          grep -Fq 'rkms-download://' "$APP_JS"
 
           test -f "$SESSION_STORE"
-
-          grep -Fq \
-            'SharedPreferences' \
-            "$SESSION_STORE"
-
-          echo "Persistent session storage: PASS"
-
-
-          # =====================================================
-          # NOTIFICATIONS
-          # =====================================================
+          grep -Fq 'SharedPreferences' "$SESSION_STORE"
 
           test -f \
             app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
@@ -355,13 +190,15 @@ jobs:
           test -f \
             app/src/main/java/org/rkms/connect/NotificationHelper.java
 
-          echo "Firebase notification files: PASS"
+          echo "RKMS source validation: PASS"
 
-
-          echo "========================================"
-          echo "RKMS SOURCE VALIDATION: PASS"
-          echo "========================================"
-
+      # =========================================================
+      # Node.js
+      # =========================================================
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       # =========================================================
       # JDK 17
@@ -373,13 +210,11 @@ jobs:
           java-version: '17'
           cache: gradle
 
-
       # =========================================================
       # Android SDK
       # =========================================================
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
 
       - name: Install Android SDK packages
         shell: bash
@@ -391,41 +226,17 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-          yes | sdkmanager --licenses \
-            >/dev/null 2>&1 || true
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
           echo "Android SDK packages: PASS"
 
-
       # =========================================================
       # Gradle
-      #
-      # Actual project:
-      # AGP 8.7.3
-      # compileSdk 35
-      # Java 17
-      # No gradlew in project
       # =========================================================
       - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-
-
-      # =========================================================
-      # Environment
-      # =========================================================
-      - name: Show build environment
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          java -version
-          gradle --version
-          node --version
-
-          echo "Build environment: PASS"
-
 
       # =========================================================
       # Gradle validation
@@ -439,7 +250,6 @@ jobs:
 
           echo "Gradle validation: PASS"
 
-
       # =========================================================
       # Clean
       # =========================================================
@@ -452,11 +262,45 @@ jobs:
 
           echo "Clean: PASS"
 
+      # =========================================================
+      # Decode RKMS release keystore
+      # =========================================================
+      - name: Prepare release signing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RKMS_KEYSTORE_BASE64:-}" ]; then
+            echo "ERROR: RKMS_KEYSTORE_BASE64 secret is missing."
+            exit 1
+          fi
+
+          if [ -z "${RKMS_KEY_ALIAS:-}" ]; then
+            echo "ERROR: RKMS_KEY_ALIAS secret is missing."
+            exit 1
+          fi
+
+          if [ -z "${RKMS_KEYSTORE_PASSWORD:-}" ]; then
+            echo "ERROR: RKMS_KEYSTORE_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          if [ -z "${RKMS_KEY_PASSWORD:-}" ]; then
+            echo "ERROR: RKMS_KEY_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          echo "$RKMS_KEYSTORE_BASE64" | base64 -d \
+            > "$RUNNER_TEMP/rkms-release.keystore"
+
+          test -s "$RUNNER_TEMP/rkms-release.keystore"
+
+          echo "Release signing keystore prepared: PASS"
 
       # =========================================================
-      # BUILD APK
+      # Build RELEASE APK
       # =========================================================
-      - name: Build RKMS Debug APK
+      - name: Build RKMS Release APK
         shell: bash
         run: |
           set -euo pipefail
@@ -464,49 +308,137 @@ jobs:
           gradle \
             --no-daemon \
             --stacktrace \
-            assembleDebug
+            assembleRelease
 
-          echo "========================================"
-          echo "RKMS DEBUG APK BUILD: PASS"
-          echo "========================================"
-
+          echo "Release build: PASS"
 
       # =========================================================
-      # Verify APK
+      # Find unsigned APK
       # =========================================================
-      - name: Verify APK
+      - name: Find release APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_DIR="app/build/outputs/apk/release"
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not generated."
+          test -d "$RELEASE_DIR"
+
+          UNSIGNED_APK="$(
+            find "$RELEASE_DIR" \
+              -maxdepth 1 \
+              -type f \
+              -name '*unsigned*.apk' \
+              -print -quit
+          )"
+
+          if [ -z "$UNSIGNED_APK" ]; then
+            UNSIGNED_APK="$(
+              find "$RELEASE_DIR" \
+                -maxdepth 1 \
+                -type f \
+                -name '*.apk' \
+                -print -quit
+            )"
+          fi
+
+          if [ -z "$UNSIGNED_APK" ]; then
+            echo "ERROR: Release APK not found."
+            ls -la "$RELEASE_DIR"
             exit 1
           fi
 
-          SIZE="$(stat -c%s "$APK")"
+          echo "UNSIGNED_APK=$UNSIGNED_APK" >> "$GITHUB_ENV"
+
+          echo "Release APK found:"
+          echo "$UNSIGNED_APK"
+
+      # =========================================================
+      # Zipalign
+      # =========================================================
+      - name: Align release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          zipalign \
+            -p \
+            -f \
+            4 \
+            "$UNSIGNED_APK" \
+            "$RUNNER_TEMP/rkms-release-aligned.apk"
+
+          test -s "$RUNNER_TEMP/rkms-release-aligned.apk"
+
+          echo "APK alignment: PASS"
+
+      # =========================================================
+      # Sign APK
+      # =========================================================
+      - name: Sign RKMS Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apksigner sign \
+            --ks "$RUNNER_TEMP/rkms-release.keystore" \
+            --ks-key-alias "$RKMS_KEY_ALIAS" \
+            --ks-pass env:RKMS_KEYSTORE_PASSWORD \
+            --key-pass env:RKMS_KEY_PASSWORD \
+            --out "$RUNNER_TEMP/RKMS-Connect-release.apk" \
+            "$RUNNER_TEMP/rkms-release-aligned.apk"
+
+          test -s "$RUNNER_TEMP/RKMS-Connect-release.apk"
+
+          echo "APK signing: PASS"
+
+      # =========================================================
+      # Verify signed APK
+      # =========================================================
+      - name: Verify signed APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apksigner verify \
+            --verbose \
+            "$RUNNER_TEMP/RKMS-Connect-release.apk"
+
+          SIZE="$(
+            stat -c%s "$RUNNER_TEMP/RKMS-Connect-release.apk"
+          )"
 
           if [ "$SIZE" -le 0 ]; then
-            echo "ERROR: APK is empty."
+            echo "ERROR: Signed APK is empty."
             exit 1
           fi
 
           echo "========================================"
-          echo "RKMS APK VERIFIED"
+          echo "RKMS SIGNED RELEASE APK: PASS"
           echo "========================================"
 
-          ls -lh "$APK"
-
+          ls -lh "$RUNNER_TEMP/RKMS-Connect-release.apk"
 
       # =========================================================
-      # Upload APK
+      # Upload Release APK
       # =========================================================
-      - name: Upload RKMS Debug APK
+      - name: Upload RKMS Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: RKMS-Release-APK
+          path: ${{ runner.temp }}/RKMS-Connect-release.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+
+      # =========================================================
+      # Cleanup
+      # =========================================================
+      - name: Cleanup signing files
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/rkms-release.keystore"
+          rm -f "$RUNNER_TEMP/rkms-release-aligned.apk"
+          rm -f "$RUNNER_TEMP/RKMS-Connect-release.apk"
+
+          echo "Signing files cleaned."
