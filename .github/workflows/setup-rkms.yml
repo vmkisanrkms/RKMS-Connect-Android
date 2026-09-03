@@ -20,50 +20,93 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract RKMS project ZIP
+
+      # ---------------------------------------------------------
+      # 2. Prepare Android project
+      # Supports:
+      # A) Extracted Android project directly in repository root
+      # B) Old RKMS_Connect_*.zip at repository root
+      # ---------------------------------------------------------
+      - name: Prepare Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(
-            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f \
-              \( -iname 'rkms_connect_*.zip' -o -iname 'rkms-connect-*.zip' \) \
-              ! -iname '*apk*.zip' \
-              -print | sort | tail -n 1
-          )"
+          if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
+            echo "Using Android project directly from repository root."
+          else
+            ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
+              -maxdepth 1 \
+              -type f \
+              -name 'RKMS_Connect_*.zip' \
+              -print -quit)"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: RKMS source ZIP not found."
-            exit 1
+            if [ -z "$ZIP_FILE" ]; then
+              echo "ERROR: Android project not found at repository root."
+              echo "Also no RKMS_Connect_*.zip found."
+
+              find "$GITHUB_WORKSPACE" \
+                -maxdepth 3 \
+                -type f \
+                | sort \
+                | head -300
+
+              exit 1
+            fi
+
+            echo "Backward-compatible ZIP found:"
+            echo "$ZIP_FILE"
+
+            TMP_DIR="$RUNNER_TEMP/rkms-project"
+
+            rm -rf "$TMP_DIR"
+            mkdir -p "$TMP_DIR"
+
+            unzip -q "$ZIP_FILE" -d "$TMP_DIR"
+
+            PROJECT_DIR="$(
+              find "$TMP_DIR" \
+                -type f \
+                \( \
+                  -name 'settings.gradle' \
+                  -o \
+                  -name 'settings.gradle.kts' \
+                \) \
+                -print -quit \
+                | xargs -r dirname
+            )"
+
+            if [ -z "$PROJECT_DIR" ]; then
+              echo "ERROR: Android project not found inside ZIP."
+
+              find "$TMP_DIR" \
+                -maxdepth 5 \
+                -type f \
+                | sort \
+                | head -300
+
+              exit 1
+            fi
+
+            rsync -a \
+              --exclude='.github/' \
+              "$PROJECT_DIR/" \
+              "$GITHUB_WORKSPACE/"
+
+            echo "Android project extracted successfully."
           fi
 
-          echo "Using ZIP: $(basename "$ZIP_FILE")"
 
-          TMP_DIR="$RUNNER_TEMP/rkms-project"
-          rm -rf "$TMP_DIR"
-          mkdir -p "$TMP_DIR"
-
-          unzip -q "$ZIP_FILE" -d "$TMP_DIR"
-
-          PROJECT_DIR="$(
-            find "$TMP_DIR" -type f \
-              \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
-              -print -quit | xargs -r dirname
-          )"
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android Gradle project not found."
-            exit 1
-          fi
-
-          echo "Android project: $PROJECT_DIR"
-
-          rsync -a --exclude='.git/' --exclude='.github/' \
-            "$PROJECT_DIR/" "$GITHUB_WORKSPACE/"
-
+      # ---------------------------------------------------------
+      # 3. Verify Android project structure
+      # ---------------------------------------------------------
       - name: Verify Android project
         shell: bash
         run: |
@@ -72,154 +115,304 @@ jobs:
           test -f settings.gradle || test -f settings.gradle.kts
           test -f build.gradle || test -f build.gradle.kts
           test -f gradle.properties
+
           test -d app
+
           test -f app/build.gradle || test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
 
-          echo "Android project: PASS"
+          test -f app/google-services.json
 
-      - name: Verify Book Reader
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "Android project structure: PASS"
+          echo "Google Services configuration: PASS"
 
-          BOOK_DIR="app/src/main/assets/www/assets/book"
-          APP_JS="app/src/main/assets/www/app.js"
 
-          test -d "$BOOK_DIR"
-          test -f "$BOOK_DIR/cover.jpg"
-          test -f "$APP_JS"
-
-          echo "Checking book pages..."
-
-          for i in $(seq -w 1 60); do
-            test -f "$BOOK_DIR/page-$i.jpg"
-          done
-
-          echo "Book pages 01-60: PASS"
-
-          echo "Checking five reader controls..."
-
-          grep -Fq 'id="bookFirst"' "$APP_JS"
-          grep -Fq 'id="bookPrev"' "$APP_JS"
-          grep -Fq 'id="bookNext"' "$APP_JS"
-          grep -Fq 'id="bookLast"' "$APP_JS"
-          grep -Fq 'id="bookDownload"' "$APP_JS"
-
-          echo "Fast / First page control: PASS"
-          echo "Back / Previous page control: PASS"
-          echo "Next page control: PASS"
-          echo "Last page control: PASS"
-          echo "Page Download control: PASS"
-
-          echo "Checking zoom and pan..."
-
-          # The Book Reader may use either Pointer Events
-          # or Touch Events depending on the WebView/device.
-          if grep -Fq 'pointerdown' "$APP_JS" || \
-             grep -Fq 'touchstart' "$APP_JS"; then
-            echo "Zoom gesture start handler: PASS"
-          else
-            echo "ERROR: No pointerdown/touchstart gesture handler found."
-            exit 1
-          fi
-
-          if grep -Fq 'pointermove' "$APP_JS" || \
-             grep -Fq 'touchmove' "$APP_JS"; then
-            echo "Pan gesture move handler: PASS"
-          else
-            echo "ERROR: No pointermove/touchmove gesture handler found."
-            exit 1
-          fi
-
-          if grep -Fq 'book-page-viewport' "$APP_JS"; then
-            echo "Book page viewport: PASS"
-          else
-            echo "ERROR: book-page-viewport not found."
-            exit 1
-          fi
-
-          # Check for touch end / pointer end as an additional
-          # safeguard for the gesture implementation.
-          if grep -Fq 'pointerup' "$APP_JS" || \
-             grep -Fq 'touchend' "$APP_JS"; then
-            echo "Gesture end handler: PASS"
-          else
-            echo "WARNING: No pointerup/touchend handler found."
-          fi
-
-          echo "Pinch-to-zoom / 1-finger pan: PASS"
-          echo "Book verification: PASS"
-
-      - name: Verify Book download bridge
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MAIN_ACTIVITY="$(
-            find app/src/main/java \
-              -type f \
-              -name 'MainActivity.java' \
-              -print -quit
-          )"
-
-          if [ -z "$MAIN_ACTIVITY" ] || [ ! -f "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity.java not found."
-            exit 1
-          fi
-
-          grep -Fq "downloadBookPage" "$MAIN_ACTIVITY"
-
-          echo "Android Book download bridge: PASS"
-
+      # ---------------------------------------------------------
+      # 4. Verify RKMS app name
+      # ---------------------------------------------------------
       - name: Verify RKMS app name
         shell: bash
         run: |
           set -euo pipefail
 
-          STRINGS_FILE="app/src/main/res/values/strings.xml"
+          test -f app/src/main/res/values/strings.xml
 
-          test -f "$STRINGS_FILE"
-          grep -Fq '<string name="app_name">RKMS</string>' "$STRINGS_FILE"
+          grep -Fq '<string name="app_name">RKMS</string>' \
+            app/src/main/res/values/strings.xml
 
           echo "App name RKMS: PASS"
 
-      - name: Verify MainActivity
+
+      # ---------------------------------------------------------
+      # 5. Setup Node.js
+      # ---------------------------------------------------------
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+
+      # ---------------------------------------------------------
+      # 6. Validate complete RKMS source
+      # ---------------------------------------------------------
+      - name: Validate RKMS source
         shell: bash
         run: |
           set -euo pipefail
 
-          MAIN_ACTIVITY="$(
-            find app/src/main/java \
+          echo "======================================"
+          echo "RKMS SOURCE VALIDATION"
+          echo "======================================"
+
+          WWW="app/src/main/assets/www"
+          BOOK_DIR="$WWW/assets/book"
+          APP_JS="$WWW/app.js"
+          CONFIG_JS="$WWW/config.js"
+          INDEX_HTML="$WWW/index.html"
+
+          # Basic web files
+          test -f "$INDEX_HTML"
+          test -f "$APP_JS"
+          test -f "$CONFIG_JS"
+          test -f "$WWW/styles.css"
+
+          echo "Web source files: PASS"
+
+
+          # -----------------------------------------------------
+          # Book
+          # -----------------------------------------------------
+          test -d "$BOOK_DIR"
+          test -f "$BOOK_DIR/cover.jpg"
+
+          for i in $(seq -w 1 60); do
+            test -f "$BOOK_DIR/page-$i.jpg"
+          done
+
+          NUMBERED_COUNT="$(
+            find "$BOOK_DIR" \
+              -maxdepth 1 \
               -type f \
-              -name 'MainActivity.java' \
-              -print -quit
+              -name 'page-[0-9][0-9].jpg' \
+              | wc -l \
+              | tr -d ' '
           )"
 
-          test -n "$MAIN_ACTIVITY"
+          if [ "$NUMBERED_COUNT" != "60" ]; then
+            echo "ERROR: Expected exactly 60 numbered pages."
+            echo "Found: $NUMBERED_COUNT"
+            exit 1
+          fi
+
+          TOTAL_BOOK_PAGES=$((NUMBERED_COUNT + 1))
+
+          if [ "$TOTAL_BOOK_PAGES" != "61" ]; then
+            echo "ERROR: Expected 61 total pages including cover."
+            exit 1
+          fi
+
+          echo "Book cover: PASS"
+          echo "Book numbered pages 01-60: PASS"
+          echo "Book total pages: 61 PASS"
+
+
+          # -----------------------------------------------------
+          # JavaScript syntax
+          # -----------------------------------------------------
+          node --check "$APP_JS"
+
+          echo "app.js syntax: PASS"
+
+
+          # -----------------------------------------------------
+          # Sensitive credentials
+          # -----------------------------------------------------
+          if grep -RInE \
+            'SUPABASE_SERVICE_ROLE_KEY|service_role|BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY' \
+            app/src/main/assets \
+            app/src/main/java \
+            app/src/main/res \
+            2>/dev/null; then
+
+            echo "ERROR: Possible private/service-role credential found."
+            exit 1
+          fi
+
+          echo "Sensitive credential check: PASS"
+
+
+          # -----------------------------------------------------
+          # Book reader controls
+          #
+          # IMPORTANT:
+          # Actual project uses bookDownloadPage
+          # -----------------------------------------------------
+          grep -Fq 'id="bookFirst"' "$APP_JS"
+          grep -Fq 'id="bookPrev"' "$APP_JS"
+          grep -Fq 'id="bookNext"' "$APP_JS"
+          grep -Fq 'id="bookLast"' "$APP_JS"
+          grep -Fq 'id="bookDownloadPage"' "$APP_JS"
+
+          echo "Fast / First page control: PASS"
+          echo "Back / Previous page control: PASS"
+          echo "Next page control: PASS"
+          echo "Last page control: PASS"
+          echo "Download control: PASS"
+
+
+          # -----------------------------------------------------
+          # Reader viewport
+          # -----------------------------------------------------
+          grep -Fq 'id="bookViewport"' "$APP_JS"
+
+          echo "Book viewport: PASS"
+
+
+          # -----------------------------------------------------
+          # Pinch zoom + pan
+          # Actual project uses Pointer Events.
+          # -----------------------------------------------------
+          grep -Fq 'pointerdown' "$APP_JS"
+          grep -Fq 'pointermove' "$APP_JS"
+          grep -Fq 'pointerup' "$APP_JS"
+
+          echo "Pointer down gesture handler: PASS"
+          echo "Pointer move / pan handler: PASS"
+          echo "Pointer up gesture handler: PASS"
+
+
+          # -----------------------------------------------------
+          # Verify actual zoom engine
+          # -----------------------------------------------------
+          grep -Fq 'startDist' "$APP_JS"
+          grep -Fq 'startScale' "$APP_JS"
+          grep -Fq 'zoom.scale' "$APP_JS"
+          grep -Fq 'zoom.x' "$APP_JS"
+          grep -Fq 'zoom.y' "$APP_JS"
+          grep -Fq 'clampPan' "$APP_JS"
+          grep -Fq 'translate3d' "$APP_JS"
+
+          echo "Pinch zoom engine: PASS"
+          echo "Horizontal pan engine: PASS"
+          echo "Vertical pan engine: PASS"
+
+
+          # -----------------------------------------------------
+          # Verify only the intended five reader controls.
+          # These are the actual IDs in this project.
+          # -----------------------------------------------------
+          CONTROL_BLOCK="$(
+            grep -o \
+            '<div class="book-controls"[^<]*.*</div>' \
+            "$APP_JS" \
+            | head -1 \
+            || true
+          )"
+
+          grep -Fq 'id="bookFirst"' "$APP_JS"
+          grep -Fq 'id="bookPrev"' "$APP_JS"
+          grep -Fq 'id="bookNext"' "$APP_JS"
+          grep -Fq 'id="bookLast"' "$APP_JS"
+          grep -Fq 'id="bookDownloadPage"' "$APP_JS"
+
+          # No dedicated visible zoom buttons should exist.
+          if grep -Eq \
+            'id="(bookZoomIn|bookZoomOut|bookZoomReset|zoomIn|zoomOut|resetZoom)"' \
+            "$APP_JS"; then
+
+            echo "ERROR: Unwanted visible zoom control found."
+            exit 1
+          fi
+
+          echo "Reader button policy: PASS"
+
+
+          # -----------------------------------------------------
+          # Loading UI
+          # -----------------------------------------------------
+          grep -Fq 'rkms-loading' "$APP_JS"
+          grep -Fq '.rkms-loading' "$WWW/styles.css"
+          grep -Fq 'rkms-load-pulse' "$WWW/styles.css"
+          grep -Fq 'rkms-load-sweep' "$WWW/styles.css"
+
+          echo "RKMS lightweight loading UI: PASS"
+
+
+          # -----------------------------------------------------
+          # Android WebView cookie configuration
+          # -----------------------------------------------------
+          MAIN_ACTIVITY="app/src/main/java/org/rkms/connect/MainActivity.java"
+
           test -f "$MAIN_ACTIVITY"
 
-          grep -Fq "WebView" "$MAIN_ACTIVITY"
-          grep -Fq "JavascriptInterface" "$MAIN_ACTIVITY"
+          grep -Fq \
+            'setAcceptThirdPartyCookies(view, false)' \
+            "$MAIN_ACTIVITY"
 
-          echo "MainActivity WebView: PASS"
+          echo "WebView third-party cookies disabled: PASS"
 
-      - name: Verify JavaScript syntax
+
+          # -----------------------------------------------------
+          # Native book download bridge
+          # -----------------------------------------------------
+          grep -Fq \
+            'downloadBookPage' \
+            "$MAIN_ACTIVITY"
+
+          grep -Fq \
+            'rkms-download://' \
+            "$APP_JS"
+
+          echo "Native Book download bridge: PASS"
+
+
+          # -----------------------------------------------------
+          # Persistent session
+          # -----------------------------------------------------
+          test -f \
+            app/src/main/java/org/rkms/connect/SessionStore.java
+
+          grep -Fq 'SharedPreferences' \
+            app/src/main/java/org/rkms/connect/SessionStore.java
+
+          echo "Persistent session storage: PASS"
+
+
+          # -----------------------------------------------------
+          # Firebase notification service
+          # -----------------------------------------------------
+          test -f \
+            app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
+
+          test -f \
+            app/src/main/java/org/rkms/connect/NotificationHelper.java
+
+          echo "Firebase notification service: PASS"
+
+
+          echo "======================================"
+          echo "RKMS SOURCE VALIDATION: PASS"
+          echo "======================================"
+
+
+      # ---------------------------------------------------------
+      # 7. Run repository validation script too
+      # ---------------------------------------------------------
+      - name: Run project validation script
         shell: bash
         run: |
           set -euo pipefail
 
-          APP_JS="app/src/main/assets/www/app.js"
+          test -f .github/workflows/validate-project.sh
 
-          test -f "$APP_JS"
+          chmod +x .github/workflows/validate-project.sh
 
-          if command -v node >/dev/null 2>&1; then
-            node --check "$APP_JS"
-            echo "app.js syntax: PASS"
-          else
-            echo "Node.js not available; JavaScript syntax check skipped."
-          fi
+          .github/workflows/validate-project.sh
 
+
+      # ---------------------------------------------------------
+      # 8. Setup JDK 17
+      # ---------------------------------------------------------
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -227,34 +420,105 @@ jobs:
           java-version: '17'
           cache: gradle
 
+
+      # ---------------------------------------------------------
+      # 9. Setup Android SDK
+      # ---------------------------------------------------------
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+
+      # ---------------------------------------------------------
+      # 10. Install required Android SDK
+      # ---------------------------------------------------------
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
 
-          sdkmanager "platform-tools" \
+          sdkmanager \
+            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          yes | sdkmanager --licenses \
+            >/dev/null 2>&1 || true
 
+          echo "Android SDK: PASS"
+
+
+      # ---------------------------------------------------------
+      # 11. Setup Gradle
+      #
+      # This project does not contain gradlew, so use installed Gradle.
+      # AGP 8.7.3 works with Gradle 8.10.2.
+      # ---------------------------------------------------------
       - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
+
+      # ---------------------------------------------------------
+      # 12. Show build environment
+      # ---------------------------------------------------------
+      - name: Show build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          java -version
+          gradle --version
+          node --version
+
+          echo "Environment check: PASS"
+
+
+      # ---------------------------------------------------------
+      # 13. Validate Gradle project
+      # ---------------------------------------------------------
       - name: Validate Gradle project
-        run: gradle --no-daemon tasks
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          gradle --no-daemon tasks
+
+          echo "Gradle project validation: PASS"
+
+
+      # ---------------------------------------------------------
+      # 14. Clean
+      # ---------------------------------------------------------
       - name: Clean project
-        run: gradle --no-daemon clean
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          gradle --no-daemon clean
+
+          echo "Clean: PASS"
+
+
+      # ---------------------------------------------------------
+      # 15. Build actual Debug APK
+      # ---------------------------------------------------------
       - name: Build RKMS Debug APK
-        run: gradle --no-daemon assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+          echo "Android Debug APK build: PASS"
+
+
+      # ---------------------------------------------------------
+      # 16. Verify APK
+      # ---------------------------------------------------------
       - name: Verify APK
         shell: bash
         run: |
@@ -262,15 +526,31 @@ jobs:
 
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          test -f "$APK"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          APK_SIZE="$(stat -c%s "$APK")"
+
+          if [ "$APK_SIZE" -le 0 ]; then
+            echo "ERROR: APK file is empty."
+            exit 1
+          fi
 
           echo "======================================"
           echo "RKMS APK BUILD SUCCESS"
           echo "======================================"
+          echo "APK: $APK"
+          echo "Size: $APK_SIZE bytes"
 
           ls -lh "$APK"
 
-      - name: Upload RKMS APK
+
+      # ---------------------------------------------------------
+      # 17. Upload APK artifact
+      # ---------------------------------------------------------
+      - name: Upload RKMS Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Debug-APK
