@@ -46,11 +46,14 @@ jobs:
           if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
             echo "Android project found at repository root."
           else
-            ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
-              -maxdepth 1 \
-              -type f \
-              -name 'RKMS_Connect_*.zip' \
-              -print -quit)"
+
+            ZIP_FILE="$(
+              find "$GITHUB_WORKSPACE" \
+                -maxdepth 1 \
+                -type f \
+                -name 'RKMS_Connect_*.zip' \
+                -print -quit
+            )"
 
             if [ -z "$ZIP_FILE" ]; then
               echo "ERROR: RKMS Android project ZIP not found."
@@ -108,7 +111,95 @@ jobs:
 
 
       # =========================================================
-      # VERIFY RKMS APP
+      # REPAIR PRINT/PDF BRIDGE
+      # =========================================================
+      #
+      # The Android bridge may call:
+      #
+      # MainActivity.this.printCurrentPage();
+      #
+      # The final PDF implementation uses:
+      #
+      # saveCurrentPageAsPdf();
+      #
+      # If the bridge method exists but the forwarding method is
+      # missing, add a safe forwarding method before compilation.
+      #
+      # =========================================================
+
+      - name: Repair Print PDF bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MAIN_ACTIVITY="$(
+            find app/src/main/java \
+              -type f \
+              -name 'MainActivity.java' \
+              -print -quit
+          )"
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: MainActivity.java not found."
+            exit 1
+          fi
+
+          echo "MainActivity:"
+          echo "$MAIN_ACTIVITY"
+
+          # The final PDF implementation must exist.
+          if ! grep -Fq 'saveCurrentPageAsPdf' "$MAIN_ACTIVITY"; then
+            echo "ERROR: saveCurrentPageAsPdf() was not found."
+            echo "The APK source is incomplete; refusing to build."
+            exit 1
+          fi
+
+          # If printCurrentPage() already exists, leave the source untouched.
+          if grep -Eq '([a-zA-Z0-9_<>]+[[:space:]]+)?printCurrentPage[[:space:]]*\(' "$MAIN_ACTIVITY"; then
+            echo "printCurrentPage() already exists."
+          else
+            echo "printCurrentPage() missing."
+            echo "Adding forwarding method..."
+
+            python3 - "$MAIN_ACTIVITY" <<'PY'
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          method = r'''
+              private void printCurrentPage() {
+                  saveCurrentPageAsPdf();
+              }
+
+          '''
+
+          # Insert before the final closing brace of MainActivity.
+          pos = text.rfind("}")
+
+          if pos == -1:
+              raise SystemExit("ERROR: Could not find final class closing brace.")
+
+          text = text[:pos] + method + text[pos:]
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("printCurrentPage() forwarding method added.")
+          PY
+          fi
+
+          # Final verification.
+          grep -Fq 'saveCurrentPageAsPdf' "$MAIN_ACTIVITY"
+          grep -Eq 'printCurrentPage[[:space:]]*\(' "$MAIN_ACTIVITY"
+
+          echo "Print/PDF bridge repair: PASS"
+
+
+      # =========================================================
+      # VERIFY RKMS APP SOURCE
       # =========================================================
 
       - name: Verify RKMS source
@@ -159,7 +250,10 @@ jobs:
             exit 1
           fi
 
-          # Five reader buttons
+          # =====================================================
+          # BOOK READER — FIVE VISIBLE BUTTONS
+          # =====================================================
+
           grep -Fq 'id="bookFirst"' "$APP_JS"
           grep -Fq 'id="bookPrev"' "$APP_JS"
           grep -Fq 'id="bookNext"' "$APP_JS"
@@ -189,13 +283,45 @@ jobs:
             exit 1
           fi
 
-          # RKMS loading UI
+          # =====================================================
+          # RKMS LOADING UI
+          # =====================================================
+
           grep -Fq 'rkms-loading' "$APP_JS"
           grep -Fq '.rkms-loading' "$WWW/styles.css"
           grep -Fq 'rkms-load-pulse' "$WWW/styles.css"
           grep -Fq 'rkms-load-sweep' "$WWW/styles.css"
 
           echo "RKMS source validation: PASS"
+
+
+      # =========================================================
+      # VERIFY PRINT/PDF BUTTONS
+      # =========================================================
+
+      - name: Verify Print PDF integration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_JS="app/src/main/assets/www/app.js"
+
+          # Native print/PDF bridge must be present.
+          grep -Fq 'RKMSNative.printPage' "$APP_JS"
+
+          # Android bridge must exist.
+          MAIN_ACTIVITY="$(
+            find app/src/main/java \
+              -type f \
+              -name 'MainActivity.java' \
+              -print -quit
+          )"
+
+          grep -Fq 'class RKMSBridge' "$MAIN_ACTIVITY"
+          grep -Fq 'printPage()' "$MAIN_ACTIVITY"
+          grep -Fq 'saveCurrentPageAsPdf' "$MAIN_ACTIVITY"
+
+          echo "Print/PDF integration validation: PASS"
 
 
       # =========================================================
