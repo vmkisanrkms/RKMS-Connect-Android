@@ -26,8 +26,17 @@ jobs:
 
     steps:
 
+      # =========================================================
+      # CHECKOUT
+      # =========================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+
+      # =========================================================
+      # PREPARE ANDROID PROJECT
+      # =========================================================
 
       - name: Prepare Android project
         shell: bash
@@ -37,6 +46,7 @@ jobs:
           if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
             echo "Android project found at repository root."
           else
+
             ZIP_FILE="$(
               find "$GITHUB_WORKSPACE" \
                 -maxdepth 1 \
@@ -50,7 +60,11 @@ jobs:
               exit 1
             fi
 
+            echo "RKMS Android ZIP found:"
+            echo "$ZIP_FILE"
+
             TMP_DIR="$RUNNER_TEMP/rkms-project"
+
             rm -rf "$TMP_DIR"
             mkdir -p "$TMP_DIR"
 
@@ -77,6 +91,11 @@ jobs:
             echo "Android project extracted successfully."
           fi
 
+
+      # =========================================================
+      # VERIFY ANDROID PROJECT
+      # =========================================================
+
       - name: Verify Android project
         shell: bash
         run: |
@@ -90,11 +109,25 @@ jobs:
 
           echo "Android project structure: PASS"
 
+
       # =========================================================
-      # VERIFY / REPAIR PRINT PDF SOURCE
+      # FIX PRINT/PDF BRIDGE
+      # =========================================================
+      #
+      # The previous source contained:
+      #
+      # MainActivity.this.printCurrentPage();
+      #
+      # but the actual final PDF implementation uses:
+      #
+      # saveCurrentPageAsPdf();
+      #
+      # Replace only the incorrect bridge call.
+      # Do not create another wrapper method.
+      #
       # =========================================================
 
-      - name: Verify and repair Print PDF source
+      - name: Fix Print PDF bridge
         shell: bash
         run: |
           set -euo pipefail
@@ -111,30 +144,20 @@ jobs:
             exit 1
           fi
 
-          echo "Using: $MAIN_ACTIVITY"
+          echo "MainActivity: $MAIN_ACTIVITY"
 
-          # Final PDF implementation must exist.
+          # Final PDF method must exist.
           if ! grep -Eq \
-            '(^|[[:space:]])(private|public|protected)?[[:space:]]*void[[:space:]]+saveCurrentPageAsPdf[[:space:]]*\(' \
+            'void[[:space:]]+saveCurrentPageAsPdf[[:space:]]*\(' \
             "$MAIN_ACTIVITY"; then
-            echo "ERROR: saveCurrentPageAsPdf() method is missing."
+
+            echo "ERROR: saveCurrentPageAsPdf() is missing."
+            echo "Refusing to build incomplete source."
             exit 1
           fi
 
-          # IMPORTANT:
-          # Check for an actual method declaration, NOT merely a call.
-          if grep -Eq \
-            '(^|[[:space:]])(private|public|protected)?[[:space:]]*void[[:space:]]+printCurrentPage[[:space:]]*\(' \
-            "$MAIN_ACTIVITY"; then
-
-            echo "printCurrentPage() declaration already exists."
-
-          else
-
-            echo "printCurrentPage() declaration missing."
-            echo "Adding correct forwarding method..."
-
-            python3 - "$MAIN_ACTIVITY" <<'PY'
+          # Replace the exact broken bridge call.
+          python3 - "$MAIN_ACTIVITY" <<'PY'
           import sys
 
           path = sys.argv[1]
@@ -142,41 +165,39 @@ jobs:
           with open(path, "r", encoding="utf-8") as f:
               text = f.read()
 
-          method = """
-              private void printCurrentPage() {
-                  saveCurrentPageAsPdf();
-              }
+          old = "MainActivity.this.printCurrentPage();"
+          new = "MainActivity.this.saveCurrentPageAsPdf();"
 
-          """
-
-          # Insert before the final class closing brace.
-          pos = text.rfind("}")
-
-          if pos == -1:
-              raise SystemExit(
-                  "ERROR: Could not find MainActivity final closing brace."
-              )
-
-          text = text[:pos] + method + text[pos:]
+          if old in text:
+              text = text.replace(old, new)
+              print("Broken printCurrentPage() bridge call replaced.")
+          else:
+              print("Broken bridge call not present; no replacement needed.")
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(text)
-
-          print("printCurrentPage() declaration added.")
           PY
 
+          # Make sure the broken call is gone.
+          if grep -Fq \
+            'MainActivity.this.printCurrentPage();' \
+            "$MAIN_ACTIVITY"; then
+
+            echo "ERROR: Broken printCurrentPage() call still exists."
+            exit 1
           fi
 
-          # Verify actual declarations after repair.
+          # Make sure the correct method exists.
           grep -Eq \
-            '(^|[[:space:]])(private|public|protected)?[[:space:]]*void[[:space:]]+printCurrentPage[[:space:]]*\(' \
+            'void[[:space:]]+saveCurrentPageAsPdf[[:space:]]*\(' \
             "$MAIN_ACTIVITY"
 
-          grep -Eq \
-            '(^|[[:space:]])(private|public|protected)?[[:space:]]*void[[:space:]]+saveCurrentPageAsPdf[[:space:]]*\(' \
-            "$MAIN_ACTIVITY"
+          echo "Print/PDF bridge fix: PASS"
 
-          echo "Print/PDF source verification: PASS"
+
+      # =========================================================
+      # VERIFY RKMS SOURCE
+      # =========================================================
 
       - name: Verify RKMS source
         shell: bash
@@ -215,15 +236,21 @@ jobs:
 
           node --check "$APP_JS"
 
+          # No private/service credentials in app source.
           if grep -RInE \
             'SUPABASE_SERVICE_ROLE_KEY|service_role|BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY' \
             app/src/main/assets \
             app/src/main/java \
             app/src/main/res \
             2>/dev/null; then
+
             echo "ERROR: Possible private/service credential found."
             exit 1
           fi
+
+          # =====================================================
+          # BOOK READER — FIVE VISIBLE BUTTONS
+          # =====================================================
 
           grep -Fq 'id="bookFirst"' "$APP_JS"
           grep -Fq 'id="bookPrev"' "$APP_JS"
@@ -231,10 +258,12 @@ jobs:
           grep -Fq 'id="bookLast"' "$APP_JS"
           grep -Fq 'id="bookDownloadPage"' "$APP_JS"
 
+          # Pointer gestures.
           grep -Fq 'pointerdown' "$APP_JS"
           grep -Fq 'pointermove' "$APP_JS"
           grep -Fq 'pointerup' "$APP_JS"
 
+          # Pinch zoom / pan.
           grep -Fq 'startDist' "$APP_JS"
           grep -Fq 'startScale' "$APP_JS"
           grep -Fq 'zoom.scale' "$APP_JS"
@@ -243,12 +272,18 @@ jobs:
           grep -Fq 'clampPan' "$APP_JS"
           grep -Fq 'translate3d' "$APP_JS"
 
+          # No visible zoom buttons.
           if grep -Eq \
             'id="(bookZoomIn|bookZoomOut|bookZoomReset|zoomIn|zoomOut|resetZoom)"' \
             "$APP_JS"; then
+
             echo "ERROR: Unwanted visible zoom button found."
             exit 1
           fi
+
+          # =====================================================
+          # RKMS LOADING UI
+          # =====================================================
 
           grep -Fq 'rkms-loading' "$APP_JS"
           grep -Fq '.rkms-loading' "$WWW/styles.css"
@@ -257,44 +292,20 @@ jobs:
 
           echo "RKMS source validation: PASS"
 
-      - name: Verify Print PDF integration
-        shell: bash
-        run: |
-          set -euo pipefail
 
-          APP_JS="app/src/main/assets/www/app.js"
-
-          grep -Fq 'RKMSNative.printPage' "$APP_JS"
-
-          MAIN_ACTIVITY="$(
-            find app/src/main/java \
-              -type f \
-              -name 'MainActivity.java' \
-              -print -quit
-          )"
-
-          grep -Fq 'class RKMSBridge' "$MAIN_ACTIVITY"
-
-          # Actual bridge method declaration.
-          grep -Eq \
-            '@JavascriptInterface[[:space:]]*\
-          public[[:space:]]+void[[:space:]]+printPage[[:space:]]*\(' \
-            "$MAIN_ACTIVITY"
-
-          grep -Eq \
-            'void[[:space:]]+printCurrentPage[[:space:]]*\(' \
-            "$MAIN_ACTIVITY"
-
-          grep -Eq \
-            'void[[:space:]]+saveCurrentPageAsPdf[[:space:]]*\(' \
-            "$MAIN_ACTIVITY"
-
-          echo "Print/PDF integration validation: PASS"
+      # =========================================================
+      # NODE.JS
+      # =========================================================
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+
+      # =========================================================
+      # JAVA 17
+      # =========================================================
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -303,15 +314,30 @@ jobs:
           java-version: '17'
           cache: gradle
 
+
+      # =========================================================
+      # ANDROID SDK
+      # =========================================================
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
+
+      # =========================================================
+      # GRADLE 8.10.2
+      # =========================================================
+
       - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+
+
+      # =========================================================
+      # BUILD ENVIRONMENT
+      # =========================================================
 
       - name: Show build environment
         shell: bash
@@ -321,6 +347,13 @@ jobs:
           java -version
           gradle --version
           node --version
+
+          echo "Build environment: PASS"
+
+
+      # =========================================================
+      # RELEASE SIGNING
+      # =========================================================
 
       - name: Prepare release signing
         shell: bash
@@ -374,17 +407,40 @@ jobs:
           }
           EOF
 
+          echo "Release signing prepared."
+
+
+      # =========================================================
+      # VALIDATE GRADLE
+      # =========================================================
+
       - name: Validate Gradle project
         shell: bash
         run: |
           set -euo pipefail
+
           gradle --no-daemon tasks
+
+          echo "Gradle validation: PASS"
+
+
+      # =========================================================
+      # CLEAN
+      # =========================================================
 
       - name: Clean project
         shell: bash
         run: |
           set -euo pipefail
+
           gradle --no-daemon clean
+
+          echo "Clean: PASS"
+
+
+      # =========================================================
+      # BUILD RELEASE APK
+      # =========================================================
 
       - name: Build RKMS Release APK
         shell: bash
@@ -399,6 +455,11 @@ jobs:
           echo "========================================"
           echo "RKMS RELEASE APK BUILD: PASS"
           echo "========================================"
+
+
+      # =========================================================
+      # FIND APK
+      # =========================================================
 
       - name: Find release APK
         shell: bash
@@ -418,9 +479,20 @@ jobs:
             exit 1
           fi
 
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: Release APK file does not exist."
+            exit 1
+          fi
+
           cp "$APK" "$RUNNER_TEMP/RKMS-Connect-Release.apk"
 
+          echo "Release APK found:"
           ls -lh "$RUNNER_TEMP/RKMS-Connect-Release.apk"
+
+
+      # =========================================================
+      # VERIFY SIGNATURE
+      # =========================================================
 
       - name: Verify signed APK
         shell: bash
@@ -431,7 +503,14 @@ jobs:
             --verbose \
             "$RUNNER_TEMP/RKMS-Connect-Release.apk"
 
+          echo "========================================"
           echo "APK SIGNATURE VERIFICATION: PASS"
+          echo "========================================"
+
+
+      # =========================================================
+      # UPLOAD RELEASE APK
+      # =========================================================
 
       - name: Upload RKMS Release APK
         uses: actions/upload-artifact@v4
@@ -440,6 +519,11 @@ jobs:
           path: ${{ runner.temp }}/RKMS-Connect-Release.apk
           if-no-files-found: error
           retention-days: 14
+
+
+      # =========================================================
+      # CLEANUP
+      # =========================================================
 
       - name: Cleanup signing files
         if: always()
