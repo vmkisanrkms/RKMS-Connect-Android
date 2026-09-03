@@ -26,9 +26,17 @@ jobs:
 
     steps:
 
+      # =========================================================
+      # CHECKOUT
+      # =========================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
+      # =========================================================
+      # PREPARE ANDROID PROJECT
+      # =========================================================
 
       - name: Prepare Android project
         shell: bash
@@ -45,7 +53,7 @@ jobs:
               -print -quit)"
 
             if [ -z "$ZIP_FILE" ]; then
-              echo "ERROR: Android project ZIP not found."
+              echo "ERROR: RKMS Android project ZIP not found."
               exit 1
             fi
 
@@ -53,6 +61,7 @@ jobs:
             echo "$ZIP_FILE"
 
             TMP_DIR="$RUNNER_TEMP/rkms-project"
+
             rm -rf "$TMP_DIR"
             mkdir -p "$TMP_DIR"
 
@@ -80,6 +89,10 @@ jobs:
           fi
 
 
+      # =========================================================
+      # VERIFY ANDROID PROJECT
+      # =========================================================
+
       - name: Verify Android project
         shell: bash
         run: |
@@ -94,6 +107,10 @@ jobs:
           echo "Android project structure: PASS"
 
 
+      # =========================================================
+      # VERIFY RKMS APP
+      # =========================================================
+
       - name: Verify RKMS source
         shell: bash
         run: |
@@ -101,6 +118,7 @@ jobs:
 
           WWW="app/src/main/assets/www"
           BOOK_DIR="$WWW/assets/book"
+          APP_JS="$WWW/app.js"
 
           test -f "$WWW/index.html"
           test -f "$WWW/app.js"
@@ -113,7 +131,22 @@ jobs:
             test -f "$BOOK_DIR/page-$i.jpg"
           done
 
-          node --check "$WWW/app.js"
+          COUNT="$(
+            find "$BOOK_DIR" \
+              -maxdepth 1 \
+              -type f \
+              -name 'page-[0-9][0-9].jpg' \
+              | wc -l \
+              | tr -d ' '
+          )"
+
+          if [ "$COUNT" != "60" ]; then
+            echo "ERROR: Expected 60 numbered book pages."
+            echo "Found: $COUNT"
+            exit 1
+          fi
+
+          node --check "$APP_JS"
 
           if grep -RInE \
             'SUPABASE_SERVICE_ROLE_KEY|service_role|BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY' \
@@ -121,36 +154,43 @@ jobs:
             app/src/main/java \
             app/src/main/res \
             2>/dev/null; then
-            echo "ERROR: Possible private credential found."
+
+            echo "ERROR: Possible private/service credential found."
             exit 1
           fi
 
-          grep -Fq 'id="bookFirst"' "$WWW/app.js"
-          grep -Fq 'id="bookPrev"' "$WWW/app.js"
-          grep -Fq 'id="bookNext"' "$WWW/app.js"
-          grep -Fq 'id="bookLast"' "$WWW/app.js"
-          grep -Fq 'id="bookDownloadPage"' "$WWW/app.js"
+          # Five reader buttons
+          grep -Fq 'id="bookFirst"' "$APP_JS"
+          grep -Fq 'id="bookPrev"' "$APP_JS"
+          grep -Fq 'id="bookNext"' "$APP_JS"
+          grep -Fq 'id="bookLast"' "$APP_JS"
+          grep -Fq 'id="bookDownloadPage"' "$APP_JS"
 
-          grep -Fq 'pointerdown' "$WWW/app.js"
-          grep -Fq 'pointermove' "$WWW/app.js"
-          grep -Fq 'pointerup' "$WWW/app.js"
+          # Pointer gestures
+          grep -Fq 'pointerdown' "$APP_JS"
+          grep -Fq 'pointermove' "$APP_JS"
+          grep -Fq 'pointerup' "$APP_JS"
 
-          grep -Fq 'startDist' "$WWW/app.js"
-          grep -Fq 'startScale' "$WWW/app.js"
-          grep -Fq 'zoom.scale' "$WWW/app.js"
-          grep -Fq 'zoom.x' "$WWW/app.js"
-          grep -Fq 'zoom.y' "$WWW/app.js"
-          grep -Fq 'clampPan' "$WWW/app.js"
-          grep -Fq 'translate3d' "$WWW/app.js"
+          # Pinch zoom / pan
+          grep -Fq 'startDist' "$APP_JS"
+          grep -Fq 'startScale' "$APP_JS"
+          grep -Fq 'zoom.scale' "$APP_JS"
+          grep -Fq 'zoom.x' "$APP_JS"
+          grep -Fq 'zoom.y' "$APP_JS"
+          grep -Fq 'clampPan' "$APP_JS"
+          grep -Fq 'translate3d' "$APP_JS"
 
+          # No visible zoom buttons
           if grep -Eq \
             'id="(bookZoomIn|bookZoomOut|bookZoomReset|zoomIn|zoomOut|resetZoom)"' \
-            "$WWW/app.js"; then
+            "$APP_JS"; then
+
             echo "ERROR: Unwanted visible zoom button found."
             exit 1
           fi
 
-          grep -Fq 'rkms-loading' "$WWW/app.js"
+          # RKMS loading UI
+          grep -Fq 'rkms-loading' "$APP_JS"
           grep -Fq '.rkms-loading' "$WWW/styles.css"
           grep -Fq 'rkms-load-pulse' "$WWW/styles.css"
           grep -Fq 'rkms-load-sweep' "$WWW/styles.css"
@@ -158,11 +198,19 @@ jobs:
           echo "RKMS source validation: PASS"
 
 
+      # =========================================================
+      # NODE.JS
+      # =========================================================
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
+
+      # =========================================================
+      # JAVA 17
+      # =========================================================
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -172,17 +220,45 @@ jobs:
           cache: gradle
 
 
+      # =========================================================
+      # ANDROID SDK
+      # =========================================================
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
 
+      # =========================================================
+      # GRADLE 8.10.2
+      # =========================================================
+
       - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
+
+      # =========================================================
+      # BUILD ENVIRONMENT
+      # =========================================================
+
+      - name: Show build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          java -version
+          gradle --version
+          node --version
+
+          echo "Build environment: PASS"
+
+
+      # =========================================================
+      # PREPARE RELEASE SIGNING
+      # =========================================================
 
       - name: Prepare release signing
         shell: bash
@@ -205,33 +281,43 @@ jobs:
           mkdir -p "$HOME/.gradle/init.d"
 
           cat > "$HOME/.gradle/init.d/rkms-signing.gradle" <<'EOF'
-          gradle.projectsEvaluated {
-              rootProject.subprojects.each { project ->
-                  def android = project.extensions.findByName("android")
+          allprojects { project ->
 
-                  if (android != null) {
-                      def releaseConfig = android.signingConfigs.findByName("release")
+              project.pluginManager.withPlugin("com.android.application") {
 
-                      if (releaseConfig != null) {
-                          releaseConfig.storeFile =
-                              new File(System.getenv("KEYSTORE_PATH"))
+                  def android = project.extensions.getByName("android")
 
-                          releaseConfig.storePassword =
-                              System.getenv("RKMS_KEYSTORE_PASSWORD")
+                  def releaseConfig =
+                      android.signingConfigs.findByName("release")
 
-                          releaseConfig.keyAlias =
-                              System.getenv("RKMS_KEY_ALIAS")
-
-                          releaseConfig.keyPassword =
-                              System.getenv("RKMS_KEY_PASSWORD")
-                      }
+                  if (releaseConfig == null) {
+                      releaseConfig =
+                          android.signingConfigs.create("release")
                   }
+
+                  releaseConfig.storeFile =
+                      new File(System.getenv("KEYSTORE_PATH"))
+
+                  releaseConfig.storePassword =
+                      System.getenv("RKMS_KEYSTORE_PASSWORD")
+
+                  releaseConfig.keyAlias =
+                      System.getenv("RKMS_KEY_ALIAS")
+
+                  releaseConfig.keyPassword =
+                      System.getenv("RKMS_KEY_PASSWORD")
+
+                  println("RKMS release signing configuration applied.")
               }
           }
           EOF
 
           echo "Release signing prepared."
 
+
+      # =========================================================
+      # VALIDATE GRADLE
+      # =========================================================
 
       - name: Validate Gradle project
         shell: bash
@@ -243,6 +329,10 @@ jobs:
           echo "Gradle validation: PASS"
 
 
+      # =========================================================
+      # CLEAN
+      # =========================================================
+
       - name: Clean project
         shell: bash
         run: |
@@ -252,6 +342,10 @@ jobs:
 
           echo "Clean: PASS"
 
+
+      # =========================================================
+      # BUILD RELEASE APK
+      # =========================================================
 
       - name: Build RKMS Release APK
         shell: bash
@@ -263,27 +357,47 @@ jobs:
             --stacktrace \
             assembleRelease
 
-          echo "RKMS Release APK build: PASS"
+          echo "========================================"
+          echo "RKMS RELEASE APK BUILD: PASS"
+          echo "========================================"
 
+
+      # =========================================================
+      # FIND APK
+      # =========================================================
 
       - name: Find release APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find app/build/outputs/apk/release \
-            -maxdepth 1 \
-            -type f \
-            -name '*.apk' \
-            -print -quit)"
+          APK="$(
+            find app/build/outputs/apk/release \
+              -maxdepth 1 \
+              -type f \
+              -name '*.apk' \
+              -print -quit
+          )"
 
-          test -n "$APK"
-          test -f "$APK"
+          if [ -z "$APK" ]; then
+            echo "ERROR: Release APK not found."
+            exit 1
+          fi
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: Release APK file does not exist."
+            exit 1
+          fi
 
           cp "$APK" "$RUNNER_TEMP/RKMS-Connect-Release.apk"
 
+          echo "Release APK found:"
           ls -lh "$RUNNER_TEMP/RKMS-Connect-Release.apk"
 
+
+      # =========================================================
+      # VERIFY SIGNATURE
+      # =========================================================
 
       - name: Verify signed APK
         shell: bash
@@ -294,8 +408,14 @@ jobs:
             --verbose \
             "$RUNNER_TEMP/RKMS-Connect-Release.apk"
 
-          echo "APK signature verification: PASS"
+          echo "========================================"
+          echo "APK SIGNATURE VERIFICATION: PASS"
+          echo "========================================"
 
+
+      # =========================================================
+      # UPLOAD RELEASE APK
+      # =========================================================
 
       - name: Upload RKMS Release APK
         uses: actions/upload-artifact@v4
@@ -305,6 +425,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+
+      # =========================================================
+      # CLEANUP
+      # =========================================================
 
       - name: Cleanup signing files
         if: always()
