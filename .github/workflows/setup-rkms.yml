@@ -20,18 +20,13 @@ jobs:
 
     steps:
 
-      # ==========================================================
       # 1. Checkout RKMS repository
-      # ==========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-
-      # ==========================================================
-      # 2. Prepare COMPLETE native Android project
-      # ==========================================================
+      # 2. Prepare complete native Android project
       - name: Prepare native Android project
         shell: bash
         run: |
@@ -58,14 +53,14 @@ jobs:
 
           test "$CURRENT_COMMIT" = "$ANDROID_SOURCE_COMMIT"
 
-          # Android project
+          # Android project files
           test -f settings.gradle
           test -f build.gradle
           test -f app/build.gradle
           test -f app/google-services.json
           test -f app/src/main/AndroidManifest.xml
 
-          # Complete Android folders
+          # Android folders
           test -d app/src/main
           test -d app/src/main/java
           test -d app/src/main/res
@@ -81,31 +76,30 @@ jobs:
           grep -q 'RKMSFirebaseMessagingService' \
             app/src/main/AndroidManifest.xml
 
-          # Android / Gradle configuration
+          # Android / Gradle
           grep -q '8.7.3' build.gradle
           grep -q 'compileSdk 35' app/build.gradle
           grep -q 'targetSdk 35' app/build.gradle
 
-          echo ""
           echo "Native Android project verification: PASS"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-
-      # ==========================================================
-      # 3. Find FINAL website ZIP
-      # ==========================================================
+      # 3. Find final website ZIP
       - name: Find final RKMS website ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          CURRENT="$GITHUB_WORKSPACE/RKMS_CONNECT_FINAL_PENDING_PDA_FLASH_VALIDATION_FIXED_2026-09-04.zip"
+          # Direct website ZIP
+          DIRECT="$GITHUB_WORKSPACE/RKMS_CONNECT_FINAL_PENDING_PDA_FLASH_VALIDATION_FIXED_2026-09-04.zip"
 
-          if [ -f "$CURRENT" ]; then
-            ZIP_FILE="$CURRENT"
+          if [ -f "$DIRECT" ]; then
+            ZIP_FILE="$DIRECT"
+
           else
-            mapfile -t CANDIDATES < <(
+            # Search direct final ZIPs
+            mapfile -t DIRECT_CANDIDATES < <(
               find "$GITHUB_WORKSPACE" \
                 -type f \
                 \( \
@@ -116,43 +110,95 @@ jobs:
                 -print | sort
             )
 
-            if [ "${#CANDIDATES[@]}" -eq 0 ]; then
-              echo "ERROR: No RKMS final website ZIP found."
-              find "$GITHUB_WORKSPACE" \
-                -type f \
-                -name '*.zip' \
-                -print || true
+            if [ "${#DIRECT_CANDIDATES[@]}" -eq 1 ]; then
+
+              ZIP_FILE="${DIRECT_CANDIDATES[0]}"
+
+            elif [ "${#DIRECT_CANDIDATES[@]}" -gt 1 ]; then
+
+              echo "ERROR: Multiple final website ZIPs found:"
+              printf '%s\n' "${DIRECT_CANDIDATES[@]}"
               exit 1
+
+            else
+
+              # Build package ZIP
+              # Automatically extract website ZIP from it.
+              mapfile -t PACKAGES < <(
+                find "$GITHUB_WORKSPACE" \
+                  -type f \
+                  -name 'RKMS_GITHUB_BUILD_PACKAGE_*.zip' \
+                  -print | sort
+              )
+
+              if [ "${#PACKAGES[@]}" -ne 1 ]; then
+
+                echo "ERROR: Final website ZIP not found."
+
+                echo ""
+                echo "Upload either:"
+                echo "1. Website ZIP directly"
+                echo "2. RKMS_GITHUB_BUILD_PACKAGE_*.zip"
+
+                echo ""
+                echo "ZIP files found:"
+
+                find "$GITHUB_WORKSPACE" \
+                  -type f \
+                  -name '*.zip' \
+                  -print || true
+
+                exit 1
+              fi
+
+              PACKAGE="${PACKAGES[0]}"
+
+              NESTED_DIR="$RUNNER_TEMP/rkms-package"
+
+              rm -rf "$NESTED_DIR"
+              mkdir -p "$NESTED_DIR"
+
+              echo "Build package found:"
+              echo "$PACKAGE"
+
+              unzip -q \
+                "$PACKAGE" \
+                -d "$NESTED_DIR"
+
+              mapfile -t NESTED < <(
+                find "$NESTED_DIR" \
+                  -type f \
+                  \( \
+                    -name 'RKMS_CONNECT_FINAL_ALL_FIXES_*.zip' \
+                    -o -name 'RKMS_CONNECT_FINAL_BUILD_*.zip' \
+                    -o -name 'RKMS_CONNECT_FINAL_PENDING_PDA_*.zip' \
+                  \) \
+                  -print | sort
+              )
+
+              if [ "${#NESTED[@]}" -ne 1 ]; then
+
+                echo "ERROR: Build package must contain exactly one final website ZIP."
+
+                printf '%s\n' "${NESTED[@]}" || true
+
+                exit 1
+              fi
+
+              ZIP_FILE="${NESTED[0]}"
+
             fi
-
-            if [ "${#CANDIDATES[@]}" -ne 1 ]; then
-              echo "ERROR: Multiple final ZIP candidates found."
-
-              printf '%s\n' "${CANDIDATES[@]}"
-
-              echo ""
-              echo "Keep only the intended final ZIP in repository."
-
-              exit 1
-            fi
-
-            ZIP_FILE="${CANDIDATES[0]}"
           fi
 
           test -s "$ZIP_FILE"
 
           echo ""
-          echo "Selected website ZIP:"
+          echo "Selected final website ZIP:"
           echo "$ZIP_FILE"
 
           echo "WEBSITE_ZIP=$ZIP_FILE" >> "$GITHUB_ENV"
 
-
-      # ==========================================================
       # 4. Extract website
-      #
-      # Supports ZIP with outer folder.
-      # ==========================================================
       - name: Extract final RKMS website
         shell: bash
         run: |
@@ -163,7 +209,9 @@ jobs:
           rm -rf "$WEB_EXTRACT"
           mkdir -p "$WEB_EXTRACT"
 
-          unzip -q "$WEBSITE_ZIP" -d "$WEB_EXTRACT"
+          unzip -q \
+            "$WEBSITE_ZIP" \
+            -d "$WEB_EXTRACT"
 
           APP_JS="$(
             find "$WEB_EXTRACT" \
@@ -215,15 +263,15 @@ jobs:
 
           test "$WEBSITE_FILE_COUNT" -gt 0
 
-          echo ""
           echo "Website root:"
           echo "$WEB_ROOT"
 
           echo "Website files:"
           echo "$WEBSITE_FILE_COUNT"
 
-          # Book assets verification
+          # Book verification
           if [ -d "$WEB_ROOT/assets/book" ]; then
+
             BOOK_COUNT="$(
               find "$WEB_ROOT/assets/book" \
                 -type f | wc -l
@@ -233,16 +281,16 @@ jobs:
 
             echo "Book assets found:"
             echo "$BOOK_COUNT"
+
           else
+
             echo "WARNING: assets/book not found."
+
           fi
 
           echo "WEB_ROOT=$WEB_ROOT" >> "$GITHUB_ENV"
 
-
-      # ==========================================================
       # 5. JavaScript syntax
-      # ==========================================================
       - name: Validate website JavaScript
         shell: bash
         run: |
@@ -252,10 +300,7 @@ jobs:
 
           echo "app.js syntax: PASS"
 
-
-      # ==========================================================
-      # 6. Production Supabase verification
-      # ==========================================================
+      # 6. Production Supabase
       - name: Verify production Supabase
         shell: bash
         run: |
@@ -271,10 +316,7 @@ jobs:
 
           echo "Production Supabase configuration: PASS"
 
-
-      # ==========================================================
-      # 7. Verify Pending / Flash frontend
-      # ==========================================================
+      # 7. Verify Pending + Flash
       - name: Verify RKMS frontend fixes
         shell: bash
         run: |
@@ -300,29 +342,14 @@ jobs:
             'rkms_reject_member' \
             "$WEB_ROOT/app.js"
 
-          # Flash management
+          # Flash
           grep -q \
             'rkms_manage_flash' \
             "$WEB_ROOT/app.js"
 
           echo "Pending + Flash frontend verification: PASS"
 
-
-      # ==========================================================
-      # 8. Bundle COMPLETE website
-      #
-      # IMPORTANT:
-      # Copy the whole website tree.
-      #
-      # This preserves:
-      # - Book
-      # - images
-      # - assets
-      # - manifest
-      # - icons
-      # - all folders
-      # - all future website files
-      # ==========================================================
+      # 8. Copy COMPLETE website
       - name: Sync complete website into Android
         shell: bash
         run: |
@@ -334,17 +361,17 @@ jobs:
 
           mkdir -p "$ANDROID_WEB"
 
+          # Copy EVERYTHING
           cp -R \
             "$WEB_ROOT"/. \
             "$ANDROID_WEB"/
 
-          # Required web files
+          # Required files
           test -s "$ANDROID_WEB/app.js"
           test -s "$ANDROID_WEB/styles.css"
           test -s "$ANDROID_WEB/index.html"
           test -s "$ANDROID_WEB/config.js"
 
-          # Verify complete website tree
           BUNDLED_COUNT="$(
             find "$ANDROID_WEB" \
               -type f | wc -l
@@ -352,7 +379,6 @@ jobs:
 
           test "$BUNDLED_COUNT" -gt 0
 
-          echo ""
           echo "Complete website bundled."
           echo "Bundled files:"
           echo "$BUNDLED_COUNT"
@@ -374,27 +400,18 @@ jobs:
 
           du -sh "$ANDROID_WEB"
 
-
-      # ==========================================================
       # 9. Java 17
-      # ==========================================================
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-
-      # ==========================================================
       # 10. Android SDK
-      # ==========================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-
-      # ==========================================================
       # 11. Gradle 8.9
-      # ==========================================================
       - name: Install Gradle 8.9
         shell: bash
         run: |
@@ -403,7 +420,6 @@ jobs:
           GRADLE_ROOT="$RUNNER_TEMP/gradle"
 
           rm -rf "$GRADLE_ROOT"
-
           mkdir -p "$GRADLE_ROOT"
 
           curl \
@@ -427,10 +443,7 @@ jobs:
 
           "$GRADLE_BIN/gradle" --version
 
-
-      # ==========================================================
       # 12. Create Gradle Wrapper
-      # ==========================================================
       - name: Create Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -447,10 +460,7 @@ jobs:
 
           ./gradlew --version
 
-
-      # ==========================================================
-      # 13. Verify Android + Gradle + FCM
-      # ==========================================================
+      # 13. Verify Android project
       - name: Verify Android Gradle project
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -469,7 +479,7 @@ jobs:
           test -d app/src/main/assets
           test -d app/src/main/assets/www
 
-          # FCM source
+          # FCM
           test -f \
             app/src/main/java/org/rkms/connect/FCMTokenRegistrar.java
 
@@ -479,7 +489,6 @@ jobs:
           test -f \
             app/src/main/java/org/rkms/connect/NotificationHelper.java
 
-          # FCM service
           grep -q \
             'RKMSFirebaseMessagingService' \
             app/src/main/AndroidManifest.xml
@@ -488,7 +497,7 @@ jobs:
             'FirebaseMessagingService' \
             app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
 
-          # Android configuration
+          # Android
           grep -q \
             'compileSdk 35' \
             app/build.gradle
@@ -497,7 +506,7 @@ jobs:
             'targetSdk 35' \
             app/build.gradle
 
-          # Gradle project
+          # Gradle
           ./gradlew \
             tasks \
             --no-daemon \
@@ -506,10 +515,7 @@ jobs:
 
           echo "Android + Gradle + FCM verification: PASS"
 
-
-      # ==========================================================
       # 14. Release signing
-      # ==========================================================
       - name: Prepare release signing
         shell: bash
         env:
@@ -539,10 +545,7 @@ jobs:
 
           echo "Release signing: PASS"
 
-
-      # ==========================================================
       # 15. Build Release APK
-      # ==========================================================
       - name: Build signed Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         env:
@@ -565,10 +568,7 @@ jobs:
 
           echo "Release APK build: PASS"
 
-
-      # ==========================================================
-      # 16. Final APK verification
-      # ==========================================================
+      # 16. Verify APK
       - name: Verify final APK
         shell: bash
         run: |
@@ -591,7 +591,7 @@ jobs:
           cp "$APK" \
             release/RKMS-Connect-Release.apk
 
-          # Required website files inside APK
+          # Website files inside APK
           unzip -l "$APK" \
             | grep -q 'assets/www/app.js'
 
@@ -628,10 +628,7 @@ jobs:
 
           echo "Final APK verification: PASS"
 
-
-      # ==========================================================
       # 17. Upload APK
-      # ==========================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
