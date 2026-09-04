@@ -1,4 +1,4 @@
-name: RKMS Connect Android Build
+name: Build RKMS Release APK
 
 on:
   workflow_dispatch:
@@ -14,55 +14,96 @@ jobs:
           ref: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
           fetch-depth: 1
 
-      - name: Checkout repository files
+      - name: Checkout main repository files
         uses: actions/checkout@v4
         with:
           ref: main
           path: repo-main
           fetch-depth: 1
 
-      - name: Prepare website package
+      - name: Find and install Final Website ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP="repo-main/RKMS_CONNECT_HOME_PERSONAL_NOTIFICATION_FIXED_2026-09-04.zip"
+          echo "Searching for Final ZIP..."
 
-          if [ ! -f "$ZIP" ]; then
-            echo "ERROR: Final ZIP not found:"
-            echo "$ZIP"
+          ZIP_FILE=$(find repo-main -type f -iname "*.zip" \
+            ! -path "*/.git/*" \
+            | sort \
+            | tail -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in repository."
             exit 1
           fi
+
+          echo "Using ZIP:"
+          echo "$ZIP_FILE"
 
           rm -rf /tmp/rkms_web
           mkdir -p /tmp/rkms_web
 
-          unzip -q "$ZIP" -d /tmp/rkms_web
+          unzip -q "$ZIP_FILE" -d /tmp/rkms_web
 
-          WEB_ROOT=$(find /tmp/rkms_web -type f -name "app.js" -print -quit | xargs dirname)
+          echo "Finding website root..."
 
-          if [ -z "$WEB_ROOT" ] || [ ! -f "$WEB_ROOT/app.js" ]; then
-            echo "ERROR: Could not find website root containing app.js"
+          WEB_ROOT=$(find /tmp/rkms_web -type f -name "app.js" \
+            -print -quit \
+            | xargs -r dirname)
+
+          if [ -z "$WEB_ROOT" ]; then
+            echo "ERROR: app.js not found inside ZIP."
             exit 1
           fi
 
           echo "Website root:"
           echo "$WEB_ROOT"
 
+          if [ ! -f "$WEB_ROOT/index.html" ]; then
+            echo "ERROR: index.html not found."
+            exit 1
+          fi
+
+          if [ ! -f "$WEB_ROOT/styles.css" ]; then
+            echo "ERROR: styles.css not found."
+            exit 1
+          fi
+
           rm -rf app/src/main/assets/www
           mkdir -p app/src/main/assets/www
 
-          # Copy the COMPLETE website root.
-          # This preserves all folders/assets including the 60 book pages.
+          # Copy COMPLETE website.
           cp -a "$WEB_ROOT"/. app/src/main/assets/www/
 
-          echo "Website files copied:"
-          find app/src/main/assets/www -type f | wc -l
+          echo "Website copied successfully."
 
-          echo "Book assets:"
-          find app/src/main/assets/www/assets/book -type f 2>/dev/null | sort || true
+      - name: Verify Book pages
+        shell: bash
+        run: |
+          set -e
 
-      - name: Verify final website
+          BOOK_DIR="app/src/main/assets/www/assets/book"
+
+          if [ ! -d "$BOOK_DIR" ]; then
+            echo "ERROR: Book assets folder not found."
+            exit 1
+          fi
+
+          PAGE_COUNT=$(find "$BOOK_DIR" -type f \
+            \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) \
+            | wc -l)
+
+          echo "Book image files found: $PAGE_COUNT"
+
+          if [ "$PAGE_COUNT" -lt 61 ]; then
+            echo "ERROR: Book must contain cover + 60 pages."
+            exit 1
+          fi
+
+          echo "Book assets verification PASS."
+
+      - name: Verify website files
         shell: bash
         run: |
           set -e
@@ -72,18 +113,9 @@ jobs:
           test -f app/src/main/assets/www/styles.css
           test -f app/src/main/assets/www/config.js
 
-          BOOK_COUNT=$(find app/src/main/assets/www/assets/book -type f \
-            \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) \
-            | wc -l)
+          echo "Website verification PASS."
 
-          echo "Book image count: $BOOK_COUNT"
-
-          if [ "$BOOK_COUNT" -lt 61 ]; then
-            echo "ERROR: Expected cover + 60 book pages."
-            exit 1
-          fi
-
-      - name: Install Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
@@ -99,10 +131,11 @@ jobs:
 
           chmod +x gradlew
 
-      - name: Build release APK
+      - name: Build Release APK
         shell: bash
         run: |
           set -e
+
           ./gradlew clean assembleRelease --no-daemon
 
       - name: Verify APK
@@ -113,11 +146,11 @@ jobs:
           APK="app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ERROR: Release APK was not generated."
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo "APK generated successfully:"
+          echo "BUILD SUCCESS"
           ls -lh "$APK"
 
       - name: Upload APK
