@@ -12,13 +12,7 @@ permissions:
 env:
   ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
 
-  # IMPORTANT:
-  # यहाँ अपनी LIVE RKMS WEBSITE का exact HTTPS URL रखें.
-  # उदाहरण:
-  # https://example.netlify.app
-  #
-  # अभी exact live URL हमारे पास confirm नहीं है,
-  # इसलिए नीचे placeholder है.
+  # अपनी LIVE RKMS WEBSITE का exact HTTPS URL यहाँ डालें
   RKMS_WEBSITE_URL: https://YOUR-LIVE-RKMS-WEBSITE-URL
 
 jobs:
@@ -28,20 +22,21 @@ jobs:
 
     steps:
 
-      # ---------------------------------------------------------
-      # 1. Checkout repository
-      # ---------------------------------------------------------
+      # =========================================================
+      # 1. Checkout current repository
+      # =========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # 2. Prepare native Android project
-      #    IMPORTANT:
-      #    git archive वाला problematic तरीका नहीं है.
-      # ---------------------------------------------------------
+      #
+      # पुराने git archive / git --work-tree तरीके को हटाया गया है.
+      # Native Android source को सीधे clone किया जा रहा है.
+      # =========================================================
       - name: Prepare native Android project
         shell: bash
         run: |
@@ -51,15 +46,27 @@ jobs:
 
           rm -rf "$PROJECT_DIR"
 
-          echo "Preparing native Android source..."
-          echo "Commit: $ANDROID_SOURCE_COMMIT"
+          echo "========================================"
+          echo "Preparing native Android project"
+          echo "========================================"
+          echo "Commit:"
+          echo "$ANDROID_SOURCE_COMMIT"
 
-          git fetch --no-tags origin "$ANDROID_SOURCE_COMMIT"
+          git clone \
+            --no-tags \
+            --filter=blob:none \
+            "https://github.com/vmkisanrkms/RKMS-Connect-Android.git" \
+            "$PROJECT_DIR"
 
-          mkdir -p "$PROJECT_DIR"
+          cd "$PROJECT_DIR"
 
-          git --work-tree="$PROJECT_DIR" \
-              checkout "$ANDROID_SOURCE_COMMIT" -- .
+          git checkout --detach "$ANDROID_SOURCE_COMMIT"
+
+          echo ""
+          echo "Checked out commit:"
+          git rev-parse HEAD
+
+          test "$(git rev-parse HEAD)" = "$ANDROID_SOURCE_COMMIT"
 
           test -f "$PROJECT_DIR/settings.gradle" || \
             test -f "$PROJECT_DIR/settings.gradle.kts"
@@ -69,18 +76,21 @@ jobs:
 
           test -f "$PROJECT_DIR/gradlew"
 
+          test -f "$PROJECT_DIR/app/google-services.json"
+
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+
           chmod +x "$PROJECT_DIR/gradlew"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
           echo ""
-          echo "Native Android project:"
-          find "$PROJECT_DIR" -maxdepth 3 -type f | sort | head -150
+          echo "Native Android project prepared successfully."
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # 3. Validate live website URL
-      # ---------------------------------------------------------
+      # =========================================================
       - name: Validate RKMS website URL
         shell: bash
         run: |
@@ -88,48 +98,52 @@ jobs:
 
           URL="$RKMS_WEBSITE_URL"
 
-          if [[ "$URL" == *"YOUR-LIVE-RKMS-WEBSITE-URL"* ]]; then
+          echo "Website URL:"
+          echo "$URL"
+
+          if [[ "$URL" == "https://YOUR-LIVE-RKMS-WEBSITE-URL" ]]; then
+            echo ""
             echo "ERROR: RKMS_WEBSITE_URL is still a placeholder."
-            echo "Please set the real live RKMS website URL."
+            echo "Please replace it with the real live RKMS website URL."
             exit 1
           fi
 
           if [[ "$URL" != https://* ]]; then
+            echo ""
             echo "ERROR: RKMS website must use HTTPS."
-            echo "Current value: $URL"
             exit 1
           fi
 
-          echo "Checking website:"
-          echo "$URL"
-
-          HTTP_CODE="$(curl \
-            -L \
-            -s \
-            -o /dev/null \
-            -w '%{http_code}' \
-            --max-time 30 \
-            "$URL" || true)"
+          HTTP_CODE="$(
+            curl \
+              -L \
+              -s \
+              -o /dev/null \
+              -w '%{http_code}' \
+              --connect-timeout 15 \
+              --max-time 30 \
+              "$URL" || true
+          )"
 
           echo "HTTP status: $HTTP_CODE"
 
           case "$HTTP_CODE" in
             200|301|302|304)
-              echo "Website is reachable."
+              echo "LIVE WEBSITE CHECK: PASS"
               ;;
             *)
-              echo "ERROR: Live RKMS website is not reachable correctly."
+              echo "ERROR: Live RKMS website could not be reached."
               exit 1
               ;;
           esac
 
 
-      # ---------------------------------------------------------
-      # 4. Configure Android app to load LIVE website
+      # =========================================================
+      # 4. Configure Android to open LIVE website
       #
-      #    APK will NOT bundle app.js/styles/index.html.
-      #    APK will open the live RKMS website.
-      # ---------------------------------------------------------
+      # APK में website की अलग copy नहीं रखी जाएगी.
+      # App सीधे live website खोलेगा.
+      # =========================================================
       - name: Configure live RKMS website
         shell: bash
         env:
@@ -150,38 +164,75 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          old = 'private static final String ASSET_HOME = "file:///android_asset/www/index.html";'
+          old = (
+              'private static final String ASSET_HOME = '
+              '"file:///android_asset/www/index.html";'
+          )
 
-          new = f'private static final String WEBSITE_HOME = "{website}";'
+          new = (
+              'private static final String WEBSITE_HOME = '
+              f'"{website}";'
+          )
 
           if old not in text:
               raise SystemExit(
-                  "ERROR: Expected ASSET_HOME declaration was not found."
+                  "ERROR: ASSET_HOME declaration was not found."
               )
 
           text = text.replace(old, new)
 
-          text = text.replace(
-              'webView.loadUrl(ASSET_HOME + (route.isEmpty() ? "" : "#" + route));',
-              'webView.loadUrl(WEBSITE_HOME + (route.isEmpty() ? "" : "/#" + route));'
+          old_route_1 = (
+              'webView.loadUrl(ASSET_HOME + '
+              '(route.isEmpty() ? "" : "#" + route));'
           )
 
+          new_route_1 = (
+              'webView.loadUrl(WEBSITE_HOME + '
+              '(route.isEmpty() ? "" : "/#" + route));'
+          )
+
+          if old_route_1 not in text:
+              raise SystemExit(
+                  "ERROR: Initial route loader was not found."
+              )
+
           text = text.replace(
-              'if (!route.isEmpty() && webView != null) webView.loadUrl(ASSET_HOME + "#" + route);',
-              'if (!route.isEmpty() && webView != null) webView.loadUrl(WEBSITE_HOME + "/#" + route);'
+              old_route_1,
+              new_route_1
+          )
+
+          old_route_2 = (
+              'if (!route.isEmpty() && webView != null) '
+              'webView.loadUrl(ASSET_HOME + "#" + route);'
+          )
+
+          new_route_2 = (
+              'if (!route.isEmpty() && webView != null) '
+              'webView.loadUrl(WEBSITE_HOME + "/#" + route);'
+          )
+
+          if old_route_2 not in text:
+              raise SystemExit(
+                  "ERROR: onNewIntent route loader was not found."
+              )
+
+          text = text.replace(
+              old_route_2,
+              new_route_2
           )
 
           path.write_text(text, encoding="utf-8")
           PY
 
-          echo "Live website configured:"
+          echo ""
+          echo "Configured website:"
           grep -n "WEBSITE_HOME" "$MAIN_ACTIVITY"
 
 
-      # ---------------------------------------------------------
-      # 5. Verify no bundled local website is required
-      # ---------------------------------------------------------
-      - name: Verify Android WebView configuration
+      # =========================================================
+      # 5. Verify WebView configuration
+      # =========================================================
+      - name: Verify WebView configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -193,16 +244,16 @@ jobs:
           grep -q "WEBSITE_HOME" "$MAIN_ACTIVITY"
 
           if grep -q "file:///android_asset/www/index.html" "$MAIN_ACTIVITY"; then
-            echo "ERROR: Android is still configured for bundled website."
+            echo "ERROR: Local bundled website is still being used."
             exit 1
           fi
 
-          echo "WebView live website configuration PASS."
+          echo "LIVE WEBSITE WebView configuration: PASS"
 
 
-      # ---------------------------------------------------------
-      # 6. Setup Java
-      # ---------------------------------------------------------
+      # =========================================================
+      # 6. Setup Java 17
+      # =========================================================
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
@@ -211,38 +262,42 @@ jobs:
           cache: gradle
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # 7. Setup Android SDK
-      # ---------------------------------------------------------
+      # =========================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
 
-      # ---------------------------------------------------------
-      # 8. Verify Android project
-      # ---------------------------------------------------------
+      # =========================================================
+      # 8. Verify Android / Firebase project
+      # =========================================================
       - name: Verify Android project
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Gradle:"
-          ./gradlew --version
+          echo "========================================"
+          echo "Android project verification"
+          echo "========================================"
 
-          echo ""
-          echo "Android project files:"
-          find . -maxdepth 3 -type f | sort | head -200
+          ./gradlew --version
 
           test -f app/google-services.json
           test -f app/src/main/AndroidManifest.xml
 
-          echo "Android native project verification PASS."
+          echo ""
+          echo "Google Services configuration: FOUND"
+          echo "Android Manifest: FOUND"
+          echo "Gradle wrapper: FOUND"
+          echo ""
+          echo "ANDROID PROJECT CHECK: PASS"
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # 9. Prepare release signing
-      # ---------------------------------------------------------
+      # =========================================================
       - name: Prepare release signing
         shell: bash
         env:
@@ -267,12 +322,12 @@ jobs:
 
           echo "RKMS_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
 
-          echo "Release signing keystore prepared."
+          echo "Release signing configuration: PASS"
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # 10. Build signed Release APK
-      # ---------------------------------------------------------
+      # =========================================================
       - name: Build signed Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         env:
@@ -286,12 +341,16 @@ jobs:
 
           chmod +x gradlew
 
-          ./gradlew clean assembleRelease --no-daemon --stacktrace
+          ./gradlew \
+            clean \
+            assembleRelease \
+            --no-daemon \
+            --stacktrace
 
 
-      # ---------------------------------------------------------
-      # 11. Locate APK
-      # ---------------------------------------------------------
+      # =========================================================
+      # 11. Find final APK
+      # =========================================================
       - name: Locate Release APK
         shell: bash
         run: |
@@ -299,30 +358,43 @@ jobs:
 
           APK_DIR="$PROJECT_DIR/app/build/outputs/apk/release"
 
-          echo "Looking for APK in:"
+          echo "Searching:"
           echo "$APK_DIR"
 
-          APK="$(find "$APK_DIR" \
-            -type f \
-            -name '*.apk' \
-            -print \
-            -quit)"
+          APK="$(
+            find "$APK_DIR" \
+              -type f \
+              -name '*.apk' \
+              -print \
+              -quit
+          )"
 
-          test -n "$APK"
+          if [ -z "$APK" ]; then
+            echo "ERROR: Release APK was not found."
+            find "$PROJECT_DIR/app/build/outputs" \
+              -type f \
+              -print || true
+            exit 1
+          fi
+
           test -s "$APK"
 
           mkdir -p release
 
-          cp "$APK" release/RKMS-Connect-Release.apk
+          cp "$APK" \
+            release/RKMS-Connect-Release.apk
 
           echo ""
-          echo "FINAL APK:"
+          echo "========================================"
+          echo "FINAL APK"
+          echo "========================================"
+
           ls -lh release/RKMS-Connect-Release.apk
 
 
-      # ---------------------------------------------------------
-      # 12. APK basic verification
-      # ---------------------------------------------------------
+      # =========================================================
+      # 12. Final APK verification
+      # =========================================================
       - name: Verify final APK
         shell: bash
         run: |
@@ -333,15 +405,21 @@ jobs:
           test -f "$APK"
           test -s "$APK"
 
-          echo "APK size:"
-          ls -lh "$APK"
+          SIZE="$(stat -c%s "$APK")"
 
-          echo "APK verification PASS."
+          echo "APK size: $SIZE bytes"
+
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "ERROR: APK appears unexpectedly small."
+            exit 1
+          fi
+
+          echo "FINAL APK CHECK: PASS"
 
 
-      # ---------------------------------------------------------
-      # 13. Upload APK
-      # ---------------------------------------------------------
+      # =========================================================
+      # 13. Upload APK artifact
+      # =========================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
