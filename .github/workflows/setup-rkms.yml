@@ -10,8 +10,12 @@ permissions:
   contents: read
 
 env:
+  # Verified native Android source commit
   ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
-  GRADLE_VERSION: 8.9
+
+  # Android Gradle Plugin in the native project is 8.7.3.
+  # Gradle 8.9 is compatible.
+  GRADLE_VERSION: "8.9"
 
 jobs:
   build:
@@ -20,22 +24,26 @@ jobs:
 
     steps:
 
-      # =========================================================
-      # 1. Checkout repository
-      # =========================================================
+      # ==========================================================
+      # 1. Checkout current RKMS repository
+      # ==========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
 
-      # =========================================================
-      # 2. Prepare native Android source
+      # ==========================================================
+      # 2. Prepare native Android project
+      #
+      # The native Android source is stored in the verified
+      # historical commit.
       #
       # IMPORTANT:
-      # Native source commit में gradlew नहीं है.
-      # इसलिए हम source को clone करेंगे और बाद में Gradle wrapper बनाएंगे.
-      # =========================================================
+      # We do NOT use git archive.
+      # We do NOT use git --work-tree.
+      # We clone the repository and checkout the exact commit.
+      # ==========================================================
       - name: Prepare native Android project
         shell: bash
         run: |
@@ -45,9 +53,12 @@ jobs:
 
           rm -rf "$PROJECT_DIR"
 
-          echo "========================================"
+          echo "=================================================="
           echo "Preparing native RKMS Android project"
-          echo "========================================"
+          echo "=================================================="
+
+          echo "Source commit:"
+          echo "$ANDROID_SOURCE_COMMIT"
 
           git clone \
             --no-tags \
@@ -58,33 +69,44 @@ jobs:
 
           git checkout --detach "$ANDROID_SOURCE_COMMIT"
 
+          CURRENT_COMMIT="$(git rev-parse HEAD)"
+
+          echo ""
           echo "Checked commit:"
-          git rev-parse HEAD
+          echo "$CURRENT_COMMIT"
 
-          test "$(git rev-parse HEAD)" = "$ANDROID_SOURCE_COMMIT"
+          if [ "$CURRENT_COMMIT" != "$ANDROID_SOURCE_COMMIT" ]; then
+            echo "ERROR: Wrong Android source commit."
+            exit 1
+          fi
 
-          test -f settings.gradle
-          test -f app/build.gradle
-          test -f app/google-services.json
-          test -f app/src/main/AndroidManifest.xml
+          # Required Android project files
+          test -f "$PROJECT_DIR/settings.gradle"
+          test -f "$PROJECT_DIR/build.gradle"
+          test -f "$PROJECT_DIR/app/build.gradle"
+          test -f "$PROJECT_DIR/app/google-services.json"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
-          echo "Native Android source: PASS"
+          echo ""
+          echo "Native Android project verification: PASS"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
 
-      # =========================================================
-      # 3. Find and extract FINAL RKMS WEBSITE ZIP
+      # ==========================================================
+      # 3. Find final RKMS website ZIP
       #
-      # APK में final website bundle की जाएगी.
-      # Live website URL की जरूरत नहीं.
-      # =========================================================
-      - name: Extract final RKMS website
+      # The final website is bundled inside the APK.
+      # No live website URL is required.
+      # ==========================================================
+      - name: Find final RKMS website
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching for final RKMS website ZIP..."
+          echo "=================================================="
+          echo "Searching final RKMS website ZIP"
+          echo "=================================================="
 
           ZIP_FILE="$(
             find "$GITHUB_WORKSPACE" \
@@ -96,28 +118,45 @@ jobs:
 
           if [ -z "$ZIP_FILE" ]; then
             echo ""
-            echo "ERROR: Final RKMS website ZIP not found."
+            echo "ERROR: RKMS_CONNECT_FINAL_ALL_FIXES_*.zip was not found."
+
             echo ""
-            echo "ZIP files found:"
+            echo "Available ZIP files:"
             find "$GITHUB_WORKSPACE" \
               -type f \
               -name '*.zip' \
               -print || true
+
             exit 1
           fi
 
-          echo "Using:"
+          echo ""
+          echo "Final website ZIP:"
           echo "$ZIP_FILE"
+
+          echo "WEBSITE_ZIP=$ZIP_FILE" >> "$GITHUB_ENV"
+
+
+      # ==========================================================
+      # 4. Extract final website
+      # ==========================================================
+      - name: Extract final RKMS website
+        shell: bash
+        run: |
+          set -euo pipefail
 
           WEB_DIR="$RUNNER_TEMP/rkms-web"
 
           rm -rf "$WEB_DIR"
           mkdir -p "$WEB_DIR"
 
-          unzip -q "$ZIP_FILE" -d "$WEB_DIR"
+          echo "Extracting:"
+          echo "$WEBSITE_ZIP"
+
+          unzip -q "$WEBSITE_ZIP" -d "$WEB_DIR"
 
           echo ""
-          echo "Website files found:"
+          echo "Searching required website files..."
 
           APP_JS="$(
             find "$WEB_DIR" \
@@ -151,28 +190,44 @@ jobs:
               -quit
           )"
 
-          test -n "$APP_JS"
-          test -n "$STYLES"
-          test -n "$INDEX"
-          test -n "$CONFIG"
+          if [ -z "$APP_JS" ]; then
+            echo "ERROR: app.js not found."
+            exit 1
+          fi
+
+          if [ -z "$STYLES" ]; then
+            echo "ERROR: styles.css not found."
+            exit 1
+          fi
+
+          if [ -z "$INDEX" ]; then
+            echo "ERROR: index.html not found."
+            exit 1
+          fi
+
+          if [ -z "$CONFIG" ]; then
+            echo "ERROR: config.js not found."
+            exit 1
+          fi
 
           test -s "$APP_JS"
           test -s "$STYLES"
           test -s "$INDEX"
           test -s "$CONFIG"
 
-          echo "app.js: PASS"
-          echo "styles.css: PASS"
-          echo "index.html: PASS"
-          echo "config.js: PASS"
+          echo ""
+          echo "app.js      : PASS"
+          echo "styles.css  : PASS"
+          echo "index.html  : PASS"
+          echo "config.js   : PASS"
 
           echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
 
 
-      # =========================================================
-      # 4. Validate final website JavaScript
-      # =========================================================
-      - name: Validate final website JavaScript
+      # ==========================================================
+      # 5. Validate website JavaScript
+      # ==========================================================
+      - name: Validate website JavaScript
         shell: bash
         run: |
           set -euo pipefail
@@ -187,17 +242,63 @@ jobs:
 
           test -n "$APP_JS"
 
+          echo "Checking JavaScript syntax..."
+
           node --check "$APP_JS"
 
           echo "JavaScript syntax: PASS"
 
 
-      # =========================================================
-      # 5. Sync final website into Android APK
+      # ==========================================================
+      # 6. Verify production Supabase configuration
       #
-      # यही आपकी सही requirement है:
-      # Final website APK के अंदर bundled होगी.
-      # =========================================================
+      # This prevents accidentally building an APK against a
+      # wrong/test Supabase project.
+      # ==========================================================
+      - name: Verify production Supabase
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONFIG="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'config.js' \
+              -print \
+              -quit
+          )"
+
+          test -n "$CONFIG"
+
+          echo "Checking RKMS production Supabase..."
+
+          grep -q \
+            'https://kzczivaydandiqgnzfeg.supabase.co' \
+            "$CONFIG"
+
+          echo "Supabase URL: PASS"
+
+          grep -q \
+            'sb_publishable_' \
+            "$CONFIG"
+
+          echo "Supabase publishable key: PASS"
+
+          echo ""
+          echo "Production Supabase configuration verified."
+
+
+      # ==========================================================
+      # 7. Bundle FINAL WEBSITE into Android APK
+      #
+      # This is intentional.
+      #
+      # Website -> APK
+      #
+      # Later, the generated APK can be uploaded to Supabase
+      # Storage and the website APK-download option can point
+      # to that APK.
+      # ==========================================================
       - name: Sync final website into Android
         shell: bash
         run: |
@@ -240,19 +341,19 @@ jobs:
           test -n "$INDEX"
           test -n "$CONFIG"
 
-          ASSETS="$PROJECT_DIR/app/src/main/assets/www"
+          ANDROID_WEB="$PROJECT_DIR/app/src/main/assets/www"
 
-          rm -rf "$ASSETS"
-          mkdir -p "$ASSETS"
+          rm -rf "$ANDROID_WEB"
+          mkdir -p "$ANDROID_WEB"
 
-          cp "$APP_JS" "$ASSETS/app.js"
-          cp "$STYLES" "$ASSETS/styles.css"
-          cp "$INDEX" "$ASSETS/index.html"
-          cp "$CONFIG" "$ASSETS/config.js"
+          cp "$APP_JS" "$ANDROID_WEB/app.js"
+          cp "$STYLES" "$ANDROID_WEB/styles.css"
+          cp "$INDEX" "$ANDROID_WEB/index.html"
+          cp "$CONFIG" "$ANDROID_WEB/config.js"
 
-          # -----------------------------------------------------
-          # manifest.webmanifest
-          # -----------------------------------------------------
+          # ------------------------------------------------------
+          # PWA manifest
+          # ------------------------------------------------------
           MANIFEST="$(
             find "$WEB_DIR" \
               -type f \
@@ -262,130 +363,117 @@ jobs:
           )"
 
           if [ -n "$MANIFEST" ]; then
-            cp "$MANIFEST" "$ASSETS/manifest.webmanifest"
+            cp "$MANIFEST" "$ANDROID_WEB/manifest.webmanifest"
           fi
 
-          # -----------------------------------------------------
+          # ------------------------------------------------------
           # Website assets
-          # -----------------------------------------------------
+          # ------------------------------------------------------
           SOURCE_ASSETS="$(
             find "$WEB_DIR" \
               -type d \
-              -name assets \
+              -name 'assets' \
               -print \
               -quit || true
           )"
 
           if [ -n "$SOURCE_ASSETS" ]; then
-            mkdir -p "$ASSETS/assets"
-            cp -R "$SOURCE_ASSETS"/. "$ASSETS/assets"/
+            mkdir -p "$ANDROID_WEB/assets"
+
+            cp -R \
+              "$SOURCE_ASSETS"/. \
+              "$ANDROID_WEB/assets"/
           fi
 
-          # -----------------------------------------------------
-          # Required files verification
-          # -----------------------------------------------------
-          test -s "$ASSETS/app.js"
-          test -s "$ASSETS/styles.css"
-          test -s "$ASSETS/index.html"
-          test -s "$ASSETS/config.js"
+          # ------------------------------------------------------
+          # Required files
+          # ------------------------------------------------------
+          test -s "$ANDROID_WEB/app.js"
+          test -s "$ANDROID_WEB/styles.css"
+          test -s "$ANDROID_WEB/index.html"
+          test -s "$ANDROID_WEB/config.js"
 
           echo ""
-          echo "Final website successfully bundled into APK."
+          echo "Final website bundled into Android successfully."
 
           echo ""
           echo "Bundled website size:"
-          du -sh "$ASSETS"
+          du -sh "$ANDROID_WEB"
 
 
-      # =========================================================
-      # 6. Verify Supabase configuration inside website
-      # =========================================================
-      - name: Verify RKMS Supabase configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          CONFIG="$PROJECT_DIR/app/src/main/assets/www/config.js"
-
-          test -f "$CONFIG"
-
-          echo "Checking Supabase configuration..."
-
-          grep -q \
-            'https://kzczivaydandiqgnzfeg.supabase.co' \
-            "$CONFIG"
-
-          echo "Production Supabase URL: PASS"
-
-          grep -q \
-            'sb_publishable_' \
-            "$CONFIG"
-
-          echo "Supabase publishable key: PRESENT"
-
-          echo "Supabase configuration: PASS"
-
-
-      # =========================================================
-      # 7. Setup Java 17
-      # =========================================================
+      # ==========================================================
+      # 8. Setup Java 17
+      #
+      # IMPORTANT:
+      # No 'cache: gradle' here.
+      # This fixes the previous setup-java failure.
+      # ==========================================================
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
-          cache: gradle
+          java-version: "17"
 
 
-      # =========================================================
-      # 8. Install Gradle
+      # ==========================================================
+      # 9. Setup Android SDK
+      # ==========================================================
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      # ==========================================================
+      # 10. Install Gradle 8.9
       #
-      # Native source में gradlew नहीं है.
-      # इसलिए Gradle 8.9 install करके wrapper बनाएँगे.
-      # =========================================================
-      - name: Install Gradle
+      # Native Android source does not contain gradlew.
+      # Therefore we install Gradle first.
+      # ==========================================================
+      - name: Install Gradle 8.9
         shell: bash
         run: |
           set -euo pipefail
 
-          GRADLE_HOME="$RUNNER_TEMP/gradle"
+          GRADLE_ROOT="$RUNNER_TEMP/gradle"
 
-          rm -rf "$GRADLE_HOME"
-
-          mkdir -p "$GRADLE_HOME"
+          rm -rf "$GRADLE_ROOT"
+          mkdir -p "$GRADLE_ROOT"
 
           echo "Downloading Gradle $GRADLE_VERSION..."
 
           curl \
-            -L \
             --fail \
+            --location \
             --retry 3 \
             --connect-timeout 20 \
-            --max-time 120 \
+            --max-time 180 \
             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
-            -o "$RUNNER_TEMP/gradle.zip"
+            --output "$RUNNER_TEMP/gradle.zip"
 
           unzip -q \
             "$RUNNER_TEMP/gradle.zip" \
-            -d "$GRADLE_HOME"
+            -d "$GRADLE_ROOT"
 
-          echo "GRADLE_BIN=$GRADLE_HOME/gradle-${GRADLE_VERSION}/bin" \
-            >> "$GITHUB_ENV"
+          GRADLE_BIN="$GRADLE_ROOT/gradle-${GRADLE_VERSION}/bin"
 
-          echo "$GRADLE_HOME/gradle-${GRADLE_VERSION}/bin" \
-            >> "$GITHUB_PATH"
+          test -x "$GRADLE_BIN/gradle"
 
-          gradle --version
+          echo "$GRADLE_BIN" >> "$GITHUB_PATH"
+
+          echo ""
+          echo "Installed Gradle:"
+          "$GRADLE_BIN/gradle" --version
 
 
-      # =========================================================
-      # 9. Create Gradle Wrapper
-      # =========================================================
+      # ==========================================================
+      # 11. Create Gradle Wrapper
+      # ==========================================================
       - name: Create Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "Creating Gradle wrapper..."
 
           gradle wrapper \
             --gradle-version "$GRADLE_VERSION" \
@@ -395,19 +483,24 @@ jobs:
 
           chmod +x gradlew
 
-          echo "Gradle wrapper created successfully."
+          echo ""
+          echo "Gradle wrapper created."
 
           ./gradlew --version
 
 
-      # =========================================================
-      # 10. Verify Android project
-      # =========================================================
+      # ==========================================================
+      # 12. Verify Android project
+      # ==========================================================
       - name: Verify Android project
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "=================================================="
+          echo "Android project verification"
+          echo "=================================================="
 
           test -f settings.gradle
           test -f build.gradle
@@ -416,20 +509,29 @@ jobs:
           test -f app/src/main/AndroidManifest.xml
           test -f gradlew
 
-          echo "Android project files: PASS"
+          echo "settings.gradle          : PASS"
+          echo "build.gradle             : PASS"
+          echo "app/build.gradle         : PASS"
+          echo "google-services.json     : PASS"
+          echo "AndroidManifest.xml      : PASS"
+          echo "gradlew                  : PASS"
+
+          echo ""
+          echo "Checking Gradle project..."
 
           ./gradlew \
             tasks \
             --no-daemon \
             --stacktrace \
-            > /tmp/rkms-gradle-tasks.log
+            > "$RUNNER_TEMP/rkms-gradle-tasks.log"
 
+          echo ""
           echo "Gradle project configuration: PASS"
 
 
-      # =========================================================
-      # 11. Prepare release signing
-      # =========================================================
+      # ==========================================================
+      # 13. Prepare release signing
+      # ==========================================================
       - name: Prepare release signing
         shell: bash
         env:
@@ -440,6 +542,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Checking release signing secrets..."
+
           test -n "$RKMS_KEYSTORE_BASE64"
           test -n "$RKMS_KEYSTORE_PASSWORD"
           test -n "$RKMS_KEY_ALIAS"
@@ -448,19 +552,20 @@ jobs:
           KEYSTORE="$RUNNER_TEMP/rkms-release.keystore"
 
           printf '%s' "$RKMS_KEYSTORE_BASE64" \
-            | base64 --decode > "$KEYSTORE"
+            | base64 --decode \
+            > "$KEYSTORE"
 
           test -s "$KEYSTORE"
 
           echo "RKMS_KEYSTORE_PATH=$KEYSTORE" \
             >> "$GITHUB_ENV"
 
-          echo "Release signing keystore: PASS"
+          echo "Release signing configuration: PASS"
 
 
-      # =========================================================
-      # 12. Build signed Release APK
-      # =========================================================
+      # ==========================================================
+      # 14. Build signed Release APK
+      # ==========================================================
       - name: Build signed Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         env:
@@ -474,22 +579,32 @@ jobs:
 
           chmod +x gradlew
 
+          echo "=================================================="
+          echo "Building signed RKMS Release APK"
+          echo "=================================================="
+
           ./gradlew \
             clean \
             assembleRelease \
             --no-daemon \
             --stacktrace
 
+          echo ""
+          echo "Gradle Release build: PASS"
 
-      # =========================================================
-      # 13. Locate APK
-      # =========================================================
+
+      # ==========================================================
+      # 15. Locate APK
+      # ==========================================================
       - name: Locate Release APK
         shell: bash
         run: |
           set -euo pipefail
 
           APK_DIR="$PROJECT_DIR/app/build/outputs/apk/release"
+
+          echo "Searching for APK:"
+          echo "$APK_DIR"
 
           APK="$(
             find "$APK_DIR" \
@@ -500,8 +615,11 @@ jobs:
           )"
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Release APK not found."
+            echo ""
+            echo "ERROR: Release APK was not found."
 
+            echo ""
+            echo "Available build outputs:"
             find "$PROJECT_DIR/app/build/outputs" \
               -type f \
               -print || true
@@ -517,16 +635,17 @@ jobs:
             release/RKMS-Connect-Release.apk
 
           echo ""
-          echo "========================================"
+          echo "=================================================="
           echo "RKMS RELEASE APK CREATED"
-          echo "========================================"
+          echo "=================================================="
 
-          ls -lh release/RKMS-Connect-Release.apk
+          ls -lh \
+            release/RKMS-Connect-Release.apk
 
 
-      # =========================================================
-      # 14. Final APK verification
-      # =========================================================
+      # ==========================================================
+      # 16. Final APK verification
+      # ==========================================================
       - name: Verify final APK
         shell: bash
         run: |
@@ -539,19 +658,23 @@ jobs:
 
           SIZE="$(stat -c%s "$APK")"
 
-          echo "APK size: $SIZE bytes"
+          echo "APK size:"
+          echo "$SIZE bytes"
 
+          # A valid RKMS release APK should not be tiny.
           if [ "$SIZE" -lt 100000 ]; then
-            echo "ERROR: APK is unexpectedly small."
+            echo ""
+            echo "ERROR: APK size is unexpectedly small."
             exit 1
           fi
 
+          echo ""
           echo "Final APK verification: PASS"
 
 
-      # =========================================================
-      # 15. Upload APK artifact
-      # =========================================================
+      # ==========================================================
+      # 17. Upload APK artifact
+      # ==========================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
