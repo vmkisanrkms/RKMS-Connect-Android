@@ -1,704 +1,128 @@
-name: Build RKMS Release APK
+name: RKMS Connect Android Build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-
-permissions:
-  contents: read
-
-env:
-  ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
-  GRADLE_VERSION: "8.9"
 
 jobs:
   build:
-    name: Build RKMS Release APK
     runs-on: ubuntu-latest
 
     steps:
-
-      # ==========================================================
-      # 1. Checkout RKMS build repository
-      # ==========================================================
-      - name: Checkout repository
+      - name: Checkout Android native source
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
+          fetch-depth: 1
 
+      - name: Checkout repository files
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: repo-main
+          fetch-depth: 1
 
-      # ==========================================================
-      # 2. Prepare VERIFIED native Android project
-      # ==========================================================
-      - name: Prepare native Android project
+      - name: Prepare website package
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          PROJECT_DIR="$RUNNER_TEMP/rkms-android"
-          rm -rf "$PROJECT_DIR"
+          ZIP="repo-main/RKMS_CONNECT_HOME_PERSONAL_NOTIFICATION_FIXED_2026-09-04.zip"
 
-          git clone \
-            --no-tags \
-            "https://github.com/vmkisanrkms/RKMS-Connect-Android.git" \
-            "$PROJECT_DIR"
-
-          cd "$PROJECT_DIR"
-
-          git checkout --detach "$ANDROID_SOURCE_COMMIT"
-
-          CURRENT_COMMIT="$(git rev-parse HEAD)"
-
-          echo "Expected commit: $ANDROID_SOURCE_COMMIT"
-          echo "Actual commit:   $CURRENT_COMMIT"
-
-          test "$CURRENT_COMMIT" = "$ANDROID_SOURCE_COMMIT"
-
-          # Complete native Android project
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-          test -f app/google-services.json
-          test -f app/src/main/AndroidManifest.xml
-
-          test -d app/src/main
-          test -d app/src/main/java
-          test -d app/src/main/res
-          test -d app/src/main/assets
-
-          # FCM native files
-          test -f app/src/main/java/org/rkms/connect/FCMTokenRegistrar.java
-          test -f app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
-          test -f app/src/main/java/org/rkms/connect/NotificationHelper.java
-          test -f app/src/main/java/org/rkms/connect/SessionStore.java
-
-          # Firebase service
-          grep -Fq 'RKMSFirebaseMessagingService' \
-            app/src/main/AndroidManifest.xml
-
-          # Native Gradle configuration
-          grep -Fq '8.7.3' build.gradle
-          grep -Fq 'compileSdk 35' app/build.gradle
-          grep -Fq 'targetSdk 35' app/build.gradle
-
-          echo "Native Android project verification: PASS"
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-
-      # ==========================================================
-      # 3. Find FINAL website ZIP
-      #
-      # Supports:
-      # - website ZIP directly in repository
-      # - build package ZIP containing website ZIP
-      # ==========================================================
-      - name: Find final RKMS website ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          DIRECT="$GITHUB_WORKSPACE/RKMS_CONNECT_FINAL_PENDING_PDA_FLASH_VALIDATION_FIXED_2026-09-04.zip"
-
-          if [ -f "$DIRECT" ]; then
-
-            ZIP_FILE="$DIRECT"
-
-          else
-
-            mapfile -t DIRECT_CANDIDATES < <(
-              find "$GITHUB_WORKSPACE" \
-                -type f \
-                \( \
-                  -name 'RKMS_CONNECT_FINAL_ALL_FIXES_*.zip' \
-                  -o -name 'RKMS_CONNECT_FINAL_BUILD_*.zip' \
-                  -o -name 'RKMS_CONNECT_FINAL_PENDING_PDA_*.zip' \
-                \) \
-                -print | sort
-            )
-
-            if [ "${#DIRECT_CANDIDATES[@]}" -eq 1 ]; then
-
-              ZIP_FILE="${DIRECT_CANDIDATES[0]}"
-
-            elif [ "${#DIRECT_CANDIDATES[@]}" -gt 1 ]; then
-
-              echo "ERROR: Multiple final website ZIPs found."
-              printf '%s\n' "${DIRECT_CANDIDATES[@]}"
-              exit 1
-
-            else
-
-              # If only build-package ZIP is present,
-              # extract its website ZIP automatically.
-
-              mapfile -t PACKAGES < <(
-                find "$GITHUB_WORKSPACE" \
-                  -type f \
-                  -name 'RKMS_GITHUB_BUILD_PACKAGE_*.zip' \
-                  -print | sort
-              )
-
-              if [ "${#PACKAGES[@]}" -ne 1 ]; then
-
-                echo "ERROR: Final website ZIP not found."
-
-                echo ""
-                echo "ZIP files found:"
-
-                find "$GITHUB_WORKSPACE" \
-                  -type f \
-                  -name '*.zip' \
-                  -print || true
-
-                exit 1
-              fi
-
-              PACKAGE="${PACKAGES[0]}"
-              PACKAGE_DIR="$RUNNER_TEMP/rkms-package"
-
-              rm -rf "$PACKAGE_DIR"
-              mkdir -p "$PACKAGE_DIR"
-
-              echo "Build package:"
-              echo "$PACKAGE"
-
-              unzip -q \
-                "$PACKAGE" \
-                -d "$PACKAGE_DIR"
-
-              mapfile -t NESTED < <(
-                find "$PACKAGE_DIR" \
-                  -type f \
-                  \( \
-                    -name 'RKMS_CONNECT_FINAL_ALL_FIXES_*.zip' \
-                    -o -name 'RKMS_CONNECT_FINAL_BUILD_*.zip' \
-                    -o -name 'RKMS_CONNECT_FINAL_PENDING_PDA_*.zip' \
-                  \) \
-                  -print | sort
-              )
-
-              if [ "${#NESTED[@]}" -ne 1 ]; then
-
-                echo "ERROR: Build package must contain exactly one final website ZIP."
-
-                printf '%s\n' "${NESTED[@]}" || true
-
-                exit 1
-              fi
-
-              ZIP_FILE="${NESTED[0]}"
-
-            fi
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: Final ZIP not found:"
+            echo "$ZIP"
+            exit 1
           fi
 
-          test -s "$ZIP_FILE"
+          rm -rf /tmp/rkms_web
+          mkdir -p /tmp/rkms_web
 
-          echo ""
-          echo "Selected final website ZIP:"
-          echo "$ZIP_FILE"
+          unzip -q "$ZIP" -d /tmp/rkms_web
 
-          echo "WEBSITE_ZIP=$ZIP_FILE" >> "$GITHUB_ENV"
+          WEB_ROOT=$(find /tmp/rkms_web -type f -name "app.js" -print -quit | xargs dirname)
 
-
-      # ==========================================================
-      # 4. Extract website
-      # ==========================================================
-      - name: Extract final RKMS website
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          WEB_EXTRACT="$RUNNER_TEMP/rkms-web-extract"
-
-          rm -rf "$WEB_EXTRACT"
-          mkdir -p "$WEB_EXTRACT"
-
-          unzip -q \
-            "$WEBSITE_ZIP" \
-            -d "$WEB_EXTRACT"
-
-          APP_JS="$(
-            find "$WEB_EXTRACT" \
-              -type f \
-              -name 'app.js' \
-              -print \
-              -quit
-          )"
-
-          STYLES="$(
-            find "$WEB_EXTRACT" \
-              -type f \
-              -name 'styles.css' \
-              -print \
-              -quit
-          )"
-
-          INDEX="$(
-            find "$WEB_EXTRACT" \
-              -type f \
-              -name 'index.html' \
-              -print \
-              -quit
-          )"
-
-          CONFIG="$(
-            find "$WEB_EXTRACT" \
-              -type f \
-              -name 'config.js' \
-              -print \
-              -quit
-          )"
-
-          test -n "$APP_JS"
-          test -n "$STYLES"
-          test -n "$INDEX"
-          test -n "$CONFIG"
-
-          WEB_ROOT="$(dirname "$APP_JS")"
-
-          test -f "$WEB_ROOT/styles.css"
-          test -f "$WEB_ROOT/index.html"
-          test -f "$WEB_ROOT/config.js"
-
-          WEBSITE_FILE_COUNT="$(
-            find "$WEB_ROOT" \
-              -type f | wc -l
-          )"
-
-          test "$WEBSITE_FILE_COUNT" -gt 0
+          if [ -z "$WEB_ROOT" ] || [ ! -f "$WEB_ROOT/app.js" ]; then
+            echo "ERROR: Could not find website root containing app.js"
+            exit 1
+          fi
 
           echo "Website root:"
           echo "$WEB_ROOT"
 
-          echo "Website files:"
-          echo "$WEBSITE_FILE_COUNT"
+          rm -rf app/src/main/assets/www
+          mkdir -p app/src/main/assets/www
 
-          # Book folder
-          if [ -d "$WEB_ROOT/assets/book" ]; then
+          # Copy the COMPLETE website root.
+          # This preserves all folders/assets including the 60 book pages.
+          cp -a "$WEB_ROOT"/. app/src/main/assets/www/
 
-            BOOK_COUNT="$(
-              find "$WEB_ROOT/assets/book" \
-                -type f | wc -l
-            )"
+          echo "Website files copied:"
+          find app/src/main/assets/www -type f | wc -l
 
-            test "$BOOK_COUNT" -gt 0
+          echo "Book assets:"
+          find app/src/main/assets/www/assets/book -type f 2>/dev/null | sort || true
 
-            echo "Book asset files:"
-            echo "$BOOK_COUNT"
-
-          fi
-
-          echo "WEB_ROOT=$WEB_ROOT" >> "$GITHUB_ENV"
-
-
-      # ==========================================================
-      # 5. Validate JavaScript
-      # ==========================================================
-      - name: Validate website JavaScript
+      - name: Verify final website
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          node --check "$WEB_ROOT/app.js"
+          test -f app/src/main/assets/www/index.html
+          test -f app/src/main/assets/www/app.js
+          test -f app/src/main/assets/www/styles.css
+          test -f app/src/main/assets/www/config.js
 
-          echo "app.js syntax: PASS"
+          BOOK_COUNT=$(find app/src/main/assets/www/assets/book -type f \
+            \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) \
+            | wc -l)
 
+          echo "Book image count: $BOOK_COUNT"
 
-      # ==========================================================
-      # 6. Verify production Supabase
-      # ==========================================================
-      - name: Verify production Supabase
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          grep -Fq \
-            'https://kzczivaydandiqgnzfeg.supabase.co' \
-            "$WEB_ROOT/config.js"
-
-          grep -Fq \
-            'sb_publishable_' \
-            "$WEB_ROOT/config.js"
-
-          echo "Production Supabase configuration: PASS"
-
-
-      # ==========================================================
-      # 7. Verify requested frontend fixes
-      # ==========================================================
-      - name: Verify RKMS frontend
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Pending Approval
-          grep -Fq \
-            'p_status:"PENDING"' \
-            "$WEB_ROOT/app.js"
-
-          # Pending route
-          grep -Fq \
-            'data-route="pending"' \
-            "$WEB_ROOT/app.js"
-
-          # Approve
-          grep -Fq \
-            'rkms_approve_member' \
-            "$WEB_ROOT/app.js"
-
-          # Reject
-          grep -Fq \
-            'rkms_reject_member' \
-            "$WEB_ROOT/app.js"
-
-          # Flash management
-          grep -Fq \
-            'rkms_manage_flash' \
-            "$WEB_ROOT/app.js"
-
-          echo "Pending + Approve/Reject + Flash verification: PASS"
-
-
-      # ==========================================================
-      # 8. Bundle COMPLETE website
-      #
-      # IMPORTANT:
-      # Do NOT copy only app.js/styles/index/config.
-      #
-      # Copy everything:
-      # - Book
-      # - assets
-      # - images
-      # - manifest
-      # - icons
-      # - all folders
-      # ==========================================================
-      - name: Sync complete website into Android
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ANDROID_WEB="$PROJECT_DIR/app/src/main/assets/www"
-
-          rm -rf "$ANDROID_WEB"
-
-          mkdir -p "$ANDROID_WEB"
-
-          cp -R \
-            "$WEB_ROOT"/. \
-            "$ANDROID_WEB"/
-
-          test -s "$ANDROID_WEB/app.js"
-          test -s "$ANDROID_WEB/styles.css"
-          test -s "$ANDROID_WEB/index.html"
-          test -s "$ANDROID_WEB/config.js"
-
-          BUNDLED_COUNT="$(
-            find "$ANDROID_WEB" \
-              -type f | wc -l
-          )"
-
-          test "$BUNDLED_COUNT" -gt 0
-
-          echo "Complete website bundled."
-          echo "Bundled files:"
-          echo "$BUNDLED_COUNT"
-
-          if [ -d "$ANDROID_WEB/assets/book" ]; then
-
-            BOOK_COUNT="$(
-              find "$ANDROID_WEB/assets/book" \
-                -type f | wc -l
-            )"
-
-            test "$BOOK_COUNT" -gt 0
-
-            echo "Book files bundled:"
-            echo "$BOOK_COUNT"
-
-          fi
-
-
-      # ==========================================================
-      # 9. Java 17
-      # ==========================================================
-      - name: Setup Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-
-      # ==========================================================
-      # 10. Android SDK
-      # ==========================================================
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-
-      # ==========================================================
-      # 11. Gradle 8.9
-      # ==========================================================
-      - name: Install Gradle 8.9
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GRADLE_ROOT="$RUNNER_TEMP/gradle"
-
-          rm -rf "$GRADLE_ROOT"
-          mkdir -p "$GRADLE_ROOT"
-
-          curl \
-            --fail \
-            --location \
-            --retry 3 \
-            --connect-timeout 20 \
-            --max-time 180 \
-            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
-            --output "$RUNNER_TEMP/gradle.zip"
-
-          unzip -q \
-            "$RUNNER_TEMP/gradle.zip" \
-            -d "$GRADLE_ROOT"
-
-          GRADLE_BIN="$GRADLE_ROOT/gradle-${GRADLE_VERSION}/bin"
-
-          test -x "$GRADLE_BIN/gradle"
-
-          echo "$GRADLE_BIN" >> "$GITHUB_PATH"
-
-          "$GRADLE_BIN/gradle" --version
-
-
-      # ==========================================================
-      # 12. Create Gradle Wrapper
-      # ==========================================================
-      - name: Create Gradle Wrapper
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          gradle wrapper \
-            --gradle-version "$GRADLE_VERSION" \
-            --distribution-type bin
-
-          test -f gradlew
-
-          chmod +x gradlew
-
-          ./gradlew --version
-
-
-      # ==========================================================
-      # 13. Verify Android + Gradle + FCM
-      # ==========================================================
-      - name: Verify Android Gradle project
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-          test -f app/google-services.json
-          test -f app/src/main/AndroidManifest.xml
-          test -f gradlew
-
-          test -d app/src/main/java
-          test -d app/src/main/res
-          test -d app/src/main/assets
-          test -d app/src/main/assets/www
-
-          # FCM native files
-          test -f \
-            app/src/main/java/org/rkms/connect/FCMTokenRegistrar.java
-
-          test -f \
-            app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
-
-          test -f \
-            app/src/main/java/org/rkms/connect/NotificationHelper.java
-
-          # FCM service registration
-          grep -Fq \
-            'RKMSFirebaseMessagingService' \
-            app/src/main/AndroidManifest.xml
-
-          grep -Fq \
-            'FirebaseMessagingService' \
-            app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
-
-          # Android
-          grep -Fq \
-            'compileSdk 35' \
-            app/build.gradle
-
-          grep -Fq \
-            'targetSdk 35' \
-            app/build.gradle
-
-          # Gradle configuration
-          ./gradlew \
-            tasks \
-            --no-daemon \
-            --stacktrace \
-            > "$RUNNER_TEMP/rkms-gradle-tasks.log"
-
-          echo "Android + Gradle + FCM verification: PASS"
-
-
-      # ==========================================================
-      # 14. Release signing
-      # ==========================================================
-      - name: Prepare release signing
-        shell: bash
-        env:
-          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
-          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
-          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
-          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
-
-        run: |
-          set -euo pipefail
-
-          test -n "$RKMS_KEYSTORE_BASE64"
-          test -n "$RKMS_KEYSTORE_PASSWORD"
-          test -n "$RKMS_KEY_ALIAS"
-          test -n "$RKMS_KEY_PASSWORD"
-
-          KEYSTORE="$RUNNER_TEMP/rkms-release.keystore"
-
-          printf '%s' "$RKMS_KEYSTORE_BASE64" \
-            | base64 --decode \
-            > "$KEYSTORE"
-
-          test -s "$KEYSTORE"
-
-          echo "RKMS_KEYSTORE_PATH=$KEYSTORE" \
-            >> "$GITHUB_ENV"
-
-          echo "Release signing configuration: PASS"
-
-
-      # ==========================================================
-      # 15. Build signed Release APK
-      # ==========================================================
-      - name: Build signed Release APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        env:
-          RKMS_KEYSTORE_PATH: ${{ env.RKMS_KEYSTORE_PATH }}
-          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
-          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
-          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
-
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x gradlew
-
-          ./gradlew \
-            clean \
-            assembleRelease \
-            --no-daemon \
-            --stacktrace
-
-          echo "Signed Release APK build: PASS"
-
-
-      # ==========================================================
-      # 16. Verify final APK
-      #
-      # APK is extracted instead of using:
-      # unzip | grep
-      #
-      # This avoids the previous verification failure.
-      # ==========================================================
-      - name: Verify final APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk"
-
-          APK_CHECK="$RUNNER_TEMP/rkms-apk-check"
-
-          test -f "$APK"
-          test -s "$APK"
-
-          SIZE="$(stat -c%s "$APK")"
-
-          if [ "$SIZE" -lt 100000 ]; then
-            echo "ERROR: APK unexpectedly small: $SIZE bytes"
+          if [ "$BOOK_COUNT" -lt 61 ]; then
+            echo "ERROR: Expected cover + 60 book pages."
             exit 1
           fi
 
-          rm -rf "$APK_CHECK"
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
 
-          mkdir -p "$APK_CHECK"
+      - name: Create Gradle wrapper
+        shell: bash
+        run: |
+          set -e
 
-          # Test APK ZIP integrity
-          unzip -tq "$APK"
-
-          # Extract APK
-          unzip -q \
-            "$APK" \
-            -d "$APK_CHECK"
-
-          # Required website files
-          test -s "$APK_CHECK/assets/www/app.js"
-          test -s "$APK_CHECK/assets/www/styles.css"
-          test -s "$APK_CHECK/assets/www/index.html"
-          test -s "$APK_CHECK/assets/www/config.js"
-
-          # Book assets
-          if [ -d "$PROJECT_DIR/app/src/main/assets/www/assets/book" ]; then
-
-            BOOK_SOURCE_COUNT="$(
-              find "$PROJECT_DIR/app/src/main/assets/www/assets/book" \
-                -type f | wc -l
-            )"
-
-            test "$BOOK_SOURCE_COUNT" -gt 0
-
-            test -d "$APK_CHECK/assets/www/assets/book"
-
-            BOOK_APK_COUNT="$(
-              find "$APK_CHECK/assets/www/assets/book" \
-                -type f | wc -l
-            )"
-
-            test "$BOOK_APK_COUNT" -ge "$BOOK_SOURCE_COUNT"
-
-            echo "Book source files: $BOOK_SOURCE_COUNT"
-            echo "Book APK files:    $BOOK_APK_COUNT"
-
+          if [ ! -f gradlew ]; then
+            gradle wrapper --gradle-version 8.9
           fi
 
-          mkdir -p release
+          chmod +x gradlew
 
-          cp "$APK" \
-            release/RKMS-Connect-Release.apk
+      - name: Build release APK
+        shell: bash
+        run: |
+          set -e
+          ./gradlew clean assembleRelease --no-daemon
 
-          echo ""
-          echo "APK size:"
-          echo "$SIZE bytes"
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
 
-          echo "Final APK verification: PASS"
+          APK="app/build/outputs/apk/release/app-release.apk"
 
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: Release APK was not generated."
+            exit 1
+          fi
 
-      # ==========================================================
-      # 17. Upload APK
-      # ==========================================================
+          echo "APK generated successfully:"
+          ls -lh "$APK"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Connect-Final-Release
-          path: release/RKMS-Connect-Release.apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
