@@ -11,9 +11,7 @@ permissions:
 
 env:
   ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
-
-  # अपनी LIVE RKMS WEBSITE का exact HTTPS URL यहाँ डालें
-  RKMS_WEBSITE_URL: https://YOUR-LIVE-RKMS-WEBSITE-URL
+  GRADLE_VERSION: 8.9
 
 jobs:
   build:
@@ -23,7 +21,7 @@ jobs:
     steps:
 
       # =========================================================
-      # 1. Checkout current repository
+      # 1. Checkout repository
       # =========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,10 +30,11 @@ jobs:
 
 
       # =========================================================
-      # 2. Prepare native Android project
+      # 2. Prepare native Android source
       #
-      # पुराने git archive / git --work-tree तरीके को हटाया गया है.
-      # Native Android source को सीधे clone किया जा रहा है.
+      # IMPORTANT:
+      # Native source commit में gradlew नहीं है.
+      # इसलिए हम source को clone करेंगे और बाद में Gradle wrapper बनाएंगे.
       # =========================================================
       - name: Prepare native Android project
         shell: bash
@@ -47,14 +46,11 @@ jobs:
           rm -rf "$PROJECT_DIR"
 
           echo "========================================"
-          echo "Preparing native Android project"
+          echo "Preparing native RKMS Android project"
           echo "========================================"
-          echo "Commit:"
-          echo "$ANDROID_SOURCE_COMMIT"
 
           git clone \
             --no-tags \
-            --filter=blob:none \
             "https://github.com/vmkisanrkms/RKMS-Connect-Android.git" \
             "$PROJECT_DIR"
 
@@ -62,197 +58,276 @@ jobs:
 
           git checkout --detach "$ANDROID_SOURCE_COMMIT"
 
-          echo ""
-          echo "Checked out commit:"
+          echo "Checked commit:"
           git rev-parse HEAD
 
           test "$(git rev-parse HEAD)" = "$ANDROID_SOURCE_COMMIT"
 
-          test -f "$PROJECT_DIR/settings.gradle" || \
-            test -f "$PROJECT_DIR/settings.gradle.kts"
+          test -f settings.gradle
+          test -f app/build.gradle
+          test -f app/google-services.json
+          test -f app/src/main/AndroidManifest.xml
 
-          test -f "$PROJECT_DIR/app/build.gradle" || \
-            test -f "$PROJECT_DIR/app/build.gradle.kts"
-
-          test -f "$PROJECT_DIR/gradlew"
-
-          test -f "$PROJECT_DIR/app/google-services.json"
-
-          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
-
-          chmod +x "$PROJECT_DIR/gradlew"
+          echo "Native Android source: PASS"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo ""
-          echo "Native Android project prepared successfully."
-
 
       # =========================================================
-      # 3. Validate live website URL
+      # 3. Find and extract FINAL RKMS WEBSITE ZIP
+      #
+      # APK में final website bundle की जाएगी.
+      # Live website URL की जरूरत नहीं.
       # =========================================================
-      - name: Validate RKMS website URL
+      - name: Extract final RKMS website
         shell: bash
         run: |
           set -euo pipefail
 
-          URL="$RKMS_WEBSITE_URL"
+          echo "Searching for final RKMS website ZIP..."
 
-          echo "Website URL:"
-          echo "$URL"
-
-          if [[ "$URL" == "https://YOUR-LIVE-RKMS-WEBSITE-URL" ]]; then
-            echo ""
-            echo "ERROR: RKMS_WEBSITE_URL is still a placeholder."
-            echo "Please replace it with the real live RKMS website URL."
-            exit 1
-          fi
-
-          if [[ "$URL" != https://* ]]; then
-            echo ""
-            echo "ERROR: RKMS website must use HTTPS."
-            exit 1
-          fi
-
-          HTTP_CODE="$(
-            curl \
-              -L \
-              -s \
-              -o /dev/null \
-              -w '%{http_code}' \
-              --connect-timeout 15 \
-              --max-time 30 \
-              "$URL" || true
+          ZIP_FILE="$(
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name 'RKMS_CONNECT_FINAL_ALL_FIXES_*.zip' \
+              -print \
+              -quit
           )"
 
-          echo "HTTP status: $HTTP_CODE"
-
-          case "$HTTP_CODE" in
-            200|301|302|304)
-              echo "LIVE WEBSITE CHECK: PASS"
-              ;;
-            *)
-              echo "ERROR: Live RKMS website could not be reached."
-              exit 1
-              ;;
-          esac
-
-
-      # =========================================================
-      # 4. Configure Android to open LIVE website
-      #
-      # APK में website की अलग copy नहीं रखी जाएगी.
-      # App सीधे live website खोलेगा.
-      # =========================================================
-      - name: Configure live RKMS website
-        shell: bash
-        env:
-          WEBSITE_URL: ${{ env.RKMS_WEBSITE_URL }}
-        run: |
-          set -euo pipefail
-
-          MAIN_ACTIVITY="$PROJECT_DIR/app/src/main/java/org/rkms/connect/MainActivity.java"
-
-          test -f "$MAIN_ACTIVITY"
-
-          python3 - "$MAIN_ACTIVITY" "$WEBSITE_URL" <<'PY'
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          website = sys.argv[2].rstrip("/")
-
-          text = path.read_text(encoding="utf-8")
-
-          old = (
-              'private static final String ASSET_HOME = '
-              '"file:///android_asset/www/index.html";'
-          )
-
-          new = (
-              'private static final String WEBSITE_HOME = '
-              f'"{website}";'
-          )
-
-          if old not in text:
-              raise SystemExit(
-                  "ERROR: ASSET_HOME declaration was not found."
-              )
-
-          text = text.replace(old, new)
-
-          old_route_1 = (
-              'webView.loadUrl(ASSET_HOME + '
-              '(route.isEmpty() ? "" : "#" + route));'
-          )
-
-          new_route_1 = (
-              'webView.loadUrl(WEBSITE_HOME + '
-              '(route.isEmpty() ? "" : "/#" + route));'
-          )
-
-          if old_route_1 not in text:
-              raise SystemExit(
-                  "ERROR: Initial route loader was not found."
-              )
-
-          text = text.replace(
-              old_route_1,
-              new_route_1
-          )
-
-          old_route_2 = (
-              'if (!route.isEmpty() && webView != null) '
-              'webView.loadUrl(ASSET_HOME + "#" + route);'
-          )
-
-          new_route_2 = (
-              'if (!route.isEmpty() && webView != null) '
-              'webView.loadUrl(WEBSITE_HOME + "/#" + route);'
-          )
-
-          if old_route_2 not in text:
-              raise SystemExit(
-                  "ERROR: onNewIntent route loader was not found."
-              )
-
-          text = text.replace(
-              old_route_2,
-              new_route_2
-          )
-
-          path.write_text(text, encoding="utf-8")
-          PY
-
-          echo ""
-          echo "Configured website:"
-          grep -n "WEBSITE_HOME" "$MAIN_ACTIVITY"
-
-
-      # =========================================================
-      # 5. Verify WebView configuration
-      # =========================================================
-      - name: Verify WebView configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MAIN_ACTIVITY="$PROJECT_DIR/app/src/main/java/org/rkms/connect/MainActivity.java"
-
-          test -f "$MAIN_ACTIVITY"
-
-          grep -q "WEBSITE_HOME" "$MAIN_ACTIVITY"
-
-          if grep -q "file:///android_asset/www/index.html" "$MAIN_ACTIVITY"; then
-            echo "ERROR: Local bundled website is still being used."
+          if [ -z "$ZIP_FILE" ]; then
+            echo ""
+            echo "ERROR: Final RKMS website ZIP not found."
+            echo ""
+            echo "ZIP files found:"
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name '*.zip' \
+              -print || true
             exit 1
           fi
 
-          echo "LIVE WEBSITE WebView configuration: PASS"
+          echo "Using:"
+          echo "$ZIP_FILE"
+
+          WEB_DIR="$RUNNER_TEMP/rkms-web"
+
+          rm -rf "$WEB_DIR"
+          mkdir -p "$WEB_DIR"
+
+          unzip -q "$ZIP_FILE" -d "$WEB_DIR"
+
+          echo ""
+          echo "Website files found:"
+
+          APP_JS="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'app.js' \
+              -print \
+              -quit
+          )"
+
+          STYLES="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'styles.css' \
+              -print \
+              -quit
+          )"
+
+          INDEX="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'index.html' \
+              -print \
+              -quit
+          )"
+
+          CONFIG="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'config.js' \
+              -print \
+              -quit
+          )"
+
+          test -n "$APP_JS"
+          test -n "$STYLES"
+          test -n "$INDEX"
+          test -n "$CONFIG"
+
+          test -s "$APP_JS"
+          test -s "$STYLES"
+          test -s "$INDEX"
+          test -s "$CONFIG"
+
+          echo "app.js: PASS"
+          echo "styles.css: PASS"
+          echo "index.html: PASS"
+          echo "config.js: PASS"
+
+          echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
 
 
       # =========================================================
-      # 6. Setup Java 17
+      # 4. Validate final website JavaScript
+      # =========================================================
+      - name: Validate final website JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_JS="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'app.js' \
+              -print \
+              -quit
+          )"
+
+          test -n "$APP_JS"
+
+          node --check "$APP_JS"
+
+          echo "JavaScript syntax: PASS"
+
+
+      # =========================================================
+      # 5. Sync final website into Android APK
+      #
+      # यही आपकी सही requirement है:
+      # Final website APK के अंदर bundled होगी.
+      # =========================================================
+      - name: Sync final website into Android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_JS="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'app.js' \
+              -print \
+              -quit
+          )"
+
+          STYLES="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'styles.css' \
+              -print \
+              -quit
+          )"
+
+          INDEX="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'index.html' \
+              -print \
+              -quit
+          )"
+
+          CONFIG="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'config.js' \
+              -print \
+              -quit
+          )"
+
+          test -n "$APP_JS"
+          test -n "$STYLES"
+          test -n "$INDEX"
+          test -n "$CONFIG"
+
+          ASSETS="$PROJECT_DIR/app/src/main/assets/www"
+
+          rm -rf "$ASSETS"
+          mkdir -p "$ASSETS"
+
+          cp "$APP_JS" "$ASSETS/app.js"
+          cp "$STYLES" "$ASSETS/styles.css"
+          cp "$INDEX" "$ASSETS/index.html"
+          cp "$CONFIG" "$ASSETS/config.js"
+
+          # -----------------------------------------------------
+          # manifest.webmanifest
+          # -----------------------------------------------------
+          MANIFEST="$(
+            find "$WEB_DIR" \
+              -type f \
+              -name 'manifest.webmanifest' \
+              -print \
+              -quit || true
+          )"
+
+          if [ -n "$MANIFEST" ]; then
+            cp "$MANIFEST" "$ASSETS/manifest.webmanifest"
+          fi
+
+          # -----------------------------------------------------
+          # Website assets
+          # -----------------------------------------------------
+          SOURCE_ASSETS="$(
+            find "$WEB_DIR" \
+              -type d \
+              -name assets \
+              -print \
+              -quit || true
+          )"
+
+          if [ -n "$SOURCE_ASSETS" ]; then
+            mkdir -p "$ASSETS/assets"
+            cp -R "$SOURCE_ASSETS"/. "$ASSETS/assets"/
+          fi
+
+          # -----------------------------------------------------
+          # Required files verification
+          # -----------------------------------------------------
+          test -s "$ASSETS/app.js"
+          test -s "$ASSETS/styles.css"
+          test -s "$ASSETS/index.html"
+          test -s "$ASSETS/config.js"
+
+          echo ""
+          echo "Final website successfully bundled into APK."
+
+          echo ""
+          echo "Bundled website size:"
+          du -sh "$ASSETS"
+
+
+      # =========================================================
+      # 6. Verify Supabase configuration inside website
+      # =========================================================
+      - name: Verify RKMS Supabase configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONFIG="$PROJECT_DIR/app/src/main/assets/www/config.js"
+
+          test -f "$CONFIG"
+
+          echo "Checking Supabase configuration..."
+
+          grep -q \
+            'https://kzczivaydandiqgnzfeg.supabase.co' \
+            "$CONFIG"
+
+          echo "Production Supabase URL: PASS"
+
+          grep -q \
+            'sb_publishable_' \
+            "$CONFIG"
+
+          echo "Supabase publishable key: PRESENT"
+
+          echo "Supabase configuration: PASS"
+
+
+      # =========================================================
+      # 7. Setup Java 17
       # =========================================================
       - name: Setup Java 17
         uses: actions/setup-java@v5
@@ -263,14 +338,70 @@ jobs:
 
 
       # =========================================================
-      # 7. Setup Android SDK
+      # 8. Install Gradle
+      #
+      # Native source में gradlew नहीं है.
+      # इसलिए Gradle 8.9 install करके wrapper बनाएँगे.
       # =========================================================
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE_HOME="$RUNNER_TEMP/gradle"
+
+          rm -rf "$GRADLE_HOME"
+
+          mkdir -p "$GRADLE_HOME"
+
+          echo "Downloading Gradle $GRADLE_VERSION..."
+
+          curl \
+            -L \
+            --fail \
+            --retry 3 \
+            --connect-timeout 20 \
+            --max-time 120 \
+            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
+            -o "$RUNNER_TEMP/gradle.zip"
+
+          unzip -q \
+            "$RUNNER_TEMP/gradle.zip" \
+            -d "$GRADLE_HOME"
+
+          echo "GRADLE_BIN=$GRADLE_HOME/gradle-${GRADLE_VERSION}/bin" \
+            >> "$GITHUB_ENV"
+
+          echo "$GRADLE_HOME/gradle-${GRADLE_VERSION}/bin" \
+            >> "$GITHUB_PATH"
+
+          gradle --version
 
 
       # =========================================================
-      # 8. Verify Android / Firebase project
+      # 9. Create Gradle Wrapper
+      # =========================================================
+      - name: Create Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle wrapper \
+            --gradle-version "$GRADLE_VERSION" \
+            --distribution-type bin
+
+          test -f gradlew
+
+          chmod +x gradlew
+
+          echo "Gradle wrapper created successfully."
+
+          ./gradlew --version
+
+
+      # =========================================================
+      # 10. Verify Android project
       # =========================================================
       - name: Verify Android project
         working-directory: ${{ env.PROJECT_DIR }}
@@ -278,25 +409,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "========================================"
-          echo "Android project verification"
-          echo "========================================"
-
-          ./gradlew --version
-
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
           test -f app/google-services.json
           test -f app/src/main/AndroidManifest.xml
+          test -f gradlew
 
-          echo ""
-          echo "Google Services configuration: FOUND"
-          echo "Android Manifest: FOUND"
-          echo "Gradle wrapper: FOUND"
-          echo ""
-          echo "ANDROID PROJECT CHECK: PASS"
+          echo "Android project files: PASS"
+
+          ./gradlew \
+            tasks \
+            --no-daemon \
+            --stacktrace \
+            > /tmp/rkms-gradle-tasks.log
+
+          echo "Gradle project configuration: PASS"
 
 
       # =========================================================
-      # 9. Prepare release signing
+      # 11. Prepare release signing
       # =========================================================
       - name: Prepare release signing
         shell: bash
@@ -320,13 +452,14 @@ jobs:
 
           test -s "$KEYSTORE"
 
-          echo "RKMS_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
+          echo "RKMS_KEYSTORE_PATH=$KEYSTORE" \
+            >> "$GITHUB_ENV"
 
-          echo "Release signing configuration: PASS"
+          echo "Release signing keystore: PASS"
 
 
       # =========================================================
-      # 10. Build signed Release APK
+      # 12. Build signed Release APK
       # =========================================================
       - name: Build signed Release APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -349,7 +482,7 @@ jobs:
 
 
       # =========================================================
-      # 11. Find final APK
+      # 13. Locate APK
       # =========================================================
       - name: Locate Release APK
         shell: bash
@@ -357,9 +490,6 @@ jobs:
           set -euo pipefail
 
           APK_DIR="$PROJECT_DIR/app/build/outputs/apk/release"
-
-          echo "Searching:"
-          echo "$APK_DIR"
 
           APK="$(
             find "$APK_DIR" \
@@ -370,10 +500,12 @@ jobs:
           )"
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Release APK was not found."
+            echo "ERROR: Release APK not found."
+
             find "$PROJECT_DIR/app/build/outputs" \
               -type f \
               -print || true
+
             exit 1
           fi
 
@@ -386,14 +518,14 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "FINAL APK"
+          echo "RKMS RELEASE APK CREATED"
           echo "========================================"
 
           ls -lh release/RKMS-Connect-Release.apk
 
 
       # =========================================================
-      # 12. Final APK verification
+      # 14. Final APK verification
       # =========================================================
       - name: Verify final APK
         shell: bash
@@ -410,15 +542,15 @@ jobs:
           echo "APK size: $SIZE bytes"
 
           if [ "$SIZE" -lt 100000 ]; then
-            echo "ERROR: APK appears unexpectedly small."
+            echo "ERROR: APK is unexpectedly small."
             exit 1
           fi
 
-          echo "FINAL APK CHECK: PASS"
+          echo "Final APK verification: PASS"
 
 
       # =========================================================
-      # 13. Upload APK artifact
+      # 15. Upload APK artifact
       # =========================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
