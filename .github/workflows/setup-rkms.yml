@@ -7,6 +7,7 @@ permissions:
   contents: read
 
 env:
+  ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
   GRADLE_VERSION: "8.9"
 
 jobs:
@@ -17,93 +18,142 @@ jobs:
 
     steps:
 
-      # ---------------------------------------------------------
-      # 1. Checkout Android source
-      # ---------------------------------------------------------
-      - name: Checkout Android Source
+      # =========================================================
+      # 1. Checkout repository
+      # =========================================================
+      - name: Checkout RKMS repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 1
 
-      # ---------------------------------------------------------
+
+      # =========================================================
       # 2. Setup Java
-      # ---------------------------------------------------------
+      # =========================================================
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
-      # ---------------------------------------------------------
-      # 3. Locate Android project
-      # ---------------------------------------------------------
-      - name: Locate Android Project
+
+      # =========================================================
+      # 3. Prepare verified native Android project
+      # =========================================================
+      - name: Prepare native Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Repository:"
-          pwd
+          PROJECT_DIR="$RUNNER_TEMP/rkms-android"
+
+          rm -rf "$PROJECT_DIR"
+
+          echo "Cloning verified Android source..."
+
+          git clone \
+            --no-tags \
+            "https://github.com/vmkisanrkms/RKMS-Connect-Android.git" \
+            "$PROJECT_DIR"
+
+          cd "$PROJECT_DIR"
+
+          echo "Checking required Android commit..."
+
+          git checkout --detach "$ANDROID_SOURCE_COMMIT"
+
+          CURRENT_COMMIT="$(git rev-parse HEAD)"
+
+          echo "Expected:"
+          echo "$ANDROID_SOURCE_COMMIT"
+
+          echo "Actual:"
+          echo "$CURRENT_COMMIT"
+
+          test "$CURRENT_COMMIT" = "$ANDROID_SOURCE_COMMIT"
 
           echo ""
-          echo "Top-level files:"
-          find . -maxdepth 2 -type f | sort | head -200
+          echo "Checking Android project..."
+
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/google-services.json
+          test -f app/src/main/AndroidManifest.xml
+
+          test -d app/src/main/java
+          test -d app/src/main/res
+          test -d app/src/main/assets
 
           echo ""
-          echo "Searching for Gradle project..."
+          echo "Checking FCM files..."
 
-          ANDROID_PROJECT="$(find "$GITHUB_WORKSPACE" \
-            -type f \
-            -name "gradlew" \
-            -not -path "*/.gradle/*" \
-            | head -n 1)"
+          test -f \
+            app/src/main/java/org/rkms/connect/FCMTokenRegistrar.java
 
-          if [ -z "$ANDROID_PROJECT" ]; then
-            echo "::error::gradlew not found."
-            exit 1
-          fi
+          test -f \
+            app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
 
-          ANDROID_DIR="$(dirname "$ANDROID_PROJECT")"
+          test -f \
+            app/src/main/java/org/rkms/connect/NotificationHelper.java
 
-          echo "ANDROID_PROJECT=$ANDROID_DIR" >> "$GITHUB_ENV"
+          test -f \
+            app/src/main/java/org/rkms/connect/SessionStore.java
 
-          echo "Android project:"
-          echo "$ANDROID_DIR"
+          echo ""
+          echo "Native Android source verification: PASS"
 
-      # ---------------------------------------------------------
-      # 4. Find final website ZIP
-      # ---------------------------------------------------------
-      - name: Locate Final Website ZIP
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+
+      # =========================================================
+      # 4. Find Chat Live Fix ZIP
+      # =========================================================
+      - name: Find Final Website ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching for website ZIP..."
+          echo "Searching for RKMS Chat Live ZIP..."
 
-          WEBSITE_ZIP="$(find "$GITHUB_WORKSPACE" \
-            -type f \
-            \( -name "RKMS_Chat_Live_Realtime_Fix.zip" \
-               -o -name "*Chat*Live*Realtime*.zip" \
-               -o -name "*.zip" \) \
-            -not -path "*/.git/*" \
-            | head -n 1)"
+          ZIP_FILE="$(
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name "RKMS_Chat_Live_Realtime_Fix.zip" \
+              -not -path "*/.git/*" \
+              -print \
+              -quit
+          )"
 
-          if [ -z "$WEBSITE_ZIP" ]; then
-            echo "::error::Website ZIP not found."
-            echo "ZIP files found:"
-            find "$GITHUB_WORKSPACE" -type f -name "*.zip" -print
+          if [ -z "$ZIP_FILE" ]; then
+            echo ""
+            echo "Named ZIP not found."
+
+            echo "Available ZIP files:"
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name "*.zip" \
+              -not -path "*/.git/*" \
+              -print
+
+            echo ""
+            echo "::error::RKMS_Chat_Live_Realtime_Fix.zip not found."
             exit 1
           fi
 
-          echo "WEBSITE_ZIP=$WEBSITE_ZIP" >> "$GITHUB_ENV"
+          test -s "$ZIP_FILE"
 
-          echo "Using:"
-          echo "$WEBSITE_ZIP"
+          echo ""
+          echo "Selected ZIP:"
+          echo "$ZIP_FILE"
 
-      # ---------------------------------------------------------
-      # 5. Extract website
-      # ---------------------------------------------------------
+          echo "WEBSITE_ZIP=$ZIP_FILE" >> "$GITHUB_ENV"
+
+
+      # =========================================================
+      # 5. Extract Chat Live Fix ZIP
+      # =========================================================
       - name: Extract Final Website
         shell: bash
         run: |
@@ -112,297 +162,335 @@ jobs:
           WEB_EXTRACT="$RUNNER_TEMP/rkms-web"
 
           rm -rf "$WEB_EXTRACT"
+
           mkdir -p "$WEB_EXTRACT"
 
           echo "Extracting:"
           echo "$WEBSITE_ZIP"
 
-          unzip -q "$WEBSITE_ZIP" -d "$WEB_EXTRACT"
+          unzip -q \
+            "$WEBSITE_ZIP" \
+            -d "$WEB_EXTRACT"
 
           echo ""
-          echo "Extracted files:"
-          find "$WEB_EXTRACT" -maxdepth 5 -type f | sort | head -300
+          echo "ZIP contents:"
+          find "$WEB_EXTRACT" \
+            -type f \
+            | sort \
+            | head -300
 
           echo ""
           echo "Searching for app.js..."
 
-          APP_JS="$(find "$WEB_EXTRACT" \
-            -type f \
-            -name "app.js" \
-            -print \
-            | head -n 1)"
+          APP_JS="$(
+            find "$WEB_EXTRACT" \
+              -type f \
+              -name "app.js" \
+              -print \
+              -quit
+          )"
 
           if [ -z "$APP_JS" ]; then
-            echo "::error::app.js not found inside website ZIP."
+            echo ""
+            echo "::error::app.js not found inside ZIP."
 
             echo ""
-            echo "All JavaScript files:"
-            find "$WEB_EXTRACT" -type f \
+            echo "JavaScript files found:"
+            find "$WEB_EXTRACT" \
+              -type f \
               \( -name "*.js" -o -name "*.mjs" \) \
               -print
 
             exit 1
           fi
 
-          WEB_ROOT="$(dirname "$APP_JS")"
-
-          echo "APP_JS=$APP_JS" >> "$GITHUB_ENV"
-          echo "WEB_ROOT=$WEB_ROOT" >> "$GITHUB_ENV"
-
           echo ""
-          echo "Website root:"
-          echo "$WEB_ROOT"
-
-          echo ""
-          echo "app.js:"
+          echo "FOUND app.js:"
           echo "$APP_JS"
 
-      # ---------------------------------------------------------
-      # 6. Verify website files
-      # ---------------------------------------------------------
-      - name: Verify Website
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "APP_JS=$APP_JS" >> "$GITHUB_ENV"
 
-          echo "Checking website..."
 
-          test -f "$APP_JS" || {
-            echo "::error::app.js missing"
-            exit 1
-          }
-
-          test -f "$WEB_ROOT/index.html" || {
-            echo "::error::index.html missing"
-            exit 1
-          }
-
-          if [ ! -f "$WEB_ROOT/styles.css" ]; then
-            echo "WARNING: styles.css not found"
-          fi
-
-          if [ ! -f "$WEB_ROOT/config.js" ]; then
-            echo "WARNING: config.js not found"
-          fi
-
-          echo ""
-          echo "Website verification PASS"
-
-          echo ""
-          echo "app.js size:"
-          wc -c "$APP_JS"
-
-      # ---------------------------------------------------------
-      # 7. Locate Android assets/www
-      # ---------------------------------------------------------
-      - name: Locate Android Web Assets
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Searching Android assets/www..."
-
-          ANDROID_WEB="$(find "$ANDROID_PROJECT" \
-            -type d \
-            -path "*/src/main/assets/www" \
-            | head -n 1)"
-
-          if [ -z "$ANDROID_WEB" ]; then
-            echo "::error::Android assets/www directory not found."
-
-            echo ""
-            echo "Existing assets directories:"
-            find "$ANDROID_PROJECT" \
-              -type d \
-              -name "assets" \
-              -print
-
-            exit 1
-          fi
-
-          echo "ANDROID_WEB=$ANDROID_WEB" >> "$GITHUB_ENV"
-
-          echo "Android web directory:"
-          echo "$ANDROID_WEB"
-
-      # ---------------------------------------------------------
-      # 8. Backup existing app.js
-      # ---------------------------------------------------------
-      - name: Backup Existing App JS
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -f "$ANDROID_WEB/app.js" ]; then
-            cp "$ANDROID_WEB/app.js" \
-              "$ANDROID_WEB/app.js.before-live-chat-fix"
-          fi
-
-      # ---------------------------------------------------------
-      # 9. Install fixed app.js
-      # ---------------------------------------------------------
-      - name: Install Live Chat Fix
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Installing fixed app.js..."
-
-          cp "$APP_JS" "$ANDROID_WEB/app.js"
-
-          echo ""
-          echo "Installed:"
-          ls -lh "$ANDROID_WEB/app.js"
-
-          echo ""
-          echo "Checking file..."
-
-          test -s "$ANDROID_WEB/app.js"
-
-          echo "Live chat app.js installation PASS"
-
-      # ---------------------------------------------------------
-      # 10. Validate JavaScript
-      # ---------------------------------------------------------
+      # =========================================================
+      # 6. Validate patched JavaScript
+      # =========================================================
       - name: Validate JavaScript
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Validating app.js..."
+          test -s "$APP_JS"
 
-          node --check "$ANDROID_WEB/app.js"
+          echo "app.js size:"
+          wc -c "$APP_JS"
 
           echo ""
-          echo "JavaScript syntax PASS"
+          echo "Running JavaScript syntax check..."
 
-      # ---------------------------------------------------------
-      # 11. Check Live Chat code
-      # ---------------------------------------------------------
+          node --check "$APP_JS"
+
+          echo ""
+          echo "JavaScript syntax: PASS"
+
+
+      # =========================================================
+      # 7. Verify Live Chat Fix
+      # =========================================================
       - name: Verify Live Chat Fix
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking live chat implementation..."
+          echo "Checking RKMS live chat..."
 
-          if grep -q "rkmsChatLive" "$ANDROID_WEB/app.js"; then
-            echo "Live chat polling/realtime code found."
+          if grep -q "rkmsChatLive" "$APP_JS"; then
+            echo "RKMS live-chat code: FOUND"
           else
-            echo "::warning::rkmsChatLive code not found."
+            echo "::warning::rkmsChatLive marker not found"
           fi
 
-          if grep -q "postgres_changes" "$ANDROID_WEB/app.js"; then
-            echo "Supabase Realtime postgres_changes code found."
+          if grep -q "postgres_changes" "$APP_JS"; then
+            echo "Supabase Realtime listener: FOUND"
           else
-            echo "No postgres_changes listener found."
-            echo "Fallback polling will be used if present."
+            echo "Supabase postgres_changes listener not found."
+            echo "Fallback polling code will be checked."
           fi
 
-          if grep -q "setInterval" "$ANDROID_WEB/app.js"; then
-            echo "Polling fallback detected."
+          if grep -q "setInterval" "$APP_JS"; then
+            echo "Polling fallback: FOUND"
+          else
+            echo "::warning::Polling fallback not found"
           fi
 
-      # ---------------------------------------------------------
-      # 12. Verify Book
-      # ---------------------------------------------------------
-      - name: Verify Book 60 Pages
+          echo ""
+          echo "Live Chat verification completed."
+
+
+      # =========================================================
+      # 8. Locate Android web assets
+      # =========================================================
+      - name: Locate Android Web Assets
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking book/page related files..."
+          ANDROID_WEB="$PROJECT_DIR/app/src/main/assets/www"
 
-          find "$ANDROID_WEB" \
-            -type f \
-            | grep -Ei "book|pdf|page" \
-            | head -100 || true
+          mkdir -p "$ANDROID_WEB"
 
-          echo "Book verification completed."
+          echo "Android web directory:"
+          echo "$ANDROID_WEB"
 
-      # ---------------------------------------------------------
-      # 13. Verify Supabase Configuration
-      # ---------------------------------------------------------
+          echo "ANDROID_WEB=$ANDROID_WEB" >> "$GITHUB_ENV"
+
+
+      # =========================================================
+      # 9. Install Chat Live Fix
+      # =========================================================
+      - name: Install Chat Live Fix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Installing patched app.js..."
+
+          cp "$APP_JS" \
+            "$ANDROID_WEB/app.js"
+
+          test -s "$ANDROID_WEB/app.js"
+
+          echo ""
+          echo "Installed app.js:"
+          ls -lh "$ANDROID_WEB/app.js"
+
+          echo ""
+          echo "Final JavaScript validation..."
+
+          node --check "$ANDROID_WEB/app.js"
+
+          echo ""
+          echo "Chat Live Fix installation: PASS"
+
+
+      # =========================================================
+      # 10. Verify native website
+      # =========================================================
+      - name: Verify Android Website
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking existing Android website..."
+
+          test -f "$ANDROID_WEB/index.html"
+          test -f "$ANDROID_WEB/app.js"
+
+          echo ""
+          echo "Android website verification: PASS"
+
+
+      # =========================================================
+      # 11. Verify Book
+      # =========================================================
+      - name: Verify Book
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking book files..."
+
+          if [ -d "$ANDROID_WEB/assets/book" ]; then
+
+            PAGE_COUNT="$(
+              find "$ANDROID_WEB/assets/book" \
+                -type f \
+                \( \
+                  -iname "page-*.jpg" \
+                  -o -iname "page-*.jpeg" \
+                  -o -iname "page-*.png" \
+                  -o -iname "page-*.webp" \
+                \) \
+                | wc -l
+            )"
+
+            echo "Book page count:"
+            echo "$PAGE_COUNT"
+
+            if [ "$PAGE_COUNT" -eq 60 ]; then
+              echo "Book 60 pages: PASS"
+            else
+              echo "::warning::Expected 60 pages, found $PAGE_COUNT"
+            fi
+
+          else
+
+            echo "::warning::Book directory not found; existing project will be preserved."
+
+          fi
+
+
+      # =========================================================
+      # 12. Verify Supabase
+      # =========================================================
       - name: Verify Supabase Configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking Supabase references..."
+          echo "Searching Supabase configuration..."
 
           if grep -Rqi "supabase" "$ANDROID_WEB"; then
-            echo "Supabase references found."
+            echo "Supabase references: FOUND"
           else
-            echo "::warning::No Supabase reference found in web assets."
+            echo "::warning::Supabase reference not found"
           fi
 
-          echo "Supabase verification completed."
 
-      # ---------------------------------------------------------
-      # 14. Verify RKMS Frontend Fixes
-      # ---------------------------------------------------------
-      - name: Verify RKMS Frontend Fixes
+      # =========================================================
+      # 13. Setup Android SDK
+      # =========================================================
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      # =========================================================
+      # 14. Setup Gradle
+      # =========================================================
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+
+      # =========================================================
+      # 15. Create Gradle Wrapper
+      # =========================================================
+      - name: Create Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking important frontend files..."
+          gradle wrapper \
+            --gradle-version "$GRADLE_VERSION" \
+            --distribution-type bin
 
-          test -f "$ANDROID_WEB/app.js"
+          chmod +x gradlew
 
-          echo "Frontend verification PASS"
+          ./gradlew --version
 
-      # ---------------------------------------------------------
-      # 15. Clean Gradle
-      # ---------------------------------------------------------
-      - name: Clean Gradle
-        working-directory: ${{ env.ANDROID_PROJECT }}
+
+      # =========================================================
+      # 16. Verify Android project
+      # =========================================================
+      - name: Verify Android Project
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
-          chmod +x ./gradlew
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/google-services.json
 
-          ./gradlew clean \
-            --no-daemon \
-            --stacktrace
+          test -f \
+            app/src/main/java/org/rkms/connect/FCMTokenRegistrar.java
 
-      # ---------------------------------------------------------
-      # 16. Build Release APK
-      # ---------------------------------------------------------
+          test -f \
+            app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
+
+          test -f \
+            app/src/main/java/org/rkms/connect/NotificationHelper.java
+
+          test -f \
+            app/src/main/java/org/rkms/connect/SessionStore.java
+
+          echo ""
+          echo "Android project verification: PASS"
+
+
+      # =========================================================
+      # 17. Build Release APK
+      # =========================================================
       - name: Build Release APK
-        working-directory: ${{ env.ANDROID_PROJECT }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
-          chmod +x ./gradlew
+          chmod +x gradlew
 
-          ./gradlew assembleRelease \
+          ./gradlew clean assembleRelease \
             --no-daemon \
             --stacktrace
 
-      # ---------------------------------------------------------
-      # 17. Find APK
-      # ---------------------------------------------------------
+          echo ""
+          echo "Release APK build: PASS"
+
+
+      # =========================================================
+      # 18. Locate APK
+      # =========================================================
       - name: Locate APK
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching for APK..."
-
-          APK="$(find "$ANDROID_PROJECT" \
-            -type f \
-            -path "*/build/outputs/apk/release/*.apk" \
-            | head -n 1)"
+          APK="$(
+            find "$PROJECT_DIR" \
+              -type f \
+              -path "*/build/outputs/apk/release/*.apk" \
+              -print \
+              -quit
+          )"
 
           if [ -z "$APK" ]; then
             echo "::error::Release APK not found."
 
             echo ""
-            echo "Available APK files:"
-            find "$ANDROID_PROJECT" \
+            echo "APK files:"
+            find "$PROJECT_DIR" \
               -type f \
               -name "*.apk" \
               -print
@@ -419,9 +507,10 @@ jobs:
           echo ""
           ls -lh "$APK"
 
-      # ---------------------------------------------------------
-      # 18. Upload APK
-      # ---------------------------------------------------------
+
+      # =========================================================
+      # 19. Upload APK
+      # =========================================================
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
@@ -429,19 +518,21 @@ jobs:
           path: ${{ env.APK }}
           if-no-files-found: error
 
-      # ---------------------------------------------------------
-      # 19. Upload patched web app.js
-      # ---------------------------------------------------------
+
+      # =========================================================
+      # 20. Upload patched app.js
+      # =========================================================
       - name: Upload Patched app.js
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Chat-Live-Fixed-app-js
-          path: ${{ env.ANDROID_WEB }}/app.js
+          path: ${{ env.PROJECT_DIR }}/app/src/main/assets/www/app.js
           if-no-files-found: error
 
-      # ---------------------------------------------------------
-      # 20. Final status
-      # ---------------------------------------------------------
+
+      # =========================================================
+      # 21. Final
+      # =========================================================
       - name: Build Complete
         shell: bash
         run: |
@@ -450,7 +541,8 @@ jobs:
           echo " RKMS RELEASE BUILD SUCCESS"
           echo "=========================================="
           echo ""
-          echo "Chat Live Fix: INSTALLED"
-          echo "Website: UNCHANGED"
-          echo "APK: BUILT"
+          echo "Chat Live Fix : INSTALLED"
+          echo "Website       : UNCHANGED"
+          echo "Android       : VERIFIED"
+          echo "APK           : BUILT"
           echo ""
