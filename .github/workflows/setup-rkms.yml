@@ -10,17 +10,18 @@ env:
   ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
   WEBSITE_ZIP_NAME: RKMS_CONNECT_V9_WITH_EXACT_3_FIXES.zip
   GRADLE_VERSION: "8.10.2"
+  ANDROID_BUILD_TOOLS: "35.0.0"
 
 jobs:
   build:
     name: Build RKMS Release APK
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
 
       # =========================================================
-      # 1. Checkout repository
+      # 1. Checkout current repository
       # =========================================================
       - name: Checkout RKMS repository
         uses: actions/checkout@v4
@@ -29,7 +30,7 @@ jobs:
           fetch-depth: 1
 
       # =========================================================
-      # 2. Java 17
+      # 2. Setup Java 17
       # =========================================================
       - name: Setup JDK 17
         uses: actions/setup-java@v5
@@ -38,7 +39,7 @@ jobs:
           java-version: "17"
 
       # =========================================================
-      # 3. Node.js
+      # 3. Setup Node.js
       # =========================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -46,7 +47,7 @@ jobs:
           node-version: "20"
 
       # =========================================================
-      # 4. Prepare native Android project
+      # 4. Prepare verified native Android project
       # =========================================================
       - name: Prepare native Android project
         shell: bash
@@ -57,7 +58,12 @@ jobs:
 
           rm -rf "$PROJECT_DIR"
 
-          echo "Cloning RKMS Android repository..."
+          echo "=========================================="
+          echo "Preparing RKMS Native Android Project"
+          echo "=========================================="
+
+          echo ""
+          echo "Cloning repository..."
 
           git clone \
             --no-tags \
@@ -67,6 +73,7 @@ jobs:
 
           cd "$PROJECT_DIR"
 
+          echo ""
           echo "Fetching required Android source commit..."
 
           git fetch \
@@ -74,22 +81,25 @@ jobs:
             --depth 1 \
             origin "$ANDROID_SOURCE_COMMIT"
 
-          echo "Checking required Android commit..."
+          echo ""
+          echo "Checking Android source commit..."
 
           git checkout --detach "$ANDROID_SOURCE_COMMIT"
 
           CURRENT_COMMIT="$(git rev-parse HEAD)"
 
-          echo "Expected commit:"
+          echo ""
+          echo "Expected:"
           echo "$ANDROID_SOURCE_COMMIT"
 
-          echo "Actual commit:"
+          echo ""
+          echo "Actual:"
           echo "$CURRENT_COMMIT"
 
           test "$CURRENT_COMMIT" = "$ANDROID_SOURCE_COMMIT"
 
           echo ""
-          echo "Checking Android project..."
+          echo "Checking Android project files..."
 
           test -f settings.gradle
           test -f build.gradle
@@ -131,15 +141,21 @@ jobs:
 
           ZIP_FILE="$GITHUB_WORKSPACE/$WEBSITE_ZIP_NAME"
 
-          echo "Required ZIP:"
+          echo "=========================================="
+          echo "Locating V9 Exact 3 Fixes ZIP"
+          echo "=========================================="
+
+          echo ""
+          echo "Expected ZIP:"
           echo "$ZIP_FILE"
 
           if [ ! -f "$ZIP_FILE" ]; then
 
             echo ""
-            echo "::error::Required V9 exact-3-fixes ZIP is missing."
+            echo "::error::Required V9 ZIP is missing."
 
-            echo "Expected:"
+            echo ""
+            echo "Expected filename:"
             echo "$WEBSITE_ZIP_NAME"
 
             echo ""
@@ -163,7 +179,7 @@ jobs:
           echo "WEBSITE_ZIP=$ZIP_FILE" >> "$GITHUB_ENV"
 
       # =========================================================
-      # 6. Extract V9 ZIP
+      # 6. Extract V9 web application
       # =========================================================
       - name: Extract V9 Exact 3 Fixes
         shell: bash
@@ -176,14 +192,16 @@ jobs:
 
           mkdir -p "$WEB_EXTRACT"
 
-          echo "Extracting V9 ZIP..."
+          echo "=========================================="
+          echo "Extracting V9 Web Application"
+          echo "=========================================="
 
           unzip -q \
             "$WEBSITE_ZIP" \
             -d "$WEB_EXTRACT"
 
           echo ""
-          echo "Searching for required files..."
+          echo "Searching required V9 files..."
 
           test -f "$WEB_EXTRACT/index.html"
           test -f "$WEB_EXTRACT/app.js"
@@ -207,11 +225,20 @@ jobs:
           echo ""
           echo "JavaScript syntax: PASS"
 
+          echo ""
+          echo "V9 files:"
+
+          find "$WEB_EXTRACT" \
+            -maxdepth 2 \
+            -type f \
+            | sort \
+            | head -250
+
           echo "APP_JS=$APP_JS" >> "$GITHUB_ENV"
           echo "WEB_EXTRACT=$WEB_EXTRACT" >> "$GITHUB_ENV"
 
       # =========================================================
-      # 7. Verify Fix #1
+      # 7. FIX #1
       # PDA / Member geographic visibility
       # =========================================================
       - name: Verify Fix 1 Geographic Visibility
@@ -219,28 +246,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking PDA geographic scope..."
+          echo "=========================================="
+          echo "FIX #1 - PDA / Member Geographic Visibility"
+          echo "=========================================="
 
           grep -q \
             "rkmsOfficerCanAccessTarget" \
             "$APP_JS"
 
-          echo "PDA geographic scope: FOUND"
-
-          echo ""
-          echo "Checking Member geographic scope..."
+          echo "PDA geographic scope guard: FOUND"
 
           grep -q \
             "rkmsOfficerCanAccessMember" \
             "$APP_JS"
 
-          echo "Member geographic scope: FOUND"
+          echo "Member geographic scope guard: FOUND"
 
           echo ""
-          echo "Fix #1 Geographic Visibility: PASS"
+          echo "Fix #1: PASS"
 
       # =========================================================
-      # 8. Verify Fix #2
+      # 8. FIX #2
       # Appointment post/location hierarchy
       # =========================================================
       - name: Verify Fix 2 Appointment Location
@@ -248,25 +274,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking appointment level logic..."
+          echo "=========================================="
+          echo "FIX #2 - Appointment Post / Location"
+          echo "=========================================="
 
           grep -q \
             "rkmsAppointmentLevelKey" \
             "$APP_JS"
 
-          echo "Appointment level key: FOUND"
-
-          echo ""
-          echo "Checking location visibility..."
+          echo "Appointment level logic: FOUND"
 
           grep -q \
             "rkmsAppointmentLocationVisibility" \
             "$APP_JS"
 
           echo "Appointment location visibility: FOUND"
-
-          echo ""
-          echo "Checking post scope application..."
 
           grep -q \
             "applyAppointmentPostScope" \
@@ -275,10 +297,10 @@ jobs:
           echo "Appointment post scope: FOUND"
 
           echo ""
-          echo "Fix #2 Appointment Location: PASS"
+          echo "Fix #2: PASS"
 
       # =========================================================
-      # 9. Verify Fix #3
+      # 9. FIX #3
       # Chat live update
       # =========================================================
       - name: Verify Fix 3 Live Chat
@@ -286,20 +308,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking live chat implementation..."
+          echo "=========================================="
+          echo "FIX #3 - Chat Live Update"
+          echo "=========================================="
 
           grep -q \
             "rkmsChatLive" \
             "$APP_JS"
 
-          echo "RKMS live-chat code: FOUND"
-
-          echo ""
-          echo "Checking Realtime..."
+          echo "RKMS live-chat implementation: FOUND"
 
           grep -q \
             "startChatLiveRealtime" \
             "$APP_JS"
+
+          echo "Realtime startup: FOUND"
 
           grep -q \
             "postgres_changes" \
@@ -307,17 +330,11 @@ jobs:
 
           echo "Supabase Realtime listener: FOUND"
 
-          echo ""
-          echo "Checking fallback polling..."
-
           grep -q \
             "setInterval" \
             "$APP_JS"
 
           echo "Fallback polling: FOUND"
-
-          echo ""
-          echo "Checking foreground resync..."
 
           grep -q \
             "visibilitychange" \
@@ -326,7 +343,7 @@ jobs:
           echo "Foreground resync: FOUND"
 
           echo ""
-          echo "Fix #3 Chat Live Update: PASS"
+          echo "Fix #3: PASS"
 
       # =========================================================
       # 10. Install V9 web app into Android
@@ -338,7 +355,12 @@ jobs:
 
           ANDROID_WEB="$PROJECT_DIR/app/src/main/assets/www"
 
-          echo "Android web directory:"
+          echo "=========================================="
+          echo "Installing V9 Web App"
+          echo "=========================================="
+
+          echo ""
+          echo "Android WebView directory:"
           echo "$ANDROID_WEB"
 
           rm -rf "$ANDROID_WEB"
@@ -346,7 +368,7 @@ jobs:
           mkdir -p "$ANDROID_WEB"
 
           echo ""
-          echo "Copying V9 web application..."
+          echo "Copying V9 files..."
 
           cp \
             "$WEB_EXTRACT/index.html" \
@@ -390,32 +412,34 @@ jobs:
             "$ANDROID_WEB/app.js"
 
           echo ""
-          echo "V9 web application installed."
+          echo "V9 Web App installation: PASS"
 
           echo ""
-          echo "Android web assets:"
+          echo "Android web files:"
+
           find "$ANDROID_WEB" \
             -maxdepth 2 \
             -type f \
             | sort \
-            | head -200
-
-          echo ""
-          echo "Android web installation: PASS"
+            | head -250
 
           echo "ANDROID_WEB=$ANDROID_WEB" >> "$GITHUB_ENV"
 
       # =========================================================
-      # 11. Verify the 3 fixes AFTER installation
+      # 11. Verify all 3 fixes after installation
       # =========================================================
       - name: Verify Installed Three Fixes
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Final installed app.js verification..."
+          echo "=========================================="
+          echo "FINAL THREE FIXES VERIFICATION"
+          echo "=========================================="
 
-          # FIX 1
+          echo ""
+          echo "Fix #1..."
+
           grep -q \
             "rkmsOfficerCanAccessTarget" \
             "$ANDROID_WEB/app.js"
@@ -424,7 +448,11 @@ jobs:
             "rkmsOfficerCanAccessMember" \
             "$ANDROID_WEB/app.js"
 
-          # FIX 2
+          echo "Fix #1: PASS"
+
+          echo ""
+          echo "Fix #2..."
+
           grep -q \
             "rkmsAppointmentLevelKey" \
             "$ANDROID_WEB/app.js"
@@ -437,7 +465,11 @@ jobs:
             "applyAppointmentPostScope" \
             "$ANDROID_WEB/app.js"
 
-          # FIX 3
+          echo "Fix #2: PASS"
+
+          echo ""
+          echo "Fix #3..."
+
           grep -q \
             "rkmsChatLive" \
             "$ANDROID_WEB/app.js"
@@ -458,13 +490,18 @@ jobs:
             "visibilitychange" \
             "$ANDROID_WEB/app.js"
 
+          echo "Fix #3: PASS"
+
+          echo ""
+          echo "JavaScript final syntax check..."
+
           node --check \
             "$ANDROID_WEB/app.js"
 
           echo ""
-          echo "=================================================="
-          echo "ALL 3 FIXES INSTALLED AND VERIFIED"
-          echo "=================================================="
+          echo "=========================================="
+          echo "ALL THREE FIXES: PASS"
+          echo "=========================================="
 
       # =========================================================
       # 12. Verify existing V9 Book
@@ -473,6 +510,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "=========================================="
+          echo "Checking Existing V9 Book"
+          echo "=========================================="
 
           BOOK_DIR="$ANDROID_WEB/assets/book"
 
@@ -490,11 +531,13 @@ jobs:
               | wc -l
           )"
 
+          echo ""
           echo "Book page count:"
           echo "$PAGE_COUNT"
 
           test "$PAGE_COUNT" -eq 60
 
+          echo ""
           echo "Book 60 pages: PASS"
 
       # =========================================================
@@ -505,30 +548,97 @@ jobs:
 
       # =========================================================
       # 14. Install Android Build Tools
-      #     FIXES apksigner NOT FOUND
+      #
+      # IMPORTANT:
+      # Do NOT use:
+      # yes | sdkmanager
+      #
+      # because pipefail can cause Broken pipe failure.
       # =========================================================
       - name: Install Android Build Tools
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Installing Android SDK build tools..."
+          echo "=========================================="
+          echo "Installing Android Build Tools"
+          echo "=========================================="
 
-          yes | sdkmanager \
-            "platform-tools" \
-            "build-tools;35.0.0"
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+
+          if [ -z "$SDK_ROOT" ]; then
+            echo "::error::ANDROID_HOME / ANDROID_SDK_ROOT not available."
+            exit 1
+          fi
 
           echo ""
-          echo "Installed Android Build Tools:"
+          echo "Android SDK:"
+          echo "$SDK_ROOT"
 
-          find "$ANDROID_HOME/build-tools" \
-            -maxdepth 2 \
-            -type f \
-            -name "apksigner" \
-            -print
+          echo ""
+          echo "Accepting available Android SDK licenses..."
+
+          set +o pipefail
+
+          yes | sdkmanager \
+            --sdk_root="$SDK_ROOT" \
+            --licenses \
+            >/dev/null 2>&1 || true
+
+          set -o pipefail
+
+          echo ""
+          echo "Installing required packages..."
+
+          sdkmanager \
+            --sdk_root="$SDK_ROOT" \
+            "platform-tools" \
+            "build-tools;$ANDROID_BUILD_TOOLS"
+
+          echo ""
+          echo "Searching for apksigner..."
+
+          APKSIGNER="$(
+            find "$SDK_ROOT/build-tools" \
+              -type f \
+              -name "apksigner" \
+              -print \
+              | sort -V \
+              | tail -1
+          )"
+
+          if [ -z "$APKSIGNER" ]; then
+
+            echo ""
+            echo "::error::apksigner was not installed."
+
+            echo ""
+            echo "Installed build-tools directories:"
+
+            find "$SDK_ROOT/build-tools" \
+              -maxdepth 1 \
+              -mindepth 1 \
+              -type d \
+              -print \
+              | sort
+
+            exit 1
+          fi
+
+          chmod +x "$APKSIGNER"
+
+          echo ""
+          echo "apksigner found:"
+          echo "$APKSIGNER"
 
           echo ""
           echo "Android Build Tools installation: PASS"
+
+          echo "ANDROID_SDK_ROOT_FINAL=$SDK_ROOT" \
+            >> "$GITHUB_ENV"
+
+          echo "APKSIGNER=$APKSIGNER" \
+            >> "$GITHUB_ENV"
 
       # =========================================================
       # 15. Setup Gradle
@@ -547,6 +657,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Creating Gradle wrapper..."
+
           gradle wrapper \
             --gradle-version "$GRADLE_VERSION" \
             --distribution-type bin
@@ -555,9 +667,13 @@ jobs:
 
           ./gradlew --version
 
+          echo ""
+          echo "Gradle wrapper: PASS"
+
       # =========================================================
       # 17. Existing release signing ONLY
-      #     Never create a new signing key
+      #
+      # Never generate a new signing key.
       # =========================================================
       - name: Prepare Existing Release Signing
         working-directory: ${{ env.PROJECT_DIR }}
@@ -571,9 +687,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          KEYSTORE="$RUNNER_TEMP/rkms-release.keystore"
+          echo "=========================================="
+          echo "Checking RKMS Release Signing"
+          echo "=========================================="
 
-          echo "Checking RKMS release signing secrets..."
+          KEYSTORE="$RUNNER_TEMP/rkms-release.keystore"
 
           if [ -z "$RKMS_KEYSTORE_BASE64" ] || \
              [ -z "$RKMS_KEYSTORE_PASSWORD" ] || \
@@ -581,11 +699,13 @@ jobs:
              [ -z "$RKMS_KEY_PASSWORD" ]; then
 
             echo ""
-            echo "::error::Existing RKMS release signing secrets are not configured."
+            echo "::error::Existing RKMS release signing secrets are missing."
 
+            echo ""
             echo "::error::Build stopped."
 
-            echo "::error::A temporary signing key will NOT be created."
+            echo ""
+            echo "::error::A new temporary signing key will NOT be generated."
 
             exit 1
           fi
@@ -601,7 +721,7 @@ jobs:
           test -s "$KEYSTORE"
 
           echo ""
-          echo "Verifying keystore..."
+          echo "Verifying existing keystore..."
 
           keytool -list \
             -keystore "$KEYSTORE" \
@@ -625,7 +745,7 @@ jobs:
             >> "$GITHUB_ENV"
 
       # =========================================================
-      # 18. Final native Android verification
+      # 18. Final Android project verification
       # =========================================================
       - name: Verify Native Android Project
         working-directory: ${{ env.PROJECT_DIR }}
@@ -633,7 +753,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking native Android project..."
+          echo "=========================================="
+          echo "Final Android Project Verification"
+          echo "=========================================="
 
           test -f settings.gradle
           test -f build.gradle
@@ -657,10 +779,11 @@ jobs:
             app/src/main/java/org/rkms/connect/SessionStore.java
 
           echo ""
-          echo "Checking WebView assets..."
+          echo "Checking V9 web assets..."
 
           test -f "$ANDROID_WEB/index.html"
           test -f "$ANDROID_WEB/app.js"
+          test -f "$ANDROID_WEB/styles.css"
           test -f "$ANDROID_WEB/config.js"
 
           echo ""
@@ -675,9 +798,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          chmod +x gradlew
+          echo "=========================================="
+          echo "Building RKMS Release APK"
+          echo "=========================================="
 
-          echo "Building release APK..."
+          chmod +x gradlew
 
           ./gradlew clean assembleRelease \
             --no-daemon \
@@ -694,6 +819,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Searching for release APK..."
+
           APK="$(
             find "$PROJECT_DIR" \
               -type f \
@@ -704,6 +831,7 @@ jobs:
 
           if [ -z "$APK" ]; then
 
+            echo ""
             echo "::error::Release APK not found."
 
             echo ""
@@ -730,34 +858,39 @@ jobs:
 
       # =========================================================
       # 21. Verify APK Signature
-      #     Uses actual Android SDK apksigner path
+      #
+      # Uses the actual apksigner discovered from Android SDK.
       # =========================================================
       - name: Verify APK Signature
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "=========================================="
+          echo "Verifying APK Signature"
+          echo "=========================================="
+
           test -s "$APK"
 
-          echo "Searching Android SDK for apksigner..."
+          if [ -z "${APKSIGNER:-}" ]; then
 
-          APKSIGNER="$(
-            find "$ANDROID_HOME/build-tools" \
-              -type f \
-              -name "apksigner" \
-              -print \
-              | sort -V \
-              | tail -1
-          )"
+            echo ""
+            echo "APKSIGNER environment variable not set."
+
+            APKSIGNER="$(
+              find "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools" \
+                -type f \
+                -name "apksigner" \
+                -print \
+                | sort -V \
+                | tail -1
+            )"
+          fi
 
           if [ -z "$APKSIGNER" ]; then
 
-            echo "::error::apksigner was not found."
-
             echo ""
-            echo "Installed build tools:"
-
-            ls -la "$ANDROID_HOME/build-tools" || true
+            echo "::error::apksigner not found."
 
             exit 1
           fi
@@ -765,11 +898,15 @@ jobs:
           chmod +x "$APKSIGNER"
 
           echo ""
-          echo "Using apksigner:"
+          echo "Using:"
           echo "$APKSIGNER"
 
           echo ""
-          echo "Verifying APK signature..."
+          echo "APK:"
+          echo "$APK"
+
+          echo ""
+          echo "Running signature verification..."
 
           "$APKSIGNER" verify \
             --verbose \
@@ -779,27 +916,32 @@ jobs:
           echo "APK signature verification: PASS"
 
       # =========================================================
-      # 22. Verify APK package information
+      # 22. Final APK integrity verification
       # =========================================================
-      - name: Verify APK Package
+      - name: Verify Final APK
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "=========================================="
+          echo "Final APK Verification"
+          echo "=========================================="
+
           test -s "$APK"
 
-          echo "APK file:"
+          echo ""
+          echo "APK size:"
+
           ls -lh "$APK"
 
           echo ""
-          echo "APK package verification..."
+          echo "Running final apksigner verification..."
 
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" \
-            verify \
+          "$APKSIGNER" verify \
             "$APK"
 
           echo ""
-          echo "APK package/signature verification: PASS"
+          echo "Final APK verification: PASS"
 
       # =========================================================
       # 23. Upload final APK
@@ -831,13 +973,13 @@ jobs:
         run: |
           echo ""
           echo "=================================================="
-          echo "       RKMS RELEASE BUILD SUCCESS"
+          echo "          RKMS RELEASE BUILD SUCCESS"
           echo "=================================================="
           echo ""
 
-          echo "FIX #1 PDA/Member Geographic Visibility : PASS"
-          echo "FIX #2 Appointment Post Location       : PASS"
-          echo "FIX #3 Chat Live Update                 : PASS"
+          echo "Fix #1 PDA/Member Geographic Visibility : PASS"
+          echo "Fix #2 Appointment Post Location       : PASS"
+          echo "Fix #3 Chat Live Update                 : PASS"
 
           echo ""
           echo "Native Android                         : VERIFIED"
@@ -846,8 +988,8 @@ jobs:
           echo "Release Signing                         : VERIFIED"
           echo "APK Signature                           : VERIFIED"
           echo "APK                                     : BUILT"
-          echo ""
 
+          echo ""
           echo "=================================================="
-          echo "          READY FOR APK DOWNLOAD"
+          echo "             READY FOR DOWNLOAD"
           echo "=================================================="
