@@ -29,7 +29,7 @@ jobs:
 
 
       # =========================================================
-      # 2. Setup Java
+      # 2. Setup Java 17
       # =========================================================
       - name: Setup JDK 17
         uses: actions/setup-java@v5
@@ -50,7 +50,7 @@ jobs:
 
           rm -rf "$PROJECT_DIR"
 
-          echo "Cloning verified Android source..."
+          echo "Cloning Android source..."
 
           git clone \
             --no-tags \
@@ -65,10 +65,10 @@ jobs:
 
           CURRENT_COMMIT="$(git rev-parse HEAD)"
 
-          echo "Expected:"
+          echo "Expected commit:"
           echo "$ANDROID_SOURCE_COMMIT"
 
-          echo "Actual:"
+          echo "Actual commit:"
           echo "$CURRENT_COMMIT"
 
           test "$CURRENT_COMMIT" = "$ANDROID_SOURCE_COMMIT"
@@ -127,10 +127,13 @@ jobs:
           )"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo ""
-            echo "Named ZIP not found."
 
+            echo ""
+            echo "RKMS_Chat_Live_Realtime_Fix.zip not found."
+
+            echo ""
             echo "Available ZIP files:"
+
             find "$GITHUB_WORKSPACE" \
               -type f \
               -name "*.zip" \
@@ -138,7 +141,8 @@ jobs:
               -print
 
             echo ""
-            echo "::error::RKMS_Chat_Live_Realtime_Fix.zip not found."
+            echo "::error::Required Chat Live Fix ZIP is missing."
+
             exit 1
           fi
 
@@ -152,7 +156,7 @@ jobs:
 
 
       # =========================================================
-      # 5. Extract Chat Live Fix ZIP
+      # 5. Extract ZIP
       # =========================================================
       - name: Extract Final Website
         shell: bash
@@ -174,6 +178,7 @@ jobs:
 
           echo ""
           echo "ZIP contents:"
+
           find "$WEB_EXTRACT" \
             -type f \
             | sort \
@@ -191,11 +196,13 @@ jobs:
           )"
 
           if [ -z "$APP_JS" ]; then
+
             echo ""
             echo "::error::app.js not found inside ZIP."
 
             echo ""
             echo "JavaScript files found:"
+
             find "$WEB_EXTRACT" \
               -type f \
               \( -name "*.js" -o -name "*.mjs" \) \
@@ -212,7 +219,7 @@ jobs:
 
 
       # =========================================================
-      # 6. Validate patched JavaScript
+      # 6. Validate JavaScript
       # =========================================================
       - name: Validate JavaScript
         shell: bash
@@ -234,14 +241,14 @@ jobs:
 
 
       # =========================================================
-      # 7. Verify Live Chat Fix
+      # 7. Verify Chat Live Fix
       # =========================================================
       - name: Verify Live Chat Fix
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking RKMS live chat..."
+          echo "Checking live chat implementation..."
 
           if grep -q "rkmsChatLive" "$APP_JS"; then
             echo "RKMS live-chat code: FOUND"
@@ -252,8 +259,8 @@ jobs:
           if grep -q "postgres_changes" "$APP_JS"; then
             echo "Supabase Realtime listener: FOUND"
           else
-            echo "Supabase postgres_changes listener not found."
-            echo "Fallback polling code will be checked."
+            echo "Supabase Realtime listener not found."
+            echo "Fallback polling will be checked."
           fi
 
           if grep -q "setInterval" "$APP_JS"; then
@@ -267,7 +274,7 @@ jobs:
 
 
       # =========================================================
-      # 8. Locate Android web assets
+      # 8. Locate Android Web Assets
       # =========================================================
       - name: Locate Android Web Assets
         shell: bash
@@ -313,14 +320,12 @@ jobs:
 
 
       # =========================================================
-      # 10. Verify native website
+      # 10. Verify Android Website
       # =========================================================
       - name: Verify Android Website
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "Checking existing Android website..."
 
           test -f "$ANDROID_WEB/index.html"
           test -f "$ANDROID_WEB/app.js"
@@ -337,7 +342,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking book files..."
+          echo "Checking book..."
 
           if [ -d "$ANDROID_WEB/assets/book" ]; then
 
@@ -364,7 +369,7 @@ jobs:
 
           else
 
-            echo "::warning::Book directory not found; existing project will be preserved."
+            echo "::warning::Book directory not found."
 
           fi
 
@@ -377,12 +382,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Searching Supabase configuration..."
+          echo "Checking Supabase..."
 
           if grep -Rqi "supabase" "$ANDROID_WEB"; then
             echo "Supabase references: FOUND"
           else
-            echo "::warning::Supabase reference not found"
+            echo "::warning::Supabase reference not found."
           fi
 
 
@@ -421,7 +426,78 @@ jobs:
 
 
       # =========================================================
-      # 16. Verify Android project
+      # 16. Prepare Release Signing
+      # =========================================================
+      - name: Prepare Release Signing
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          KEYSTORE="$RUNNER_TEMP/rkms-release.keystore"
+
+          echo "Preparing release signing..."
+
+          if [ -n "$RKMS_KEYSTORE_BASE64" ] && \
+             [ -n "$RKMS_KEYSTORE_PASSWORD" ] && \
+             [ -n "$RKMS_KEY_ALIAS" ] && \
+             [ -n "$RKMS_KEY_PASSWORD" ]; then
+
+            echo "Using existing RKMS release keystore."
+
+            printf '%s' \
+              "$RKMS_KEYSTORE_BASE64" \
+              | base64 --decode \
+              > "$KEYSTORE"
+
+            test -s "$KEYSTORE"
+
+            STORE_PASSWORD="$RKMS_KEYSTORE_PASSWORD"
+            KEY_ALIAS="$RKMS_KEY_ALIAS"
+            KEY_PASSWORD="$RKMS_KEY_PASSWORD"
+
+          else
+
+            echo "RKMS signing secrets not configured."
+            echo "Creating temporary signing key for this build."
+
+            STORE_PASSWORD="$(openssl rand -hex 16)"
+
+            KEY_PASSWORD="$STORE_PASSWORD"
+
+            KEY_ALIAS="rkms-release"
+
+            keytool -genkeypair \
+              -v \
+              -keystore "$KEYSTORE" \
+              -storepass "$STORE_PASSWORD" \
+              -keypass "$KEY_PASSWORD" \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=RKMS Connect, OU=RKMS, O=Rashtriya Kisan Mazdoor Sangathan, C=IN"
+
+          fi
+
+          test -s "$KEYSTORE"
+
+          echo "RKMS_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
+          echo "RKMS_KEYSTORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "RKMS_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "RKMS_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "Release signing preparation: PASS"
+
+
+      # =========================================================
+      # 17. Verify Android Project
       # =========================================================
       - name: Verify Android Project
         working-directory: ${{ env.PROJECT_DIR }}
@@ -451,7 +527,7 @@ jobs:
 
 
       # =========================================================
-      # 17. Build Release APK
+      # 18. Build Release APK
       # =========================================================
       - name: Build Release APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -470,7 +546,7 @@ jobs:
 
 
       # =========================================================
-      # 18. Locate APK
+      # 19. Locate APK
       # =========================================================
       - name: Locate APK
         shell: bash
@@ -486,10 +562,12 @@ jobs:
           )"
 
           if [ -z "$APK" ]; then
+
             echo "::error::Release APK not found."
 
             echo ""
-            echo "APK files:"
+            echo "Available APK files:"
+
             find "$PROJECT_DIR" \
               -type f \
               -name "*.apk" \
@@ -501,7 +579,7 @@ jobs:
           echo "APK=$APK" >> "$GITHUB_ENV"
 
           echo ""
-          echo "APK:"
+          echo "APK found:"
           echo "$APK"
 
           echo ""
@@ -509,7 +587,7 @@ jobs:
 
 
       # =========================================================
-      # 19. Upload APK
+      # 20. Upload APK
       # =========================================================
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
@@ -520,7 +598,7 @@ jobs:
 
 
       # =========================================================
-      # 20. Upload patched app.js
+      # 21. Upload patched app.js
       # =========================================================
       - name: Upload Patched app.js
         uses: actions/upload-artifact@v4
@@ -531,7 +609,7 @@ jobs:
 
 
       # =========================================================
-      # 21. Final
+      # 22. Final
       # =========================================================
       - name: Build Complete
         shell: bash
@@ -544,5 +622,6 @@ jobs:
           echo "Chat Live Fix : INSTALLED"
           echo "Website       : UNCHANGED"
           echo "Android       : VERIFIED"
+          echo "Signing       : READY"
           echo "APK           : BUILT"
           echo ""
