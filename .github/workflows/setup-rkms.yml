@@ -330,4 +330,241 @@ jobs:
           # Excel download
           grep -q 'data-report-download="excel"' "$APP"
 
-          #
+          # Shared PDF save pipeline
+          grep -q "savePdfBlob" "$APP"
+          grep -q "pdfBlobFromElement" "$APP"
+
+          echo "REPORT VIEW: PASS"
+          echo "REPORT PDF: PASS"
+          echo "REPORT EXCEL: PASS"
+
+
+      # =====================================================
+      # 9. VERIFY DIGITAL ID + APPOINTMENT LETTER PDF
+      # =====================================================
+      - name: Verify Digital ID and Appointment PDF
+        shell: bash
+        run: |
+          set -e
+
+          APP="$ANDROID_WEB/app.js"
+
+          grep -q "function downloadPdf" "$APP"
+          grep -q "function savePdfBlob" "$APP"
+
+          grep -q "digitalIdPdf" "$APP"
+          grep -q "appointmentLetterPdf" "$APP"
+
+          grep -q "data-download-pdf=\"digitalIdPdf\"" "$APP"
+          grep -q "data-download-pdf=\"appointmentLetterPdf\"" "$APP"
+
+          echo "DIGITAL ID PDF: PASS"
+          echo "APPOINTMENT LETTER PDF: PASS"
+
+
+      # =====================================================
+      # 10. VERIFY FINAL WEB ASSETS
+      # =====================================================
+      - name: Verify Final Web Assets
+        shell: bash
+        run: |
+          set -e
+
+          test -s "$ANDROID_WEB/index.html"
+          test -s "$ANDROID_WEB/app.js"
+          test -s "$ANDROID_WEB/styles.css"
+          test -s "$ANDROID_WEB/config.js"
+
+          test -d "$ANDROID_WEB/assets"
+          test -d "$ANDROID_WEB/assets/book"
+
+          node --check "$ANDROID_WEB/app.js"
+
+          echo "FINAL WEB ASSETS: PASS"
+
+
+      # =====================================================
+      # 11. ANDROID + GRADLE
+      # =====================================================
+      - name: Setup Android and Gradle
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Create Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          gradle wrapper \
+            --gradle-version "$GRADLE_VERSION" \
+            --distribution-type bin
+
+          chmod +x gradlew
+
+          ./gradlew --version
+
+
+      # =====================================================
+      # 12. EXISTING RKMS SIGNING
+      # =====================================================
+      - name: Prepare RKMS Signing
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
+        run: |
+          set -e
+
+          test -n "$RKMS_KEYSTORE_BASE64"
+          test -n "$RKMS_KEYSTORE_PASSWORD"
+          test -n "$RKMS_KEY_ALIAS"
+          test -n "$RKMS_KEY_PASSWORD"
+
+          KEYSTORE="$RUNNER_TEMP/rkms-release.keystore"
+
+          printf '%s' "$RKMS_KEYSTORE_BASE64" \
+            | base64 --decode > "$KEYSTORE"
+
+          test -s "$KEYSTORE"
+
+          keytool -list \
+            -keystore "$KEYSTORE" \
+            -storepass "$RKMS_KEYSTORE_PASSWORD" \
+            -alias "$RKMS_KEY_ALIAS" \
+            >/dev/null
+
+          echo "RKMS_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
+          echo "RKMS_KEYSTORE_PASSWORD=$RKMS_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "RKMS_KEY_ALIAS=$RKMS_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "RKMS_KEY_PASSWORD=$RKMS_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+          echo "EXISTING RKMS SIGNING: PASS"
+
+
+      # =====================================================
+      # 13. BUILD RELEASE APK
+      # =====================================================
+      - name: Build Release APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          chmod +x gradlew
+
+          ./gradlew assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+          APK="$(
+            find "$PROJECT_DIR" \
+              -type f \
+              -path "*/build/outputs/apk/release/*.apk" \
+              -print \
+              -quit
+          )"
+
+          test -n "$APK"
+          test -s "$APK"
+
+          SIZE="$(stat -c%s "$APK")"
+
+          test "$SIZE" -gt 1000000
+
+          echo "APK=$APK" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "======================================"
+          echo "RKMS RELEASE APK BUILD SUCCESS"
+          echo "======================================"
+          echo ""
+
+          echo "APK:"
+          echo "$APK"
+
+          echo ""
+
+          ls -lh "$APK"
+
+
+      # =====================================================
+      # 14. VERIFY APK EXISTS
+      # =====================================================
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          test -n "$APK"
+          test -s "$APK"
+
+          SIZE="$(stat -c%s "$APK")"
+
+          test "$SIZE" -gt 1000000
+
+          echo "APK FILE: PASS"
+          echo "APK SIZE: $SIZE bytes"
+
+
+      # =====================================================
+      # 15. UPLOAD FINAL APK
+      # =====================================================
+      - name: Upload Final APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-Connect-Final-Report-PDF-Native
+          path: ${{ env.APK }}
+          if-no-files-found: error
+          retention-days: 14
+
+
+      # =====================================================
+      # 16. UPLOAD FINAL APP.JS
+      # =====================================================
+      - name: Upload Final app.js
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-Final-Report-PDF-Native-app-js
+          path: ${{ env.PROJECT_DIR }}/app/src/main/assets/www/app.js
+          if-no-files-found: error
+          retention-days: 14
+
+
+      # =====================================================
+      # 17. FINAL SUCCESS
+      # =====================================================
+      - name: Build Complete
+        shell: bash
+        run: |
+          echo ""
+          echo "================================================"
+          echo "       RKMS CONNECT APK BUILD SUCCESS"
+          echo "================================================"
+          echo ""
+          echo "Android Source               : PASS"
+          echo "Final V9 Web App             : PASS"
+          echo "Native PDF Patch             : PASS"
+          echo "Native PDF Bridge            : PASS"
+          echo "PDF Downloads Save           : PASS"
+          echo "Report View                  : PASS"
+          echo "Report PDF                   : PASS"
+          echo "Report Excel                 : PASS"
+          echo "Digital ID PDF               : PASS"
+          echo "Appointment Letter PDF       : PASS"
+          echo "Fix #1 Geographic Visibility : PASS"
+          echo "Fix #2 Appointment Hierarchy : PASS"
+          echo "Fix #3 Live Chat             : PASS"
+          echo "V9 Book 60 Pages             : PASS"
+          echo "FCM Native Source            : PASS"
+          echo "Existing RKMS Signing        : PASS"
+          echo "Release APK                  : PASS"
+          echo ""
+          echo "================================================"
