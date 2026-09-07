@@ -35,6 +35,16 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install PDF Validation Tools
+        shell: bash
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils python3-pil
+          command -v pdfinfo
+          command -v pdftoppm
+          pdfinfo -v 2>&1 | head -1
+
       - name: Prepare Android Project
         shell: bash
         run: |
@@ -66,6 +76,7 @@ jobs:
           ANDROID_WEB="$PROJECT_DIR/app/src/main/assets/www"
 
           test -s "$ZIP"
+
           rm -rf "$WEB" "$ANDROID_WEB"
           mkdir -p "$WEB" "$ANDROID_WEB"
 
@@ -83,13 +94,12 @@ jobs:
           test -d "$ROOT/assets"
 
           test -f "$ROOT/scripts/patch-android-pdf.py"
-          test -f "$ROOT/scripts/verify-report-download-scope.py"
-          test -f "$ROOT/scripts/verify-pdf-pipeline.py"
-          test -f "$ROOT/scripts/verify-pdf-runtime.js"
 
           node --check "$ROOT/app.js"
 
           test -f "$ROOT/supabase/migrations/20260907041549_report_download_scope_authorization_20260907.sql"
+          test -f "$ROOT/scripts/verify-report-download-scope.py"
+          test -f "$ROOT/scripts/verify-pdf-pipeline.py"
 
           python3 "$ROOT/scripts/verify-report-download-scope.py"
           python3 "$ROOT/scripts/verify-pdf-pipeline.py"
@@ -110,6 +120,29 @@ jobs:
             "$RUNNER_TEMP/rkms-pdf-runtime-render" >/dev/null
 
           test -s "$RUNNER_TEMP/rkms-pdf-runtime-render.png"
+
+          export RKMS_RENDER_PNG="$RUNNER_TEMP/rkms-pdf-runtime-render.png"
+
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          import os
+
+          p = Path(os.environ["RKMS_RENDER_PNG"])
+          im = Image.open(p).convert("RGB")
+
+          nonwhite = sum(
+              1 for px in im.getdata()
+              if min(px) < 245
+          )
+
+          print(f"PDF rendered non-white pixels: {nonwhite}")
+
+          if nonwhite < 1000:
+              raise SystemExit(
+                  "FAIL: PDF rendered image is effectively blank"
+              )
+          PY
 
           cp "$ROOT/index.html" "$ANDROID_WEB/"
           cp "$ROOT/app.js" "$ANDROID_WEB/"
@@ -195,7 +228,9 @@ jobs:
           grep -q "activateReportTab" "$APP"
           grep -q "rkms_get_report_download_data" "$APP"
 
-          grep -q 'state.role!=="officer"&&state.role!=="super_admin"' "$APP"
+          grep -q \
+            'state.role!=="officer"&&state.role!=="super_admin"' \
+            "$APP"
 
           grep -q \
             'GRANT EXECUTE ON FUNCTION public.rkms_get_report_download_data() TO authenticated' \
@@ -218,7 +253,7 @@ jobs:
           echo "V9 FIXES: PASS"
           echo "REPORT VIEW + SCOPED PDF PIPELINE: PASS"
           echo "PDF BUILDER RUNTIME/RENDER TEST: PASS"
-          echo "DIGITAL ID / APPOINTMENT LETTER CODE PATH: VERIFIED STATIC"
+          echo "DIGITAL ID / APPOINTMENT LETTER CODE PATH: VERIFIED STATIC (PHONE TEST REQUIRED)"
           echo "BOOK 60 PAGES: PASS"
 
       - name: Setup Android and Gradle
@@ -240,11 +275,11 @@ jobs:
             --distribution-type bin
 
           chmod +x gradlew
+
           ./gradlew --version
 
       - name: Prepare RKMS Signing
         working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
         env:
           RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
           RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
@@ -328,7 +363,7 @@ jobs:
           echo "=============================================="
           echo "Reports View                 : PASS"
           echo "Reports PDF + scope          : PASS"
-          echo "Digital ID / Appointment     : CODE VERIFIED"
+          echo "Digital ID / Appointment     : CODE PATH VERIFIED"
           echo "Android Native PDF Save      : PASS"
           echo "V9 Book 60 Pages             : PASS"
           echo "Release APK                  : PASS"
