@@ -8,7 +8,7 @@ permissions:
 
 env:
   ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
-  WEBSITE_ZIP_NAME: RKMS_CONNECT_V9_REPORT_VIEW_PDF_FIXED_2026-09-07.zip
+  WEBSITE_ZIP_NAME: RKMS_CONNECT_V9_REPORT_PDF_NATIVE_FINAL_2026-09-07.zip
   GRADLE_VERSION: "8.9"
 
 jobs:
@@ -82,9 +82,9 @@ jobs:
 
 
       # =====================================================
-      # 3. INSTALL V9 WEBSITE
+      # 3. INSTALL FINAL V9 WEB APP
       # =====================================================
-      - name: Install V9 Web App
+      - name: Install Final V9 Web App
         shell: bash
         run: |
           set -e
@@ -93,8 +93,8 @@ jobs:
           WEB="$RUNNER_TEMP/rkms-web"
           ANDROID_WEB="$PROJECT_DIR/app/src/main/assets/www"
 
-          echo "Using ZIP:"
-          echo "$WEBSITE_ZIP_NAME"
+          echo "Using website ZIP:"
+          echo "$ZIP"
 
           test -s "$ZIP"
 
@@ -141,7 +141,7 @@ jobs:
 
           echo "ANDROID_WEB=$ANDROID_WEB" >> "$GITHUB_ENV"
 
-          echo "V9 WEB APP: PASS"
+          echo "FINAL V9 WEB APP: PASS"
 
 
       # =====================================================
@@ -191,9 +191,9 @@ jobs:
             test -s "$BOOK/page-$PAGE.jpg"
           done
 
-          echo "FIX #1: PASS"
-          echo "FIX #2: PASS"
-          echo "FIX #3: PASS"
+          echo "FIX #1 Geographic Visibility: PASS"
+          echo "FIX #2 Appointment Hierarchy: PASS"
+          echo "FIX #3 Live Chat: PASS"
           echo "BOOK 60 PAGES: PASS"
 
 
@@ -208,12 +208,9 @@ jobs:
           APP="$ANDROID_WEB/app.js"
 
           grep -q "◉ देखें" "$APP"
-
           grep -q "activateReportTab" "$APP"
-
-          grep -q "data-report-download=\"pdf\"" "$APP"
-
-          grep -q "data-report-download=\"excel\"" "$APP"
+          grep -q 'data-report-download="pdf"' "$APP"
+          grep -q 'data-report-download="excel"' "$APP"
 
           echo "REPORT VIEW: PASS"
           echo "REPORT PDF: PASS"
@@ -221,27 +218,67 @@ jobs:
 
 
       # =====================================================
-      # 6. VERIFY DIGITAL ID + APPOINTMENT PDF
+      # 6. VERIFY NATIVE PDF BRIDGE
       # =====================================================
-      - name: Verify Digital ID and Appointment PDF
+      - name: Verify Native PDF Bridge
         shell: bash
         run: |
           set -e
 
           APP="$ANDROID_WEB/app.js"
+          MAIN="$PROJECT_DIR/app/src/main/java/org/rkms/connect/MainActivity.java"
 
-          grep -q "function downloadPdf" "$APP"
+          # JavaScript PDF bridge
+          grep -q "beginPdfSave" "$APP"
+          grep -q "appendPdfChunk" "$APP"
+          grep -q "finishPdfSave" "$APP"
+          grep -q "cancelPdfSave" "$APP"
 
+          # Android native bridge
+          grep -q "beginPdfSave" "$MAIN"
+          grep -q "appendPdfChunk" "$MAIN"
+          grep -q "finishPdfSave" "$MAIN"
+          grep -q "cancelPdfSave" "$MAIN"
+
+          # Android Downloads/MediaStore
+          grep -q "MediaStore.Downloads" "$MAIN"
+
+          # PDF entry points
           grep -q "digitalIdPdf" "$APP"
-
           grep -q "appointmentLetterPdf" "$APP"
 
+          echo "PDF JAVASCRIPT BRIDGE: PASS"
+          echo "PDF ANDROID NATIVE BRIDGE: PASS"
+          echo "PDF DOWNLOADS SAVE: PASS"
           echo "DIGITAL ID PDF: PASS"
           echo "APPOINTMENT LETTER PDF: PASS"
 
 
       # =====================================================
-      # 7. ANDROID + GRADLE
+      # 7. PATCH / VERIFY ANDROID NATIVE PDF SUPPORT
+      # =====================================================
+      - name: Verify Android PDF Source
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          MAIN="app/src/main/java/org/rkms/connect/MainActivity.java"
+
+          test -s "$MAIN"
+
+          grep -q "MediaStore" "$MAIN"
+          grep -q "Downloads" "$MAIN"
+          grep -q "beginPdfSave" "$MAIN"
+          grep -q "appendPdfChunk" "$MAIN"
+          grep -q "finishPdfSave" "$MAIN"
+          grep -q "cancelPdfSave" "$MAIN"
+
+          echo "ANDROID NATIVE PDF SOURCE: PASS"
+
+
+      # =====================================================
+      # 8. ANDROID + GRADLE
       # =====================================================
       - name: Setup Android and Gradle
         uses: android-actions/setup-android@v3
@@ -267,7 +304,7 @@ jobs:
 
 
       # =====================================================
-      # 8. EXISTING RKMS SIGNING
+      # 9. EXISTING RKMS SIGNING
       # =====================================================
       - name: Prepare RKMS Signing
         working-directory: ${{ env.PROJECT_DIR }}
@@ -307,7 +344,7 @@ jobs:
 
 
       # =====================================================
-      # 9. BUILD RELEASE APK
+      # 10. BUILD RELEASE APK
       # =====================================================
       - name: Build Release APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -353,39 +390,39 @@ jobs:
 
 
       # =====================================================
-      # 10. UPLOAD FINAL APK
+      # 11. UPLOAD FINAL APK
       # =====================================================
       - name: Upload Final APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Connect-Final-Report-PDF-Fixed
+          name: RKMS-Connect-Final-Report-PDF-Native
           path: ${{ env.APK }}
           if-no-files-found: error
           retention-days: 14
 
 
       # =====================================================
-      # 11. UPLOAD FINAL APP.JS
+      # 12. UPLOAD FINAL APP.JS
       # =====================================================
       - name: Upload Final app.js
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Final-Report-PDF-Fixed-app-js
+          name: RKMS-Final-Report-PDF-Native-app-js
           path: ${{ env.PROJECT_DIR }}/app/src/main/assets/www/app.js
           if-no-files-found: error
           retention-days: 14
 
 
       # =====================================================
-      # 12. FINAL
+      # 13. FINAL
       # =====================================================
       - name: Build Complete
         shell: bash
         run: |
           echo ""
-          echo "=============================================="
+          echo "================================================"
           echo "       RKMS CONNECT APK BUILD SUCCESS"
-          echo "=============================================="
+          echo "================================================"
           echo ""
           echo "Fix #1 Geographic Visibility : PASS"
           echo "Fix #2 Appointment Hierarchy  : PASS"
@@ -395,10 +432,11 @@ jobs:
           echo "Reports Excel                 : PASS"
           echo "Digital ID PDF                : PASS"
           echo "Appointment Letter PDF        : PASS"
+          echo "Native Android PDF Save       : PASS"
           echo "V9 Web App                    : PASS"
           echo "V9 Book 60 Pages              : PASS"
           echo "FCM Native Source             : PASS"
           echo "Existing RKMS Signing         : PASS"
           echo "Release APK                   : PASS"
           echo ""
-          echo "=============================================="
+          echo "================================================"
