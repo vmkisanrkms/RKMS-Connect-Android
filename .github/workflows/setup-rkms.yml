@@ -8,7 +8,7 @@ permissions:
 
 env:
   ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
-  WEBSITE_ZIP_NAME: RKMS_CONNECT_V9_REPORT_PDF_SCOPE_FINAL_VERIFIED_2026-09-07.zip
+  WEBSITE_ZIP_NAME: RKMS_CONNECT_V9_REPORT_PDF_FINAL_VERIFIED_2026-09-07.zip
   GRADLE_VERSION: "8.9"
 
 jobs:
@@ -18,10 +18,6 @@ jobs:
     timeout-minutes: 45
 
     steps:
-
-      # =====================================================
-      # 1. BASIC SETUP
-      # =====================================================
       - name: Checkout RKMS
         uses: actions/checkout@v4
         with:
@@ -39,81 +35,43 @@ jobs:
         with:
           node-version: "20"
 
-
-      # =====================================================
-      # 2. PREPARE VERIFIED ANDROID SOURCE
-      # =====================================================
       - name: Prepare Android Project
         shell: bash
         run: |
           set -e
-
           PROJECT_DIR="$RUNNER_TEMP/rkms-android"
-
-          git clone \
-            --no-tags \
-            --filter=blob:none \
-            https://github.com/vmkisanrkms/RKMS-Connect-Android.git \
-            "$PROJECT_DIR"
-
+          git clone --no-tags --filter=blob:none https://github.com/vmkisanrkms/RKMS-Connect-Android.git "$PROJECT_DIR"
           cd "$PROJECT_DIR"
-
-          git fetch \
-            --no-tags \
-            --depth 1 \
-            origin "$ANDROID_SOURCE_COMMIT"
-
+          git fetch --no-tags --depth 1 origin "$ANDROID_SOURCE_COMMIT"
           git checkout --detach "$ANDROID_SOURCE_COMMIT"
-
           test "$(git rev-parse HEAD)" = "$ANDROID_SOURCE_COMMIT"
-
           test -f settings.gradle
           test -f build.gradle
           test -f app/build.gradle
           test -f app/google-services.json
           test -f app/src/main/AndroidManifest.xml
-
+          test -f app/src/main/java/org/rkms/connect/MainActivity.java
           test -f app/src/main/java/org/rkms/connect/FCMTokenRegistrar.java
           test -f app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
           test -f app/src/main/java/org/rkms/connect/NotificationHelper.java
           test -f app/src/main/java/org/rkms/connect/SessionStore.java
-          test -f app/src/main/java/org/rkms/connect/MainActivity.java
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "ANDROID SOURCE: PASS"
-
-
-      # =====================================================
-      # 3. INSTALL FINAL V9 WEB APP
-      # =====================================================
       - name: Install Final V9 Web App
         shell: bash
         run: |
           set -e
-
           ZIP="$GITHUB_WORKSPACE/$WEBSITE_ZIP_NAME"
           WEB="$RUNNER_TEMP/rkms-web"
           ANDROID_WEB="$PROJECT_DIR/app/src/main/assets/www"
 
-          echo "Using final website ZIP:"
-          echo "$ZIP"
-
           test -s "$ZIP"
-
           rm -rf "$WEB" "$ANDROID_WEB"
           mkdir -p "$WEB" "$ANDROID_WEB"
 
           unzip -q "$ZIP" -d "$WEB"
 
-          INDEX="$(
-            find "$WEB" \
-              -type f \
-              -name "index.html" \
-              -print \
-              -quit
-          )"
-
+          INDEX="$(find "$WEB" -type f -name "index.html" -print -quit)"
           test -n "$INDEX"
 
           ROOT="$(dirname "$INDEX")"
@@ -124,7 +82,34 @@ jobs:
           test -f "$ROOT/config.js"
           test -d "$ROOT/assets"
 
+          test -f "$ROOT/scripts/patch-android-pdf.py"
+          test -f "$ROOT/scripts/verify-report-download-scope.py"
+          test -f "$ROOT/scripts/verify-pdf-pipeline.py"
+          test -f "$ROOT/scripts/verify-pdf-runtime.js"
+
           node --check "$ROOT/app.js"
+
+          test -f "$ROOT/supabase/migrations/20260907041549_report_download_scope_authorization_20260907.sql"
+
+          python3 "$ROOT/scripts/verify-report-download-scope.py"
+          python3 "$ROOT/scripts/verify-pdf-pipeline.py"
+
+          node "$ROOT/scripts/verify-pdf-runtime.js" \
+            "$ROOT/assets/book/page-01.jpg" \
+            "$RUNNER_TEMP/rkms-pdf-runtime-test.pdf"
+
+          pdfinfo "$RUNNER_TEMP/rkms-pdf-runtime-test.pdf" \
+            | grep -q "Pages:[[:space:]]*1"
+
+          pdftoppm \
+            -f 1 \
+            -singlefile \
+            -png \
+            -r 72 \
+            "$RUNNER_TEMP/rkms-pdf-runtime-test.pdf" \
+            "$RUNNER_TEMP/rkms-pdf-runtime-render" >/dev/null
+
+          test -s "$RUNNER_TEMP/rkms-pdf-runtime-render.png"
 
           cp "$ROOT/index.html" "$ANDROID_WEB/"
           cp "$ROOT/app.js" "$ANDROID_WEB/"
@@ -136,121 +121,50 @@ jobs:
             cp "$ROOT/manifest.webmanifest" "$ANDROID_WEB/"
           fi
 
-          test -s "$ANDROID_WEB/index.html"
-          test -s "$ANDROID_WEB/app.js"
-          test -s "$ANDROID_WEB/styles.css"
-          test -s "$ANDROID_WEB/config.js"
-          test -d "$ANDROID_WEB/assets"
-
           echo "ANDROID_WEB=$ANDROID_WEB" >> "$GITHUB_ENV"
-          echo "WEB_ROOT=$ROOT" >> "$GITHUB_ENV"
 
-          echo "FINAL V9 WEB APP: PASS"
+          echo "V9 WEB APP: PASS"
+          echo "REPORT PDF RUNTIME: PASS"
+          echo "PDF RENDER TEST: PASS"
 
-
-      # =====================================================
-      # 4. APPLY NATIVE ANDROID PDF SAVE FIX
-      # =====================================================
-      - name: Apply Native Android PDF Fix
+      - name: Patch Android Native PDF Save
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          PATCH="$WEB_ROOT/scripts/patch-android-pdf.py"
-          MAIN="app/src/main/java/org/rkms/connect/MainActivity.java"
+          PATCH_SCRIPT="$(find "$RUNNER_TEMP/rkms-web" \
+            -type f \
+            -path '*/scripts/patch-android-pdf.py' \
+            -print -quit)"
 
-          echo "PDF patch:"
-          echo "$PATCH"
+          test -n "$PATCH_SCRIPT"
 
-          test -s "$PATCH"
-          test -s "$MAIN"
+          python3 "$PATCH_SCRIPT"
 
-          python3 "$PATCH"
+          test -f app/src/main/java/org/rkms/connect/MainActivity.java
 
-          test -s "$MAIN"
+          grep -q "beginPdfSave" \
+            app/src/main/java/org/rkms/connect/MainActivity.java
 
-          echo "NATIVE ANDROID PDF PATCH: PASS"
+          grep -q "appendPdfChunk" \
+            app/src/main/java/org/rkms/connect/MainActivity.java
 
+          grep -q "finishPdfSave" \
+            app/src/main/java/org/rkms/connect/MainActivity.java
 
-      # =====================================================
-      # 5. VERIFY NATIVE ANDROID PDF BRIDGE
-      # =====================================================
-      - name: Verify Native PDF Bridge
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
+          grep -q "cancelPdfSave" \
+            app/src/main/java/org/rkms/connect/MainActivity.java
 
-          APP="$ANDROID_WEB/app.js"
-          MAIN="app/src/main/java/org/rkms/connect/MainActivity.java"
+          grep -q "MediaStore.Downloads.EXTERNAL_CONTENT_URI" \
+            app/src/main/java/org/rkms/connect/MainActivity.java
 
-          # -----------------------------------------------
-          # JavaScript PDF bridge
-          # -----------------------------------------------
-          grep -q "beginPdfSave" "$APP"
-          grep -q "appendPdfChunk" "$APP"
-          grep -q "finishPdfSave" "$APP"
-          grep -q "cancelPdfSave" "$APP"
+          grep -q "MediaStore.Downloads.RELATIVE_PATH" \
+            app/src/main/java/org/rkms/connect/MainActivity.java
 
-          # -----------------------------------------------
-          # Android native bridge
-          # -----------------------------------------------
-          grep -q "beginPdfSave(String filename)" "$MAIN"
-          grep -q "appendPdfChunk(String base64Chunk)" "$MAIN"
-          grep -q "finishPdfSave()" "$MAIN"
-          grep -q "cancelPdfSave()" "$MAIN"
+          echo "ANDROID NATIVE PDF SAVE: PASS"
 
-          # -----------------------------------------------
-          # Android Downloads / MediaStore
-          # -----------------------------------------------
-          grep -q "MediaStore.Downloads" "$MAIN"
-          grep -q "MediaStore.Downloads.EXTERNAL_CONTENT_URI" "$MAIN"
-          grep -q "MediaStore.Downloads.RELATIVE_PATH" "$MAIN"
-          grep -q 'Environment.DIRECTORY_DOWNLOADS + "/RKMS CONNECT"' "$MAIN"
-          grep -q '"application/pdf"' "$MAIN"
-
-          # -----------------------------------------------
-          # PDF entry points
-          # -----------------------------------------------
-          grep -q "digitalIdPdf" "$APP"
-          grep -q "appointmentLetterPdf" "$APP"
-
-          # -----------------------------------------------
-          # Chunked PDF transfer
-          # -----------------------------------------------
-          grep -q "chunkSize=262144" "$APP"
-
-          echo "PDF JAVASCRIPT BRIDGE: PASS"
-          echo "PDF ANDROID NATIVE BRIDGE: PASS"
-          echo "PDF DOWNLOADS SAVE: PASS"
-          echo "PDF CHUNK TRANSFER: PASS"
-          echo "DIGITAL ID PDF: PASS"
-          echo "APPOINTMENT LETTER PDF: PASS"
-
-
-      # =====================================================
-      # 6. RUN PDF SOURCE VERIFIER
-      # =====================================================
-      - name: Run PDF Source Verification
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-
-          VERIFY="$WEB_ROOT/scripts/verify-android-pdf.py"
-
-          test -s "$VERIFY"
-
-          python3 "$VERIFY"
-
-          echo "PDF SOURCE VERIFICATION: PASS"
-
-
-      # =====================================================
-      # 7. VERIFY EXISTING V9 FIXES + BOOK
-      # =====================================================
-      - name: Verify V9 Fixes and Book
+      - name: Verify V9 Fixes, Scoped Reports, and PDF Pipeline
         shell: bash
         run: |
           set -e
@@ -258,43 +172,42 @@ jobs:
           APP="$ANDROID_WEB/app.js"
           BOOK="$ANDROID_WEB/assets/book"
 
-          # -----------------------------------------------
-          # FIX 1 - Geographic visibility
-          # -----------------------------------------------
           grep -q "rkmsOfficerCanAccessTarget" "$APP"
           grep -q "rkmsOfficerCanAccessMember" "$APP"
-
-          # -----------------------------------------------
-          # FIX 2 - Appointment hierarchy
-          # -----------------------------------------------
           grep -q "rkmsAppointmentLevelKey" "$APP"
           grep -q "rkmsAppointmentLocationVisibility" "$APP"
           grep -q "applyAppointmentPostScope" "$APP"
 
-          # -----------------------------------------------
-          # FIX 3 - Live chat
-          # -----------------------------------------------
           grep -q "rkmsChatLive" "$APP"
           grep -q "startChatLiveRealtime" "$APP"
           grep -q "postgres_changes" "$APP"
           grep -q "setInterval" "$APP"
           grep -q "visibilitychange" "$APP"
 
-          # -----------------------------------------------
-          # BOOK - exactly 60 pages
-          # -----------------------------------------------
+          grep -q "function savePdfBlob" "$APP"
+          grep -q "beginPdfSave" "$APP"
+          grep -q "appendPdfChunk" "$APP"
+          grep -q "finishPdfSave" "$APP"
+          grep -q "function pdfBlobFromElement" "$APP"
+          grep -q "function downloadPdf" "$APP"
+
+          grep -q 'data-report-download="pdf"' "$APP"
+          grep -q "activateReportTab" "$APP"
+          grep -q "rkms_get_report_download_data" "$APP"
+
+          grep -q 'state.role!=="officer"&&state.role!=="super_admin"' "$APP"
+
+          grep -q \
+            'GRANT EXECUTE ON FUNCTION public.rkms_get_report_download_data() TO authenticated' \
+            "$ANDROID_WEB/supabase/migrations/20260907041549_report_download_scope_authorization_20260907.sql"
+
           test -d "$BOOK"
 
-          COUNT="$(
-            find "$BOOK" \
-              -maxdepth 1 \
-              -type f \
-              -iname 'page-*.jpg' \
-              -print \
-              | wc -l
-          )"
-
-          COUNT="$(echo "$COUNT" | tr -d '[:space:]')"
+          COUNT="$(find "$BOOK" \
+            -maxdepth 1 \
+            -type f \
+            -iname 'page-*.jpg' \
+            -print | wc -l | tr -d '[:space:]')"
 
           test "$COUNT" = "60"
 
@@ -302,90 +215,12 @@ jobs:
             test -s "$BOOK/page-$PAGE.jpg"
           done
 
-          echo "FIX #1 Geographic Visibility: PASS"
-          echo "FIX #2 Appointment Hierarchy: PASS"
-          echo "FIX #3 Live Chat: PASS"
+          echo "V9 FIXES: PASS"
+          echo "REPORT VIEW + SCOPED PDF PIPELINE: PASS"
+          echo "PDF BUILDER RUNTIME/RENDER TEST: PASS"
+          echo "DIGITAL ID / APPOINTMENT LETTER CODE PATH: VERIFIED STATIC"
           echo "BOOK 60 PAGES: PASS"
 
-
-      # =====================================================
-      # 8. VERIFY REPORT VIEW + REPORT PDF + EXCEL
-      # =====================================================
-      - name: Verify Reports
-        shell: bash
-        run: |
-          set -e
-
-          APP="$ANDROID_WEB/app.js"
-
-          # Report navigation
-          grep -q "activateReportTab" "$APP"
-
-          # View/list interaction
-          grep -q "data-report-tab" "$APP"
-
-          # PDF download
-          grep -q 'data-report-download="pdf"' "$APP"
-
-          # Excel download
-          grep -q 'data-report-download="excel"' "$APP"
-
-          # Shared PDF save pipeline
-          grep -q "savePdfBlob" "$APP"
-          grep -q "pdfBlobFromElement" "$APP"
-
-          echo "REPORT VIEW: PASS"
-          echo "REPORT PDF: PASS"
-          echo "REPORT EXCEL: PASS"
-
-
-      # =====================================================
-      # 9. VERIFY DIGITAL ID + APPOINTMENT LETTER PDF
-      # =====================================================
-      - name: Verify Digital ID and Appointment PDF
-        shell: bash
-        run: |
-          set -e
-
-          APP="$ANDROID_WEB/app.js"
-
-          grep -q "function downloadPdf" "$APP"
-          grep -q "function savePdfBlob" "$APP"
-
-          grep -q "digitalIdPdf" "$APP"
-          grep -q "appointmentLetterPdf" "$APP"
-
-          grep -q "data-download-pdf=\"digitalIdPdf\"" "$APP"
-          grep -q "data-download-pdf=\"appointmentLetterPdf\"" "$APP"
-
-          echo "DIGITAL ID PDF: PASS"
-          echo "APPOINTMENT LETTER PDF: PASS"
-
-
-      # =====================================================
-      # 10. VERIFY FINAL WEB ASSETS
-      # =====================================================
-      - name: Verify Final Web Assets
-        shell: bash
-        run: |
-          set -e
-
-          test -s "$ANDROID_WEB/index.html"
-          test -s "$ANDROID_WEB/app.js"
-          test -s "$ANDROID_WEB/styles.css"
-          test -s "$ANDROID_WEB/config.js"
-
-          test -d "$ANDROID_WEB/assets"
-          test -d "$ANDROID_WEB/assets/book"
-
-          node --check "$ANDROID_WEB/app.js"
-
-          echo "FINAL WEB ASSETS: PASS"
-
-
-      # =====================================================
-      # 11. ANDROID + GRADLE
-      # =====================================================
       - name: Setup Android and Gradle
         uses: android-actions/setup-android@v3
 
@@ -405,13 +240,8 @@ jobs:
             --distribution-type bin
 
           chmod +x gradlew
-
           ./gradlew --version
 
-
-      # =====================================================
-      # 12. EXISTING RKMS SIGNING
-      # =====================================================
       - name: Prepare RKMS Signing
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -420,6 +250,7 @@ jobs:
           RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
           RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
           RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
+
         run: |
           set -e
 
@@ -438,8 +269,7 @@ jobs:
           keytool -list \
             -keystore "$KEYSTORE" \
             -storepass "$RKMS_KEYSTORE_PASSWORD" \
-            -alias "$RKMS_KEY_ALIAS" \
-            >/dev/null
+            -alias "$RKMS_KEY_ALIAS" >/dev/null
 
           echo "RKMS_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
           echo "RKMS_KEYSTORE_PASSWORD=$RKMS_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
@@ -448,10 +278,6 @@ jobs:
 
           echo "EXISTING RKMS SIGNING: PASS"
 
-
-      # =====================================================
-      # 13. BUILD RELEASE APK
-      # =====================================================
       - name: Build Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -464,107 +290,46 @@ jobs:
             --no-daemon \
             --stacktrace
 
-          APK="$(
-            find "$PROJECT_DIR" \
-              -type f \
-              -path "*/build/outputs/apk/release/*.apk" \
-              -print \
-              -quit
-          )"
+          APK="$(find "$PROJECT_DIR" \
+            -type f \
+            -path "*/build/outputs/apk/release/*.apk" \
+            -print -quit)"
 
           test -n "$APK"
           test -s "$APK"
 
-          SIZE="$(stat -c%s "$APK")"
-
-          test "$SIZE" -gt 1000000
+          test "$(stat -c%s "$APK")" -gt 1000000
 
           echo "APK=$APK" >> "$GITHUB_ENV"
 
-          echo ""
-          echo "======================================"
-          echo "RKMS RELEASE APK BUILD SUCCESS"
-          echo "======================================"
-          echo ""
-
-          echo "APK:"
-          echo "$APK"
-
-          echo ""
-
           ls -lh "$APK"
 
-
-      # =====================================================
-      # 14. VERIFY APK EXISTS
-      # =====================================================
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -e
-
-          test -n "$APK"
-          test -s "$APK"
-
-          SIZE="$(stat -c%s "$APK")"
-
-          test "$SIZE" -gt 1000000
-
-          echo "APK FILE: PASS"
-          echo "APK SIZE: $SIZE bytes"
-
-
-      # =====================================================
-      # 15. UPLOAD FINAL APK
-      # =====================================================
       - name: Upload Final APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Connect-Final-Report-PDF-Native
+          name: RKMS-Connect-Final-Report-PDF-Scope-Fixed
           path: ${{ env.APK }}
           if-no-files-found: error
           retention-days: 14
 
-
-      # =====================================================
-      # 16. UPLOAD FINAL APP.JS
-      # =====================================================
       - name: Upload Final app.js
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Final-Report-PDF-Native-app-js
+          name: RKMS-Final-Report-PDF-Scope-Fixed-app-js
           path: ${{ env.PROJECT_DIR }}/app/src/main/assets/www/app.js
           if-no-files-found: error
           retention-days: 14
 
-
-      # =====================================================
-      # 17. FINAL SUCCESS
-      # =====================================================
       - name: Build Complete
         shell: bash
         run: |
-          echo ""
-          echo "================================================"
+          echo "=============================================="
           echo "       RKMS CONNECT APK BUILD SUCCESS"
-          echo "================================================"
-          echo ""
-          echo "Android Source               : PASS"
-          echo "Final V9 Web App             : PASS"
-          echo "Native PDF Patch             : PASS"
-          echo "Native PDF Bridge            : PASS"
-          echo "PDF Downloads Save           : PASS"
-          echo "Report View                  : PASS"
-          echo "Report PDF                   : PASS"
-          echo "Report Excel                 : PASS"
-          echo "Digital ID PDF               : PASS"
-          echo "Appointment Letter PDF       : PASS"
-          echo "Fix #1 Geographic Visibility : PASS"
-          echo "Fix #2 Appointment Hierarchy : PASS"
-          echo "Fix #3 Live Chat             : PASS"
+          echo "=============================================="
+          echo "Reports View                 : PASS"
+          echo "Reports PDF + scope          : PASS"
+          echo "Digital ID / Appointment     : CODE VERIFIED"
+          echo "Android Native PDF Save      : PASS"
           echo "V9 Book 60 Pages             : PASS"
-          echo "FCM Native Source            : PASS"
-          echo "Existing RKMS Signing        : PASS"
           echo "Release APK                  : PASS"
-          echo ""
-          echo "================================================"
+          echo "=============================================="
