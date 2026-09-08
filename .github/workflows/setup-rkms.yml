@@ -14,13 +14,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify supplied RKMS ZIP
+      - name: Verify RKMS source ZIP
         run: |
           test -f RKMS_CONNECT_APK_BUILD_READY.zip
           unzip -t RKMS_CONNECT_APK_BUILD_READY.zip >/dev/null
-          echo "RKMS_CONNECT_APK_BUILD_READY.zip verified"
+          echo "Source ZIP verified"
 
-      - name: Extract supplied RKMS source
+      - name: Extract RKMS source
         run: |
           rm -rf build
           mkdir -p build
@@ -28,9 +28,9 @@ jobs:
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
-          echo "Verified extracted source"
+          echo "RKMS source verified"
 
-      - name: Create Capacitor build configuration
+      - name: Create build package
         working-directory: build
         run: |
           cat > package.json <<'EOF'
@@ -42,15 +42,11 @@ jobs:
               "build": "rm -rf dist && mkdir dist && rsync -a --exclude='dist' --exclude='android' --exclude='node_modules' --exclude='.git' --exclude='.github' --exclude='*.zip' ./ dist/"
             },
             "dependencies": {
-              "@capacitor/core": "6.2.1",
-              "@capacitor/android": "6.2.1",
-              "@capacitor/app": "6.2.1",
-              "@capacitor/haptics": "6.2.1",
-              "@capacitor/keyboard": "6.2.1",
-              "@capacitor/status-bar": "6.2.1"
+              "@capacitor/core": "6.2.2",
+              "@capacitor/android": "6.2.2"
             },
             "devDependencies": {
-              "@capacitor/cli": "6.2.1"
+              "@capacitor/cli": "6.2.2"
             }
           }
           EOF
@@ -78,7 +74,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Capacitor dependencies
+      - name: Install Capacitor 6.2.2
         working-directory: build
         run: npm install --no-audit --no-fund
 
@@ -95,23 +91,18 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Create Capacitor Android project
+      - name: Create Android platform
         working-directory: build
         run: npx cap add android
 
-      - name: Sync RKMS application to Android
+      - name: Sync RKMS application
         working-directory: build
         run: npx cap sync android
 
       - name: Make Gradle executable
         run: chmod +x build/android/gradlew
 
-      - name: Build debug APK
+      - name: Build APK
         working-directory: build/android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
@@ -120,7 +111,7 @@ jobs:
           test -f build/android/app/build/outputs/apk/debug/app-debug.apk
           ls -lh build/android/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Upload RKMS CONNECT APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-CONNECT-debug-apk
