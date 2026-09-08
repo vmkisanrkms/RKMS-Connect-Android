@@ -10,17 +10,24 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: source
+
     steps:
-      - name: Checkout source
+      - name: Checkout exact RKMS source
         uses: actions/checkout@v4
 
-      - name: Verify RKMS source
+      - name: Verify source package layout
         run: |
           test -f app.js
           test -f index.html
-          echo "RKMS source root detected"
+          test -f config.js
+          echo "Verified: source/app.js"
+          echo "Verified: source/index.html"
+          echo "Verified: source/config.js"
 
-      - name: Create Android build configuration
+      - name: Create Capacitor package
         run: |
           cat > package.json <<'EOF'
           {
@@ -28,18 +35,18 @@ jobs:
             "version": "1.0.0",
             "private": true,
             "scripts": {
-              "build": "rm -rf dist && mkdir -p dist && rsync -a --exclude='.git' --exclude='.github' --exclude='node_modules' --exclude='android' --exclude='dist' ./ dist/"
+              "build": "rm -rf dist && mkdir -p dist && rsync -a --exclude='dist' --exclude='android' --exclude='node_modules' --exclude='.git' --exclude='.github' ./ dist/"
             },
             "dependencies": {
-              "@capacitor/core": "^6.2.1",
-              "@capacitor/android": "^6.2.1",
-              "@capacitor/app": "^6.2.1",
-              "@capacitor/haptics": "^6.2.1",
-              "@capacitor/keyboard": "^6.2.1",
-              "@capacitor/status-bar": "^6.2.1"
+              "@capacitor/core": "6.2.1",
+              "@capacitor/android": "6.2.1",
+              "@capacitor/app": "6.2.1",
+              "@capacitor/haptics": "6.2.1",
+              "@capacitor/keyboard": "6.2.1",
+              "@capacitor/status-bar": "6.2.1"
             },
             "devDependencies": {
-              "@capacitor/cli": "^6.2.1"
+              "@capacitor/cli": "6.2.1"
             }
           }
           EOF
@@ -58,11 +65,18 @@ jobs:
               "allowMixedContent": true,
               "captureInput": true,
               "webContentsDebuggingEnabled": false
+            },
+            "plugins": {
+              "SplashScreen": {
+                "launchShowDuration": 1500,
+                "backgroundColor": "#0f2c59",
+                "showSpinner": false
+              }
             }
           }
           EOF
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -70,37 +84,41 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Build web assets
+      - name: Build web application
         run: npm run build
 
-      - name: Create Capacitor Android project
+      - name: Create Android platform
         run: npx cap add android
 
-      - name: Sync Capacitor
+      - name: Sync RKMS web application
         run: npx cap sync android
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: '21'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build debug APK
-        working-directory: android
+      - name: Make Gradle executable
+        run: chmod +x android/gradlew
+
+      - name: Build APK
+        working-directory: source/android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Verify APK
+      - name: Verify APK exists
+        working-directory: source
         run: |
           test -f android/app/build/outputs/apk/debug/app-debug.apk
           ls -lh android/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Upload APK
+      - name: Upload RKMS CONNECT APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-CONNECT-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: source/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
