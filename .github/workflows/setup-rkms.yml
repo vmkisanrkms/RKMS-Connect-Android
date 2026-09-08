@@ -6,9 +6,6 @@ on:
 permissions:
   contents: read
 
-env:
-  PROJECT_DIR: stitch_uiux
-
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -17,27 +14,69 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Verify RKMS source
+        run: |
+          test -f app.js
+          test -f index.html
+          echo "RKMS source root detected"
+
+      - name: Create Android build configuration
+        run: |
+          cat > package.json <<'EOF'
+          {
+            "name": "rkms-connect",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "build": "rm -rf dist && mkdir -p dist && rsync -a --exclude='.git' --exclude='.github' --exclude='node_modules' --exclude='android' --exclude='dist' ./ dist/"
+            },
+            "dependencies": {
+              "@capacitor/core": "^6.2.1",
+              "@capacitor/android": "^6.2.1",
+              "@capacitor/app": "^6.2.1",
+              "@capacitor/haptics": "^6.2.1",
+              "@capacitor/keyboard": "^6.2.1",
+              "@capacitor/status-bar": "^6.2.1"
+            },
+            "devDependencies": {
+              "@capacitor/cli": "^6.2.1"
+            }
+          }
+          EOF
+
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "org.rkms.connect",
+            "appName": "RKMS CONNECT",
+            "webDir": "dist",
+            "bundledWebRuntime": false,
+            "server": {
+              "androidScheme": "https",
+              "cleartext": true
+            },
+            "android": {
+              "allowMixedContent": true,
+              "captureInput": true,
+              "webContentsDebuggingEnabled": false
+            }
+          }
+          EOF
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Install npm dependencies
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Install Capacitor Android packages
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          npm install @capacitor/core@^6.0.0 @capacitor/android@^6.0.0 @capacitor/app@^6.0.0 @capacitor/haptics@^6.0.0 @capacitor/keyboard@^6.0.0 @capacitor/status-bar@^6.0.0
-          npm install --save-dev @capacitor/cli@^6.0.0
+      - name: Build web assets
+        run: npm run build
 
-      - name: Create Android project
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Create Capacitor Android project
         run: npx cap add android
 
-      - name: Sync web app to Android
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Sync Capacitor
         run: npx cap sync android
 
       - name: Setup Java 21
@@ -50,13 +89,18 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Build debug APK
-        working-directory: ${{ env.PROJECT_DIR }}/android
+        working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Verify APK
+        run: |
+          test -f android/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-CONNECT-debug-apk
-          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
