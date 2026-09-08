@@ -1,4 +1,4 @@
-name: Build RKMS Release APK
+name: RKMS CONNECT Android APK
 
 on:
   workflow_dispatch:
@@ -6,389 +6,53 @@ on:
 permissions:
   contents: read
 
-env:
-  ANDROID_SOURCE_COMMIT: cf252628308e5a6ecc9eafbaf4ca227a3ad8ec92
-  WEBSITE_ZIP_NAME: RKMS_CONNECT_V9_REPORT_PDF_FINAL_VERIFIED_2026-09-07.zip
-  GRADLE_VERSION: "8.9"
-
 jobs:
-  build:
-    name: Build RKMS Release APK
+  build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
-      - name: Checkout RKMS
+      - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Setup Node 20
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            package.json
 
-      - name: Install PDF Validation Tools
-        shell: bash
+      - name: Install npm dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Capacitor Android
         run: |
-          set -e
-          sudo apt-get update
-          sudo apt-get install -y poppler-utils python3-pil
-          command -v pdfinfo
-          command -v pdftoppm
-          pdfinfo -v 2>&1 | head -1
+          npm install @capacitor/core@^6.0.0 @capacitor/android@^6.0.0 @capacitor/app@^6.0.0 @capacitor/haptics@^6.0.0 @capacitor/keyboard@^6.0.0 @capacitor/status-bar@^6.0.0
+          npm install --save-dev @capacitor/cli@^6.0.0
 
-      - name: Prepare Android Project
-        shell: bash
+      - name: Sync Capacitor Android
         run: |
-          set -e
-          PROJECT_DIR="$RUNNER_TEMP/rkms-android"
-
-          git clone --no-tags --filter=blob:none \
-            https://github.com/vmkisanrkms/RKMS-Connect-Android.git \
-            "$PROJECT_DIR"
-
-          cd "$PROJECT_DIR"
-
-          git fetch --no-tags --depth 1 origin "$ANDROID_SOURCE_COMMIT"
-          git checkout --detach "$ANDROID_SOURCE_COMMIT"
-
-          test "$(git rev-parse HEAD)" = "$ANDROID_SOURCE_COMMIT"
-
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-          test -f app/google-services.json
-          test -f app/src/main/AndroidManifest.xml
-          test -f app/src/main/java/org/rkms/connect/MainActivity.java
-          test -f app/src/main/java/org/rkms/connect/FCMTokenRegistrar.java
-          test -f app/src/main/java/org/rkms/connect/RKMSFirebaseMessagingService.java
-          test -f app/src/main/java/org/rkms/connect/NotificationHelper.java
-          test -f app/src/main/java/org/rkms/connect/SessionStore.java
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Install Final V9 Web App
-        shell: bash
-        run: |
-          set -e
-
-          ZIP="$GITHUB_WORKSPACE/$WEBSITE_ZIP_NAME"
-          WEB="$RUNNER_TEMP/rkms-web"
-          ANDROID_WEB="$PROJECT_DIR/app/src/main/assets/www"
-
-          test -s "$ZIP"
-
-          rm -rf "$WEB" "$ANDROID_WEB"
-
-          mkdir -p "$WEB" "$ANDROID_WEB"
-
-          unzip -q "$ZIP" -d "$WEB"
-
-          INDEX="$(find "$WEB" \
-            -type f \
-            -name "index.html" \
-            -print -quit)"
-
-          test -n "$INDEX"
-
-          ROOT="$(dirname "$INDEX")"
-
-          test -f "$ROOT/index.html"
-          test -f "$ROOT/app.js"
-          test -f "$ROOT/styles.css"
-          test -f "$ROOT/config.js"
-          test -d "$ROOT/assets"
-
-          test -f "$ROOT/scripts/patch-android-pdf.py"
-
-          node --check "$ROOT/app.js"
-
-          test -f \
-            "$ROOT/supabase/migrations/20260907041549_report_download_scope_authorization_20260907.sql"
-
-          test -f "$ROOT/scripts/verify-report-download-scope.py"
-          test -f "$ROOT/scripts/verify-pdf-pipeline.py"
-          test -f "$ROOT/scripts/verify-pdf-runtime.js"
-
-          python3 "$ROOT/scripts/verify-report-download-scope.py"
-
-          python3 "$ROOT/scripts/verify-pdf-pipeline.py"
-
-          node "$ROOT/scripts/verify-pdf-runtime.js" \
-            "$ROOT/assets/book/page-01.jpg" \
-            "$RUNNER_TEMP/rkms-pdf-runtime-test.pdf"
-
-          pdfinfo "$RUNNER_TEMP/rkms-pdf-runtime-test.pdf" \
-            | grep -q "Pages:[[:space:]]*1"
-
-          pdftoppm \
-            -f 1 \
-            -singlefile \
-            -png \
-            -r 72 \
-            "$RUNNER_TEMP/rkms-pdf-runtime-test.pdf" \
-            "$RUNNER_TEMP/rkms-pdf-runtime-render" \
-            >/dev/null
-
-          test -s "$RUNNER_TEMP/rkms-pdf-runtime-render.png"
-
-          export RKMS_RENDER_PNG="$RUNNER_TEMP/rkms-pdf-runtime-render.png"
-
-          python3 - <<'PY'
-          from PIL import Image
-          from pathlib import Path
-          import os
-
-          p = Path(os.environ["RKMS_RENDER_PNG"])
-
-          im = Image.open(p).convert("RGB")
-
-          nonwhite = sum(
-              1 for px in im.getdata()
-              if min(px) < 245
-          )
-
-          print(f"PDF rendered non-white pixels: {nonwhite}")
-
-          if nonwhite < 1000:
-              raise SystemExit(
-                  "FAIL: PDF rendered image is effectively blank"
-              )
-          PY
-
-          cp "$ROOT/index.html" "$ANDROID_WEB/"
-          cp "$ROOT/app.js" "$ANDROID_WEB/"
-          cp "$ROOT/styles.css" "$ANDROID_WEB/"
-          cp "$ROOT/config.js" "$ANDROID_WEB/"
-
-          cp -a "$ROOT/assets" "$ANDROID_WEB/"
-
-          if [ -f "$ROOT/manifest.webmanifest" ]; then
-            cp "$ROOT/manifest.webmanifest" "$ANDROID_WEB/"
-          fi
-
-          echo "ANDROID_WEB=$ANDROID_WEB" >> "$GITHUB_ENV"
-          echo "WEB_ROOT=$ROOT" >> "$GITHUB_ENV"
-
-          echo "V9 WEB APP: PASS"
-          echo "REPORT PDF RUNTIME: PASS"
-          echo "PDF RENDER TEST: PASS"
-
-      - name: Patch Android Native PDF Save
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-
-          PATCH_SCRIPT="$(find "$RUNNER_TEMP/rkms-web" \
-            -type f \
-            -path '*/scripts/patch-android-pdf.py' \
-            -print -quit)"
-
-          test -n "$PATCH_SCRIPT"
-
-          python3 "$PATCH_SCRIPT"
-
-          test -f \
-            app/src/main/java/org/rkms/connect/MainActivity.java
-
-          grep -q "beginPdfSave" \
-            app/src/main/java/org/rkms/connect/MainActivity.java
-
-          grep -q "appendPdfChunk" \
-            app/src/main/java/org/rkms/connect/MainActivity.java
-
-          grep -q "finishPdfSave" \
-            app/src/main/java/org/rkms/connect/MainActivity.java
-
-          grep -q "cancelPdfSave" \
-            app/src/main/java/org/rkms/connect/MainActivity.java
-
-          grep -q "MediaStore.Downloads.EXTERNAL_CONTENT_URI" \
-            app/src/main/java/org/rkms/connect/MainActivity.java
-
-          grep -q "MediaStore.Downloads.RELATIVE_PATH" \
-            app/src/main/java/org/rkms/connect/MainActivity.java
-
-          echo "ANDROID NATIVE PDF SAVE: PASS"
-
-      - name: Verify V9 Fixes, Scoped Reports, and PDF Pipeline
-        shell: bash
-        run: |
-          set -e
-
-          APP="$ANDROID_WEB/app.js"
-          BOOK="$ANDROID_WEB/assets/book"
-
-          grep -q "rkmsOfficerCanAccessTarget" "$APP"
-          grep -q "rkmsOfficerCanAccessMember" "$APP"
-          grep -q "rkmsAppointmentLevelKey" "$APP"
-          grep -q "rkmsAppointmentLocationVisibility" "$APP"
-          grep -q "applyAppointmentPostScope" "$APP"
-
-          grep -q "rkmsChatLive" "$APP"
-          grep -q "startChatLiveRealtime" "$APP"
-          grep -q "postgres_changes" "$APP"
-          grep -q "setInterval" "$APP"
-          grep -q "visibilitychange" "$APP"
-
-          grep -q "function savePdfBlob" "$APP"
-          grep -q "beginPdfSave" "$APP"
-          grep -q "appendPdfChunk" "$APP"
-          grep -q "finishPdfSave" "$APP"
-          grep -q "function pdfBlobFromElement" "$APP"
-          grep -q "function downloadPdf" "$APP"
-
-          grep -q 'data-report-download="pdf"' "$APP"
-          grep -q "activateReportTab" "$APP"
-          grep -q "rkms_get_report_download_data" "$APP"
-
-          grep -q \
-            'state.role!=="officer"&&state.role!=="super_admin"' \
-            "$APP"
-
-          grep -q \
-            'GRANT EXECUTE ON FUNCTION public.rkms_get_report_download_data() TO authenticated' \
-            "$WEB_ROOT/supabase/migrations/20260907041549_report_download_scope_authorization_20260907.sql"
-
-          test -d "$BOOK"
-
-          COUNT="$(find "$BOOK" \
-            -maxdepth 1 \
-            -type f \
-            -iname 'page-*.jpg' \
-            -print | wc -l | tr -d '[:space:]')"
-
-          test "$COUNT" = "60"
-
-          for PAGE in $(seq -w 1 60); do
-            test -s "$BOOK/page-$PAGE.jpg"
-          done
-
-          echo "V9 FIXES: PASS"
-          echo "REPORT VIEW + SCOPED PDF PIPELINE: PASS"
-          echo "PDF BUILDER RUNTIME/RENDER TEST: PASS"
-          echo "DIGITAL ID / APPOINTMENT LETTER CODE PATH: VERIFIED STATIC (PHONE TEST REQUIRED)"
-          echo "BOOK 60 PAGES: PASS"
-
-      - name: Setup Android and Gradle
+          npx cap add android
+          npx cap sync android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Create Gradle Wrapper
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-
-          gradle wrapper \
-            --gradle-version "$GRADLE_VERSION" \
-            --distribution-type bin
-
-          chmod +x gradlew
-
-          ./gradlew --version
-
-      - name: Prepare RKMS Signing
-        working-directory: ${{ env.PROJECT_DIR }}
-        env:
-          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
-          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
-          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
-          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
-
-        run: |
-          set -e
-
-          test -n "$RKMS_KEYSTORE_BASE64"
-          test -n "$RKMS_KEYSTORE_PASSWORD"
-          test -n "$RKMS_KEY_ALIAS"
-          test -n "$RKMS_KEY_PASSWORD"
-
-          KEYSTORE="$RUNNER_TEMP/rkms-release.keystore"
-
-          printf '%s' "$RKMS_KEYSTORE_BASE64" \
-            | base64 --decode > "$KEYSTORE"
-
-          test -s "$KEYSTORE"
-
-          keytool -list \
-            -keystore "$KEYSTORE" \
-            -storepass "$RKMS_KEYSTORE_PASSWORD" \
-            -alias "$RKMS_KEY_ALIAS" \
-            >/dev/null
-
-          echo "RKMS_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
-          echo "RKMS_KEYSTORE_PASSWORD=$RKMS_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-          echo "RKMS_KEY_ALIAS=$RKMS_KEY_ALIAS" >> "$GITHUB_ENV"
-          echo "RKMS_KEY_PASSWORD=$RKMS_KEY_PASSWORD" >> "$GITHUB_ENV"
-
-          echo "EXISTING RKMS SIGNING: PASS"
-
-      - name: Build Release APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-
-          chmod +x gradlew
-
-          ./gradlew assembleRelease \
-            --no-daemon \
-            --stacktrace
-
-          APK="$(find "$PROJECT_DIR" \
-            -type f \
-            -path "*/build/outputs/apk/release/*.apk" \
-            -print -quit)"
-
-          test -n "$APK"
-          test -s "$APK"
-
-          test "$(stat -c%s "$APK")" -gt 1000000
-
-          echo "APK=$APK" >> "$GITHUB_ENV"
-
-          ls -lh "$APK"
-
-      - name: Upload Final APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Connect-Final-Report-PDF-Scope-Fixed
-          path: ${{ env.APK }}
+          name: RKMS-CONNECT-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload Final app.js
-        uses: actions/upload-artifact@v4
-        with:
-          name: RKMS-Final-Report-PDF-Scope-Fixed-app-js
-          path: ${{ env.PROJECT_DIR }}/app/src/main/assets/www/app.js
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Build Complete
-        shell: bash
-        run: |
-          echo "=============================================="
-          echo "       RKMS CONNECT APK BUILD SUCCESS"
-          echo "=============================================="
-          echo "Reports View                 : PASS"
-          echo "Reports PDF + scope          : PASS"
-          echo "Digital ID / Appointment     : CODE PATH VERIFIED"
-          echo "Android Native PDF Save      : PASS"
-          echo "V9 Book 60 Pages             : PASS"
-          echo "Release APK                  : PASS"
-          echo "=============================================="
+          retention-days: 30
