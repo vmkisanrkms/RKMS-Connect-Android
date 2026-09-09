@@ -16,7 +16,6 @@ jobs:
     timeout-minutes: 30
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -24,13 +23,10 @@ jobs:
         shell: bash
         run: |
           set -e
-
           rm -rf build
           mkdir -p build
 
           if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
-            echo "Using repository RKMS source."
-
             rsync -a \
               --exclude="build/" \
               --exclude="android/" \
@@ -39,7 +35,6 @@ jobs:
               --exclude=".github/" \
               --exclude="*.zip" \
               ./ build/
-
           else
             ZIP_FILE=""
 
@@ -59,29 +54,18 @@ jobs:
               ZIP_FILE="$(find . -maxdepth 1 -type f -name 'RKMS*.zip' | head -n 1)"
             fi
 
-            if [ -z "$ZIP_FILE" ]; then
-              echo "ERROR: RKMS source not found."
-              exit 1
-            fi
-
-            echo "Using source: $ZIP_FILE"
+            test -n "$ZIP_FILE"
 
             unzip -q "$ZIP_FILE" -d build
           fi
 
           if [ ! -f build/app.js ]; then
             APP_JS="$(find build -type f -name app.js | head -n 1)"
-
-            if [ -z "$APP_JS" ]; then
-              echo "ERROR: app.js not found."
-              exit 1
-            fi
+            test -n "$APP_JS"
 
             SOURCE_DIR="$(dirname "$APP_JS")"
-
             rm -rf build-source
-            mkdir -p build-source
-
+            mkdir build-source
             rsync -a "$SOURCE_DIR"/ build-source/
 
             rm -rf build
@@ -99,13 +83,12 @@ jobs:
 
           test "$HASH" = "731117bca8a9b884bbe796b3a903e270f4b05b5fbf20bc3303ca0041e5125358"
 
-          echo "RKMS logo verified."
+          echo "RKMS source verified."
 
       - name: Verify JavaScript
         run: |
           set -e
           node --check build/app.js
-          echo "JavaScript syntax OK."
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -114,10 +97,7 @@ jobs:
 
       - name: Create Capacitor configuration
         working-directory: build
-        shell: bash
         run: |
-          set -e
-
           cat > package.json <<'EOF'
           {
             "name": "rkms",
@@ -178,7 +158,6 @@ jobs:
 
       - name: Verify FCM plugin
         working-directory: build
-        shell: bash
         run: |
           set -e
 
@@ -200,46 +179,32 @@ jobs:
           set -e
 
           if [ -n "${RKMS_GOOGLE_SERVICES_JSON:-}" ]; then
-
             printf '%s' "$RKMS_GOOGLE_SERVICES_JSON" \
               > build/android/app/google-services.json
 
-            echo "Firebase installed from GitHub Secret."
-
           elif [ -s build/android-config/google-services.json ]; then
-
             cp build/android-config/google-services.json \
               build/android/app/google-services.json
 
-            echo "Firebase installed from RKMS source."
-
           elif [ -s android-config/google-services.json ]; then
-
             cp android-config/google-services.json \
               build/android/app/google-services.json
 
-            echo "Firebase installed from repository."
-
           else
-
             echo "ERROR: Firebase configuration missing."
             exit 1
-
           fi
 
           test -s build/android/app/google-services.json
 
-          echo "Firebase configuration verified."
+          echo "Firebase verified."
 
       - name: Enable Google Services
         working-directory: build/android
-        shell: bash
         run: |
           set -e
 
-          if [ -s app/google-services.json ]; then
-
-            python3 <<'PY'
+          python3 <<'PY'
           from pathlib import Path
 
           root = Path("build.gradle")
@@ -254,8 +219,7 @@ jobs:
                   "    dependencies {\n"
                   "        classpath 'com.google.gms:google-services:4.4.2'\n"
                   "    }\n"
-                  "}\n\n"
-                  + root_text
+                  "}\n\n" + root_text
               )
               root.write_text(root_text)
 
@@ -263,10 +227,6 @@ jobs:
               app_text += "\napply plugin: 'com.google.gms.google-services'\n"
               app.write_text(app_text)
           PY
-
-            echo "Google Services enabled."
-
-          fi
 
       - name: Install RKMS launcher icon
         shell: bash
@@ -304,14 +264,9 @@ jobs:
           cp "$LOGO" "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
           STRINGS="$RES/values/strings.xml"
-
-          if grep -q '<string name="app_name">' "$STRINGS"; then
-            sed -i \
-              's#<string name="app_name">.*</string>#<string name="app_name">RKMS</string>#' \
-              "$STRINGS"
-          else
-            printf '\n<string name="app_name">RKMS</string>\n' >> "$STRINGS"
-          fi
+          sed -i \
+            's#<string name="app_name">.*</string>#<string name="app_name">RKMS</string>#' \
+            "$STRINGS"
 
           MANIFEST="build/android/app/src/main/AndroidManifest.xml"
 
@@ -323,10 +278,7 @@ jobs:
             's#android:roundIcon="[^"]*"#android:roundIcon="@mipmap/ic_launcher_round"#g' \
             "$MANIFEST"
 
-          test -s "$RES/mipmap-xxxhdpi/ic_launcher.png"
-
-          echo "RKMS launcher icon installed."
-          echo "App name: RKMS"
+          echo "RKMS launcher configured."
 
       - name: Make Gradle executable
         run: |
@@ -348,7 +300,7 @@ jobs:
 
           test -s "$APK"
 
-          echo "APK successfully created."
+          echo "APK created:"
           ls -lh "$APK"
 
       - name: Upload RKMS APK
