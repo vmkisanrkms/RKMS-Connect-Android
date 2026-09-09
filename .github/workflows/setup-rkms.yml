@@ -16,29 +16,37 @@ jobs:
 
       - name: Verify RKMS source
         run: |
-          if [ -f RKMS_CONNECT_V9_FIXED_SIGNATURE_PDA_PASSWORD_PROTECTED_NATIONAL_FINAL.zip ]; then
-            echo "Using final RKMS source ZIP"
-            unzip -t RKMS_CONNECT_V9_FIXED_SIGNATURE_PDA_PASSWORD_PROTECTED_NATIONAL_FINAL.zip >/dev/null
-          elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
-            echo "Using APK build source ZIP"
-            unzip -t RKMS_CONNECT_APK_BUILD_READY.zip >/dev/null
-          elif [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
+          set -e
+
+          if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
             echo "Using direct RKMS source files"
+
+          elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
+            echo "Using RKMS_CONNECT_APK_BUILD_READY.zip"
+            unzip -t RKMS_CONNECT_APK_BUILD_READY.zip >/dev/null
+
           else
-            echo "ERROR: RKMS source not found"
-            exit 1
+            ZIP_FILE=$(find . -maxdepth 1 -type f -name 'RKMS_CONNECT*.zip' | head -n 1)
+
+            if [ -n "$ZIP_FILE" ]; then
+              echo "Using source ZIP: $ZIP_FILE"
+              unzip -t "$ZIP_FILE" >/dev/null
+            else
+              echo "ERROR: RKMS source not found"
+              echo "Repository files:"
+              find . -maxdepth 2 -type f | sort
+              exit 1
+            fi
           fi
 
       - name: Prepare RKMS source
         run: |
+          set -e
+
           rm -rf build
           mkdir -p build
 
-          if [ -f RKMS_CONNECT_V9_FIXED_SIGNATURE_PDA_PASSWORD_PROTECTED_NATIONAL_FINAL.zip ]; then
-            unzip -q RKMS_CONNECT_V9_FIXED_SIGNATURE_PDA_PASSWORD_PROTECTED_NATIONAL_FINAL.zip -d build
-          elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
-            unzip -q RKMS_CONNECT_APK_BUILD_READY.zip -d build
-          else
+          if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
             rsync -a \
               --exclude='.git' \
               --exclude='.github' \
@@ -47,6 +55,26 @@ jobs:
               --exclude='node_modules' \
               --exclude='*.zip' \
               ./ build/
+
+          elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
+            unzip -q RKMS_CONNECT_APK_BUILD_READY.zip -d build
+
+          else
+            ZIP_FILE=$(find . -maxdepth 1 -type f -name 'RKMS_CONNECT*.zip' | head -n 1)
+            unzip -q "$ZIP_FILE" -d build
+          fi
+
+          # Handle ZIPs that contain one extra top-level folder.
+          if [ ! -f build/app.js ]; then
+            APP_JS=$(find build -type f -name app.js | head -n 1)
+
+            if [ -n "$APP_JS" ]; then
+              SOURCE_DIR=$(dirname "$APP_JS")
+              mkdir -p build-source
+              rsync -a "$SOURCE_DIR"/ build-source/
+              rm -rf build
+              mv build-source build
+            fi
           fi
 
           test -f build/app.js
@@ -54,6 +82,11 @@ jobs:
           test -f build/config.js
 
           echo "RKMS source verified"
+
+      - name: Verify RKMS JavaScript
+        run: |
+          node --check build/app.js
+          echo "app.js syntax verified"
 
       - name: Create Capacitor build package
         working-directory: build
@@ -68,7 +101,8 @@ jobs:
             },
             "dependencies": {
               "@capacitor/core": "6.2.2",
-              "@capacitor/android": "6.2.2"
+              "@capacitor/android": "6.2.2",
+              "@capacitor/app": "6.0.1"
             },
             "devDependencies": {
               "@capacitor/cli": "6.2.2"
@@ -133,9 +167,11 @@ jobs:
 
       - name: Verify APK
         run: |
-          test -f build/android/app/build/outputs/apk/debug/app-debug.apk
+          set -e
+          APK="build/android/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
           echo "APK successfully created:"
-          ls -lh build/android/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
