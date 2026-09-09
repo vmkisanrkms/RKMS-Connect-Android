@@ -14,23 +14,48 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify RKMS source ZIP
+      - name: Verify RKMS source
         run: |
-          test -f RKMS_CONNECT_APK_BUILD_READY.zip
-          unzip -t RKMS_CONNECT_APK_BUILD_READY.zip >/dev/null
-          echo "Source ZIP verified"
+          if [ -f RKMS_CONNECT_V9_FIXED_SIGNATURE_PDA_PASSWORD_PROTECTED_NATIONAL_FINAL.zip ]; then
+            echo "Using final RKMS source ZIP"
+            unzip -t RKMS_CONNECT_V9_FIXED_SIGNATURE_PDA_PASSWORD_PROTECTED_NATIONAL_FINAL.zip >/dev/null
+          elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
+            echo "Using APK build source ZIP"
+            unzip -t RKMS_CONNECT_APK_BUILD_READY.zip >/dev/null
+          elif [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
+            echo "Using direct RKMS source files"
+          else
+            echo "ERROR: RKMS source not found"
+            exit 1
+          fi
 
-      - name: Extract RKMS source
+      - name: Prepare RKMS source
         run: |
           rm -rf build
           mkdir -p build
-          unzip -q RKMS_CONNECT_APK_BUILD_READY.zip -d build
+
+          if [ -f RKMS_CONNECT_V9_FIXED_SIGNATURE_PDA_PASSWORD_PROTECTED_NATIONAL_FINAL.zip ]; then
+            unzip -q RKMS_CONNECT_V9_FIXED_SIGNATURE_PDA_PASSWORD_PROTECTED_NATIONAL_FINAL.zip -d build
+          elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
+            unzip -q RKMS_CONNECT_APK_BUILD_READY.zip -d build
+          else
+            rsync -a \
+              --exclude='.git' \
+              --exclude='.github' \
+              --exclude='build' \
+              --exclude='android' \
+              --exclude='node_modules' \
+              --exclude='*.zip' \
+              ./ build/
+          fi
+
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
+
           echo "RKMS source verified"
 
-      - name: Create build package
+      - name: Create Capacitor build package
         working-directory: build
         run: |
           cat > package.json <<'EOF'
@@ -39,7 +64,7 @@ jobs:
             "version": "1.0.0",
             "private": true,
             "scripts": {
-              "build": "rm -rf dist && mkdir dist && rsync -a --exclude='dist' --exclude='android' --exclude='node_modules' --exclude='.git' --exclude='.github' --exclude='*.zip' ./ dist/"
+              "build": "rm -rf dist && mkdir -p dist && rsync -a --exclude='dist' --exclude='android' --exclude='node_modules' --exclude='.git' --exclude='.github' --exclude='*.zip' ./ dist/"
             },
             "dependencies": {
               "@capacitor/core": "6.2.2",
@@ -74,7 +99,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Capacitor 6.2.2
+      - name: Install Capacitor dependencies
         working-directory: build
         run: npm install --no-audit --no-fund
 
@@ -102,13 +127,14 @@ jobs:
       - name: Make Gradle executable
         run: chmod +x build/android/gradlew
 
-      - name: Build APK
+      - name: Build Debug APK
         working-directory: build/android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Verify APK
         run: |
           test -f build/android/app/build/outputs/apk/debug/app-debug.apk
+          echo "APK successfully created:"
           ls -lh build/android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
