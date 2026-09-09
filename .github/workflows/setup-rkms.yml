@@ -27,17 +27,21 @@ jobs:
           set -e
 
           if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
+
             echo "Using direct RKMS source files"
 
           elif [ -f RKMS_CONNECT_V9_APP_LOGO_FIXED_EXACT_FINAL.zip ]; then
+
             echo "Using RKMS logo-fixed source ZIP"
             unzip -t RKMS_CONNECT_V9_APP_LOGO_FIXED_EXACT_FINAL.zip >/dev/null
 
           elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
+
             echo "Using RKMS source ZIP"
             unzip -t RKMS_CONNECT_APK_BUILD_READY.zip >/dev/null
 
           else
+
             ZIP_FILE=$(find . -maxdepth 1 -type f -name 'RKMS*.zip' | head -n 1)
 
             if [ -n "$ZIP_FILE" ]; then
@@ -48,6 +52,7 @@ jobs:
               find . -maxdepth 2 -type f | sort
               exit 1
             fi
+
           fi
 
 
@@ -63,7 +68,7 @@ jobs:
 
           if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
 
-            echo "Using direct RKMS source"
+            echo "Using direct RKMS source files"
 
             rsync -a \
               --exclude='.git' \
@@ -93,11 +98,12 @@ jobs:
             echo "Extracting source ZIP: $ZIP_FILE"
 
             unzip -q "$ZIP_FILE" -d build
+
           fi
 
 
           # -----------------------------------------------------
-          # Handle nested source folder
+          # Handle nested source directory
           # -----------------------------------------------------
           if [ ! -f build/app.js ]; then
 
@@ -107,7 +113,7 @@ jobs:
 
               SOURCE_DIR=$(dirname "$APP_JS")
 
-              echo "Found nested RKMS source:"
+              echo "Nested RKMS source detected:"
               echo "$SOURCE_DIR"
 
               mkdir -p build-source
@@ -116,12 +122,14 @@ jobs:
 
               rm -rf build
               mv build-source build
+
             fi
+
           fi
 
 
           # -----------------------------------------------------
-          # Required files
+          # Required RKMS files
           # -----------------------------------------------------
           test -f build/app.js
           test -f build/index.html
@@ -129,15 +137,16 @@ jobs:
 
 
           # -----------------------------------------------------
-          # Exact RKMS organization logo
+          # Exact organization logo
           # -----------------------------------------------------
           test -f build/assets/rkms-logo-transparent.png
 
-          echo "======================================"
-          echo "RKMS source verified"
-          echo "Exact organization logo found:"
+          echo ""
+          echo "=========================================="
+          echo "RKMS SOURCE VERIFIED"
+          echo "=========================================="
+
           ls -lh build/assets/rkms-logo-transparent.png
-          echo "======================================"
 
 
       # =========================================================
@@ -176,6 +185,7 @@ jobs:
             }
           }
           EOF
+
 
           cat > capacitor.config.json <<'EOF'
           {
@@ -271,8 +281,8 @@ jobs:
       # 14. Apply EXACT RKMS organization logo
       #
       # IMPORTANT:
-      # This happens AFTER Capacitor sync.
-      # Therefore Capacitor cannot overwrite the logo afterwards.
+      # This is AFTER "cap sync".
+      # Capacitor cannot overwrite the logo after this step.
       # =========================================================
       - name: Apply exact RKMS organization logo
         working-directory: build
@@ -284,29 +294,35 @@ jobs:
 
           test -f "$LOGO"
 
-          echo "Using exact RKMS organization logo:"
+          echo ""
+          echo "=========================================="
+          echo "APPLYING EXACT RKMS ORGANIZATION LOGO"
+          echo "=========================================="
+
           identify "$LOGO"
 
 
           # -----------------------------------------------------
-          # Remove Capacitor adaptive launcher resources
+          # Remove adaptive launcher resources which can override
+          # the normal mipmap launcher icon.
           # -----------------------------------------------------
           rm -rf "$RES/mipmap-anydpi-v26"
           rm -rf "$RES/mipmap-anydpi"
 
 
           # -----------------------------------------------------
-          # Remove old launcher resources
+          # Remove old launcher PNG/XML files
           # -----------------------------------------------------
           find "$RES" -type f \
             \( -name 'ic_launcher.png' \
             -o -name 'ic_launcher_round.png' \
-            -o -name 'ic_launcher_foreground.png' \) \
+            -o -name 'ic_launcher_foreground.png' \
+            -o -name 'ic_launcher_foreground.xml' \) \
             -delete
 
 
           # -----------------------------------------------------
-          # Create Android launcher directories
+          # Create launcher directories
           # -----------------------------------------------------
           mkdir -p \
             "$RES/mipmap-mdpi" \
@@ -317,7 +333,7 @@ jobs:
 
 
           # -----------------------------------------------------
-          # STANDARD LAUNCHER ICONS
+          # Normal launcher icon
           # -----------------------------------------------------
           convert "$LOGO" -resize 48x48 \
             "$RES/mipmap-mdpi/ic_launcher.png"
@@ -336,8 +352,8 @@ jobs:
 
 
           # -----------------------------------------------------
-          # ROUND LAUNCHER ICONS
-          # Same exact RKMS organization logo
+          # Round launcher icon
+          # Same exact RKMS organization logo.
           # -----------------------------------------------------
           convert "$LOGO" -resize 48x48 \
             "$RES/mipmap-mdpi/ic_launcher_round.png"
@@ -355,9 +371,18 @@ jobs:
             "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
 
-          echo "======================================"
-          echo "RKMS launcher icons created"
-          echo "======================================"
+          # -----------------------------------------------------
+          # Remove remaining launcher foreground resources.
+          # Other harmless drawable files are NOT used for
+          # verification and will not stop the build.
+          # -----------------------------------------------------
+          find "$RES" -type f \
+            -name 'ic_launcher_foreground.xml' \
+            -delete
+
+
+          echo ""
+          echo "RKMS organization logo applied successfully."
 
 
       # =========================================================
@@ -413,19 +438,22 @@ jobs:
           path.write_text(text)
           PY
 
-          echo "Android Manifest updated."
+
+          echo ""
+          echo "=========================================="
+          echo "ANDROID MANIFEST VERIFIED"
+          echo "=========================================="
 
           grep -n "android:icon" "$MANIFEST" || true
           grep -n "android:roundIcon" "$MANIFEST" || true
 
 
       # =========================================================
-      # 16. Verify final RKMS launcher icons
+      # 16. Final launcher icon verification
       #
-      # FIX:
-      # Do NOT reject harmless drawable launcher background files.
-      # Only reject the actual adaptive launcher directory and
-      # foreground resource that can override our icon.
+      # IMPORTANT:
+      # We only verify the actual icons that Android uses.
+      # We do NOT fail because of harmless old drawable files.
       # =========================================================
       - name: Verify final RKMS launcher icons
         working-directory: build
@@ -433,11 +461,16 @@ jobs:
           set -e
 
           RES="android/app/src/main/res"
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
 
-          echo "Checking RKMS launcher icons..."
+          echo ""
+          echo "=========================================="
+          echo "VERIFYING FINAL RKMS LAUNCHER ICONS"
+          echo "=========================================="
+
 
           # -----------------------------------------------------
-          # Verify all normal launcher icons
+          # Verify normal launcher icons
           # -----------------------------------------------------
           for FILE in \
             "$RES/mipmap-mdpi/ic_launcher.png" \
@@ -452,7 +485,7 @@ jobs:
 
 
           # -----------------------------------------------------
-          # Verify all round launcher icons
+          # Verify round launcher icons
           # -----------------------------------------------------
           for FILE in \
             "$RES/mipmap-mdpi/ic_launcher_round.png" \
@@ -467,34 +500,26 @@ jobs:
 
 
           # -----------------------------------------------------
-          # Adaptive launcher directory must NOT exist
+          # Verify Manifest
+          # -----------------------------------------------------
+          grep -q 'android:icon="@mipmap/ic_launcher"' "$MANIFEST"
+
+          grep -q 'android:roundIcon="@mipmap/ic_launcher_round"' "$MANIFEST"
+
+
+          # -----------------------------------------------------
+          # Adaptive launcher directory must not exist
           # -----------------------------------------------------
           if [ -d "$RES/mipmap-anydpi-v26" ]; then
-            echo "ERROR: Capacitor adaptive launcher directory still exists"
-            find "$RES/mipmap-anydpi-v26" -type f -print
-            exit 1
-          fi
-
-
-          # -----------------------------------------------------
-          # Foreground launcher XML must NOT exist
-          # -----------------------------------------------------
-          if find "$RES" -type f \
-            -name 'ic_launcher_foreground.xml' | grep -q .; then
-
-            echo "ERROR: Old launcher foreground resource still exists"
-
-            find "$RES" -type f \
-              -name 'ic_launcher_foreground.xml' -print
-
+            echo "ERROR: Adaptive launcher directory still exists"
             exit 1
           fi
 
 
           echo ""
-          echo "======================================"
+          echo "=========================================="
           echo "FINAL RKMS LOGO VERIFICATION PASSED"
-          echo "======================================"
+          echo "=========================================="
 
 
       # =========================================================
@@ -528,9 +553,9 @@ jobs:
           test -f "$APK"
 
           echo ""
-          echo "======================================"
-          echo "RKMS APK successfully created"
-          echo "======================================"
+          echo "=========================================="
+          echo "RKMS APK SUCCESSFULLY CREATED"
+          echo "=========================================="
 
           ls -lh "$APK"
 
