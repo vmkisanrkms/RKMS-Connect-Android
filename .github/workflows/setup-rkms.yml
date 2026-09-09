@@ -11,9 +11,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
+      # ---------------------------------------------------------
+      # 2. Verify RKMS source
+      # ---------------------------------------------------------
       - name: Verify RKMS source
         run: |
           set -e
@@ -21,12 +29,19 @@ jobs:
           if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
             echo "Using direct RKMS source files"
 
+          elif [ -f RKMS_CONNECT_V9_APP_LOGO_FIXED_EXACT.zip ]; then
+            echo "Using exact RKMS logo-fixed source ZIP"
+            unzip -t RKMS_CONNECT_V9_APP_LOGO_FIXED_EXACT.zip >/dev/null
+
           elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
-            echo "Using RKMS source ZIP"
+            echo "Using RKMS APK build-ready ZIP"
             unzip -t RKMS_CONNECT_APK_BUILD_READY.zip >/dev/null
 
           else
-            ZIP_FILE=$(find . -maxdepth 1 -type f -name 'RKMS*.zip' | head -n 1)
+            ZIP_FILE=$(find . -maxdepth 1 -type f \
+              \( -name 'RKMS*.zip' -o -name 'rkms*.zip' \) \
+              | sort \
+              | head -n 1)
 
             if [ -n "$ZIP_FILE" ]; then
               echo "Using source ZIP: $ZIP_FILE"
@@ -38,6 +53,10 @@ jobs:
             fi
           fi
 
+
+      # ---------------------------------------------------------
+      # 3. Prepare RKMS source
+      # ---------------------------------------------------------
       - name: Prepare RKMS source
         run: |
           set -e
@@ -46,6 +65,9 @@ jobs:
           mkdir -p build
 
           if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
+
+            echo "Copying direct RKMS source"
+
             rsync -a \
               --exclude='.git' \
               --exclude='.github' \
@@ -55,37 +77,94 @@ jobs:
               --exclude='*.zip' \
               ./ build/
 
+          elif [ -f RKMS_CONNECT_V9_APP_LOGO_FIXED_EXACT.zip ]; then
+
+            echo "Extracting exact logo-fixed RKMS ZIP"
+
+            unzip -q RKMS_CONNECT_V9_APP_LOGO_FIXED_EXACT.zip -d build
+
           elif [ -f RKMS_CONNECT_APK_BUILD_READY.zip ]; then
+
+            echo "Extracting RKMS build-ready ZIP"
+
             unzip -q RKMS_CONNECT_APK_BUILD_READY.zip -d build
 
           else
-            ZIP_FILE=$(find . -maxdepth 1 -type f -name 'RKMS*.zip' | head -n 1)
+
+            ZIP_FILE=$(find . -maxdepth 1 -type f \
+              \( -name 'RKMS*.zip' -o -name 'rkms*.zip' \) \
+              | sort \
+              | head -n 1)
+
+            echo "Extracting: $ZIP_FILE"
+
             unzip -q "$ZIP_FILE" -d build
           fi
 
+
+          # -----------------------------------------------------
+          # Handle possible nested source directory
+          # -----------------------------------------------------
           if [ ! -f build/app.js ]; then
+
             APP_JS=$(find build -type f -name app.js | head -n 1)
 
             if [ -n "$APP_JS" ]; then
+
               SOURCE_DIR=$(dirname "$APP_JS")
+
+              echo "Found nested RKMS source:"
+              echo "$SOURCE_DIR"
+
               mkdir -p build-source
+
               rsync -a "$SOURCE_DIR"/ build-source/
+
               rm -rf build
+
               mv build-source build
             fi
           fi
 
+
+          # -----------------------------------------------------
+          # Required source verification
+          # -----------------------------------------------------
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
 
-          echo "RKMS source verified"
 
+          # -----------------------------------------------------
+          # EXACT ORGANIZATION LOGO verification
+          # -----------------------------------------------------
+          if [ ! -f build/assets/rkms-logo-transparent.png ]; then
+            echo "ERROR: Exact RKMS organization logo not found"
+            echo "Expected:"
+            echo "build/assets/rkms-logo-transparent.png"
+            exit 1
+          fi
+
+          echo "RKMS source verified"
+          echo "Exact organization logo found:"
+          ls -lh build/assets/rkms-logo-transparent.png
+
+
+      # ---------------------------------------------------------
+      # 4. Verify JavaScript
+      # ---------------------------------------------------------
       - name: Verify JavaScript
         run: |
+          set -e
+
           node --check build/app.js
+
           echo "app.js syntax verified"
 
+
+      # ---------------------------------------------------------
+      # 5. Create Capacitor package
+      # ---------------------------------------------------------
       - name: Create Capacitor package
         working-directory: build
         run: |
@@ -108,6 +187,7 @@ jobs:
           }
           EOF
 
+
           cat > capacitor.config.json <<'EOF'
           {
             "appId": "org.rkms.connect",
@@ -126,51 +206,232 @@ jobs:
           }
           EOF
 
+
+      # ---------------------------------------------------------
+      # 6. Setup Node.js
+      # ---------------------------------------------------------
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+
+      # ---------------------------------------------------------
+      # 7. Install dependencies
+      # ---------------------------------------------------------
       - name: Install dependencies
         working-directory: build
-        run: npm install --no-audit --no-fund
+        run: |
+          npm install --no-audit --no-fund
 
+
+      # ---------------------------------------------------------
+      # 8. Build RKMS web application
+      # ---------------------------------------------------------
       - name: Build RKMS web application
         working-directory: build
-        run: npm run build
+        run: |
+          npm run build
 
+
+      # ---------------------------------------------------------
+      # 9. Setup Java
+      # ---------------------------------------------------------
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
+
+      # ---------------------------------------------------------
+      # 10. Setup Android SDK
+      # ---------------------------------------------------------
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+
+      # ---------------------------------------------------------
+      # 11. Create Android platform
+      # ---------------------------------------------------------
       - name: Create Android platform
         working-directory: build
-        run: npx cap add android
+        run: |
+          npx cap add android
 
+
+      # ---------------------------------------------------------
+      # 12. Sync RKMS application
+      # ---------------------------------------------------------
       - name: Sync RKMS application
         working-directory: build
-        run: npx cap sync android
+        run: |
+          npx cap sync android
 
+
+      # ---------------------------------------------------------
+      # 13. Install ImageMagick
+      # ---------------------------------------------------------
+      - name: Install ImageMagick
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+
+
+      # ---------------------------------------------------------
+      # 14. FIX ANDROID APP ICON
+      #     Uses the EXACT organization logo supplied by user.
+      # ---------------------------------------------------------
+      - name: Apply exact RKMS organization logo to Android icon
+        working-directory: build
+        run: |
+          set -e
+
+          LOGO="assets/rkms-logo-transparent.png"
+
+          if [ ! -f "$LOGO" ]; then
+            echo "ERROR: RKMS organization logo missing"
+            exit 1
+          fi
+
+          echo "Using exact organization logo:"
+          identify "$LOGO"
+
+
+          # -----------------------------------------------------
+          # Android launcher icon directories
+          # -----------------------------------------------------
+          RES="android/app/src/main/res"
+
+          mkdir -p \
+            "$RES/mipmap-mdpi" \
+            "$RES/mipmap-hdpi" \
+            "$RES/mipmap-xhdpi" \
+            "$RES/mipmap-xxhdpi" \
+            "$RES/mipmap-xxxhdpi"
+
+
+          # -----------------------------------------------------
+          # Generate standard Android launcher icons
+          # from the EXACT supplied organization logo.
+          # -----------------------------------------------------
+          convert "$LOGO" -resize 48x48 \
+            "$RES/mipmap-mdpi/ic_launcher.png"
+
+          convert "$LOGO" -resize 72x72 \
+            "$RES/mipmap-hdpi/ic_launcher.png"
+
+          convert "$LOGO" -resize 96x96 \
+            "$RES/mipmap-xhdpi/ic_launcher.png"
+
+          convert "$LOGO" -resize 144x144 \
+            "$RES/mipmap-xxhdpi/ic_launcher.png"
+
+          convert "$LOGO" -resize 192x192 \
+            "$RES/mipmap-xxxhdpi/ic_launcher.png"
+
+
+          # -----------------------------------------------------
+          # Round launcher icon
+          # Uses the SAME exact organization logo.
+          # -----------------------------------------------------
+          convert "$LOGO" -resize 48x48 \
+            "$RES/mipmap-mdpi/ic_launcher_round.png"
+
+          convert "$LOGO" -resize 72x72 \
+            "$RES/mipmap-hdpi/ic_launcher_round.png"
+
+          convert "$LOGO" -resize 96x96 \
+            "$RES/mipmap-xhdpi/ic_launcher_round.png"
+
+          convert "$LOGO" -resize 144x144 \
+            "$RES/mipmap-xxhdpi/ic_launcher_round.png"
+
+          convert "$LOGO" -resize 192x192 \
+            "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
+
+
+          # -----------------------------------------------------
+          # Also replace any existing launcher icons found
+          # in Android resource directories.
+          # -----------------------------------------------------
+          find "$RES" \
+            -type f \
+            \( -name 'ic_launcher.png' -o -name 'ic_launcher_round.png' \) \
+            -print
+
+
+          echo ""
+          echo "RKMS Android launcher icons replaced successfully."
+
+
+      # ---------------------------------------------------------
+      # 15. Verify Android icon files
+      # ---------------------------------------------------------
+      - name: Verify RKMS Android logo
+        working-directory: build
+        run: |
+          set -e
+
+          RES="android/app/src/main/res"
+
+          for FILE in \
+            "$RES/mipmap-mdpi/ic_launcher.png" \
+            "$RES/mipmap-hdpi/ic_launcher.png" \
+            "$RES/mipmap-xhdpi/ic_launcher.png" \
+            "$RES/mipmap-xxhdpi/ic_launcher.png" \
+            "$RES/mipmap-xxxhdpi/ic_launcher.png"
+          do
+            test -s "$FILE"
+            echo "Verified: $FILE"
+            identify "$FILE"
+          done
+
+          echo ""
+          echo "ALL RKMS launcher icon files verified."
+
+
+      # ---------------------------------------------------------
+      # 16. Make Gradle executable
+      # ---------------------------------------------------------
       - name: Make Gradle executable
-        run: chmod +x build/android/gradlew
+        run: |
+          chmod +x build/android/gradlew
 
+
+      # ---------------------------------------------------------
+      # 17. Build Debug APK
+      # ---------------------------------------------------------
       - name: Build Debug APK
         working-directory: build/android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace
 
+
+      # ---------------------------------------------------------
+      # 18. Verify APK
+      # ---------------------------------------------------------
       - name: Verify APK
         run: |
           set -e
+
           APK="build/android/app/build/outputs/apk/debug/app-debug.apk"
+
           test -f "$APK"
-          echo "RKMS APK successfully created:"
+
+          echo ""
+          echo "======================================"
+          echo "RKMS APK successfully created"
+          echo "======================================"
+
           ls -lh "$APK"
 
+
+      # ---------------------------------------------------------
+      # 19. Upload APK
+      # ---------------------------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
