@@ -14,6 +14,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # =========================================================
+      # PREPARE RKMS SOURCE
+      # =========================================================
       - name: Prepare RKMS source
         shell: bash
         run: |
@@ -37,7 +40,10 @@ jobs:
           else
             SOURCE_ZIP=""
 
+            # V11 FINAL SOURCE FIRST
             for f in \
+              RKMS_CONNECT_FCM_FIXED_V11_SOURCE.zip \
+              RKMS_CONNECT_FCM_FIXED_V10_SOURCE.zip \
               RKMS_CONNECT_V9_APP_LOGO_TRANSPARENT_BACK_SPLASH_FIXED_FINAL.zip \
               RKMS_CONNECT_V9_APP_LOGO_TRANSPARENT_FINAL.zip \
               RKMS_CONNECT_APK_BUILD_READY.zip \
@@ -50,6 +56,7 @@ jobs:
 
             done
 
+            # Fallback: find any RKMS ZIP
             if [ -z "$SOURCE_ZIP" ]; then
               SOURCE_ZIP="$(find . -maxdepth 1 -type f -name 'RKMS*.zip' -print -quit | sed 's#^./##')"
             fi
@@ -65,6 +72,7 @@ jobs:
             unzip -q "$SOURCE_ZIP" -d build
           fi
 
+          # Handle ZIPs which contain one extra root directory
           if [ ! -f build/app.js ]; then
             APP_JS="$(find build -type f -name app.js -print -quit)"
             test -n "$APP_JS"
@@ -78,22 +86,72 @@ jobs:
             mv build-source build
           fi
 
+          # Required RKMS files
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
 
+          # Required RKMS branding
           test -s build/assets/rkms-logo-transparent.png
           test -s build/assets/rkms-app-icon-transparent.png
 
-          echo "RKMS source verified"
-          echo "Transparent organization logo verified"
-          echo "Smaller transparent app icon verified"
+          # Exact original RKMS organization logo verification
+          LOGO_SHA="$(sha256sum build/assets/rkms-logo-transparent.png | cut -d' ' -f1)"
 
+          test "$LOGO_SHA" = \
+            "731117bca8a9b884bbe796b3a903e270f4b05b5fbf20bc3303ca0041e5125358"
+
+          echo "Exact RKMS transparent organization logo verified."
+
+          # V11 migration verification
+          test -f \
+            build/supabase/migrations/20260909150000_content_optional_fields_and_upload_permissions.sql
+
+          echo "V11 content/RLS migration source verified."
+
+          # FCM backend source verification
+          test -f build/supabase/functions/rkms-fcm-push/index.ts
+          test -f build/supabase/functions/rkms-fcm-dispatch/index.ts
+
+          echo "FCM backend source verified."
+
+      # =========================================================
+      # VERIFY JAVASCRIPT
+      # =========================================================
       - name: Verify JavaScript
         run: |
-          node --check build/app.js
-          echo "app.js syntax verified"
+          set -euo pipefail
 
+          node --check build/app.js
+
+          echo "app.js syntax verified."
+
+      # =========================================================
+      # VERIFY SAVE BUTTON FIX
+      # =========================================================
+      - name: Verify Save retry/reset fix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP="build/app.js"
+
+          # Save button must have a finally/unlock path.
+          grep -q 'unlockButton(button)' "$APP"
+          grep -q 'finally' "$APP"
+
+          # Save content must have error handling.
+          grep -q 'Save नहीं हुआ' "$APP"
+
+          # Flash optional-detail message must exist.
+          grep -q 'बाकी विवरण वैकल्पिक हैं' "$APP"
+
+          echo "Save failure/retry/reset logic verified."
+          echo "Optional content-detail handling verified."
+
+      # =========================================================
+      # CREATE CAPACITOR BUILD PACKAGE
+      # =========================================================
       - name: Create Capacitor build package
         working-directory: build
         shell: bash
@@ -111,7 +169,8 @@ jobs:
             "dependencies": {
               "@capacitor/core": "6.2.2",
               "@capacitor/android": "6.2.2",
-              "@capacitor/app": "6.0.3"
+              "@capacitor/app": "6.0.3",
+              "@capacitor/push-notifications": "6.0.2"
             },
             "devDependencies": {
               "@capacitor/cli": "6.2.2"
@@ -137,51 +196,187 @@ jobs:
           }
           JSON
 
+      # =========================================================
+      # NODE
+      # =========================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      # =========================================================
+      # INSTALL CAPACITOR
+      # =========================================================
       - name: Install Capacitor dependencies
         working-directory: build
-        run: npm install --no-audit --no-fund
+        run: |
+          npm install --no-audit --no-fund
 
+      # =========================================================
+      # BUILD WEB APP
+      # =========================================================
       - name: Build RKMS web application
         working-directory: build
-        run: npm run build
+        run: |
+          npm run build
 
+      # =========================================================
+      # JAVA
+      # =========================================================
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
+      # =========================================================
+      # ANDROID SDK
+      # =========================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # =========================================================
+      # CREATE ANDROID PLATFORM
+      # =========================================================
       - name: Create Android platform
         working-directory: build
-        run: npx cap add android
+        run: |
+          npx cap add android
 
+      # =========================================================
+      # SYNC CAPACITOR
+      # =========================================================
       - name: Sync RKMS application
         working-directory: build
-        run: npx cap sync android
+        run: |
+          npx cap sync android
 
+      # =========================================================
+      # VERIFY FCM PLUGIN
+      # =========================================================
+      - name: Verify Android FCM plugin
+        working-directory: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d node_modules/@capacitor/push-notifications
+
+          PLUGIN_FILE="node_modules/@capacitor/push-notifications/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java"
+
+          test -f "$PLUGIN_FILE"
+
+          grep -q 'createChannel' "$PLUGIN_FILE"
+
+          echo "FCM Push Notifications plugin verified."
+          echo "Android notification channel support verified."
+
+      # =========================================================
+      # FIREBASE CONFIGURATION
+      # =========================================================
+      - name: Configure Firebase FCM for Android
+        shell: bash
+        env:
+          RKMS_GOOGLE_SERVICES_JSON: ${{ secrets.RKMS_GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${RKMS_GOOGLE_SERVICES_JSON:-}" ]; then
+            printf '%s' "$RKMS_GOOGLE_SERVICES_JSON" \
+              > build/android/app/google-services.json
+
+            echo "Firebase configuration installed from GitHub Secret."
+
+          elif [ -s android-config/google-services.json ]; then
+            cp android-config/google-services.json \
+              build/android/app/google-services.json
+
+            echo "Firebase configuration installed from repository."
+
+          else
+            echo "ERROR: Firebase Android configuration missing."
+            exit 1
+          fi
+
+          test -s build/android/app/google-services.json
+
+      # =========================================================
+      # GOOGLE SERVICES GRADLE PLUGIN
+      # =========================================================
+      - name: Enable Google Services Gradle plugin
+        working-directory: build/android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -s app/google-services.json ]; then
+
+            python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("build.gradle")
+          app = Path("app/build.gradle")
+
+          root_text = root.read_text()
+          app_text = app.read_text()
+
+          # Root Gradle plugin declaration
+          if "com.google.gms.google-services" not in root_text:
+              if "plugins {" in root_text:
+                  root_text = root_text.replace(
+                      "plugins {",
+                      "plugins {\n"
+                      "    id 'com.google.gms.google-services' version '4.4.2' apply false",
+                      1
+                  )
+              else:
+                  root_text = (
+                      "buildscript {\n"
+                      "    dependencies {\n"
+                      "        classpath 'com.google.gms:google-services:4.4.2'\n"
+                      "    }\n"
+                      "}\n"
+                      + root_text
+                  )
+
+          # App Gradle plugin
+          if "com.google.gms.google-services" not in app_text:
+              if "plugins {" in app_text:
+                  app_text = app_text.replace(
+                      "plugins {",
+                      "plugins {\n"
+                      "    id 'com.google.gms.google-services'",
+                      1
+                  )
+              else:
+                  app_text += "\napply plugin: 'com.google.gms.google-services'\n"
+
+          root.write_text(root_text)
+          app.write_text(app_text)
+          PY
+
+            echo "Google Services Gradle plugin configured."
+          fi
+
+      # =========================================================
+      # IMAGE TOOLS
+      # =========================================================
       - name: Install image tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick
 
       # =========================================================
-      # APPLY SMALL TRANSPARENT APP ICON AFTER CAPACITOR SYNC
+      # RKMS APP ICON
       # =========================================================
-      - name: Install RKMS app icon
+      - name: Install exact RKMS launcher logo AFTER Capacitor sync
         shell: bash
         run: |
           set -euo pipefail
 
           LOGO="build/assets/rkms-app-icon-transparent.png"
           RES="build/android/app/src/main/res"
+          STRINGS="build/android/app/src/main/res/values/strings.xml"
 
           test -s "$LOGO"
 
@@ -192,7 +387,7 @@ jobs:
             "$RES/mipmap-xxhdpi" \
             "$RES/mipmap-xxxhdpi"
 
-          # Use the smaller transparent RKMS icon.
+          # RKMS logo only
           convert "$LOGO" -resize 48x48! -strip \
             "$RES/mipmap-mdpi/ic_launcher.png"
 
@@ -223,9 +418,10 @@ jobs:
           cp "$RES/mipmap-xxxhdpi/ic_launcher.png" \
              "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
-          # Remove Capacitor adaptive launcher resources.
-          rm -rf "$RES/mipmap-anydpi-v26"
-          rm -rf "$RES/mipmap-anydpi"
+          # Remove Capacitor/default adaptive launcher resources.
+          rm -rf \
+            "$RES/mipmap-anydpi-v26" \
+            "$RES/mipmap-anydpi"
 
           find "$RES" -type f \( \
             -name 'ic_launcher_foreground.xml' -o \
@@ -234,10 +430,21 @@ jobs:
             -name 'ic_launcher_background.png' \
           \) -delete || true
 
-          echo "RKMS small transparent app icon installed."
+          # Force RKMS app name.
+          if grep -q '<string name="app_name">' "$STRINGS"; then
+            sed -i \
+              's#<string name="app_name">.*</string>#<string name="app_name">RKMS</string>#' \
+              "$STRINGS"
+          else
+            printf '\n    <string name="app_name">RKMS</string>\n' \
+              >> "$STRINGS"
+          fi
+
+          echo "RKMS launcher icon installed."
+          echo "Capacitor/default launcher resources removed."
 
       # =========================================================
-      # FORCE MANIFEST TO USE RKMS ICON
+      # FORCE MANIFEST RKMS ICON
       # =========================================================
       - name: Force RKMS launcher icon
         shell: bash
@@ -280,16 +487,22 @@ jobs:
           path.write_text(text)
           PY
 
-          grep -q 'android:icon="@mipmap/ic_launcher"' "$MANIFEST"
-          grep -q 'android:roundIcon="@mipmap/ic_launcher_round"' "$MANIFEST"
+          grep -q \
+            'android:icon="@mipmap/ic_launcher"' \
+            "$MANIFEST"
+
+          grep -q \
+            'android:roundIcon="@mipmap/ic_launcher_round"' \
+            "$MANIFEST"
 
           echo "RKMS launcher icon forced in Android Manifest."
 
       # =========================================================
-      # VERIFY ICON
+      # VERIFY RKMS ICON
       # =========================================================
       - name: Verify RKMS launcher icon
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -313,13 +526,54 @@ jobs:
 
           echo "FINAL RKMS APP ICON VERIFICATION PASSED"
 
-      - name: Make Gradle executable
-        run: chmod +x build/android/gradlew
+      # =========================================================
+      # VERIFY NO CAPACITOR LAUNCHER BRANDING
+      # =========================================================
+      - name: Verify no Capacitor launcher branding
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          RES="build/android/app/src/main/res"
+
+          test ! -e "$RES/mipmap-anydpi-v26/ic_launcher.xml"
+          test ! -e "$RES/mipmap-anydpi/ic_launcher.xml"
+
+          if find "$RES" -type f \
+            \( \
+              -iname '*capacitor*' -o \
+              -iname '*cap*launcher*' \
+            \) | grep -q .; then
+
+            echo "ERROR: Unexpected Capacitor launcher branding/resource found."
+            find "$RES" -type f \
+              \( \
+                -iname '*capacitor*' -o \
+                -iname '*cap*launcher*' \
+              \)
+            exit 1
+          fi
+
+          echo "No Capacitor launcher branding found."
+
+      # =========================================================
+      # GRADLE
+      # =========================================================
+      - name: Make Gradle executable
+        run: |
+          chmod +x build/android/gradlew
+
+      # =========================================================
+      # BUILD APK
+      # =========================================================
       - name: Build Debug APK
         working-directory: build/android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # =========================================================
+      # VERIFY APK
+      # =========================================================
       - name: Verify APK
         shell: bash
         run: |
@@ -329,9 +583,15 @@ jobs:
 
           test -s "$APK"
 
-          echo "RKMS APK successfully created:"
+          echo "=========================================="
+          echo "RKMS APK SUCCESSFULLY CREATED"
+          echo "=========================================="
+
           ls -lh "$APK"
 
+      # =========================================================
+      # UPLOAD APK ARTIFACT
+      # =========================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
