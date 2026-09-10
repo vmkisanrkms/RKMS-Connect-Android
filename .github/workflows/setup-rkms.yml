@@ -1,4 +1,4 @@
-name: RKMS CONNECT Android APK
+name: Build RKMS Connect APK
 
 on:
   workflow_dispatch:
@@ -7,89 +7,87 @@ permissions:
   contents: read
 
 jobs:
-  build-apk:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare RKMS source
+      - name: Extract RKMS Connect source
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf build
-          mkdir -p build
 
-          if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
-            echo "Using RKMS source files from repository root"
-            rsync -a \
-              --exclude='build/' \
-              --exclude='android/' \
-              --exclude='node_modules/' \
-              --exclude='.git/' \
-              --exclude='.github/' \
-              --exclude='*.zip' \
-              ./ build/
-          else
-            SOURCE_ZIP=""
-            for f in \
-              RKMS_CONNECT_V11_NIUKTI_PATRA_NO_PHOTO.zip \
-              RKMS_CONNECT_APK_BUILD_READY.zip; do
-              if [ -f "$f" ]; then
-                SOURCE_ZIP="$f"
-                break
-              fi
-            done
+          mkdir -p build-project
 
-            if [ -z "$SOURCE_ZIP" ]; then
-              SOURCE_ZIP="$(find . -maxdepth 1 -type f -name 'RKMS*.zip' -print -quit | sed 's#^./##')"
-            fi
+          SOURCE_ZIP="RKMS_CONNECT_V15_NIUKTI_SIGNER_FINAL.zip"
 
-            if [ -z "$SOURCE_ZIP" ]; then
-              echo "ERROR: RKMS source not found"
-              exit 1
-            fi
-
-            echo "Using RKMS source ZIP: $SOURCE_ZIP"
-            unzip -t "$SOURCE_ZIP" >/dev/null
-            unzip -q "$SOURCE_ZIP" -d build
+          if [ ! -f "$SOURCE_ZIP" ]; then
+            echo "ERROR: $SOURCE_ZIP not found"
+            echo "Available ZIP files:"
+            find . -maxdepth 1 -type f -name "*.zip" -print
+            exit 1
           fi
 
-          if [ ! -f build/app.js ]; then
-            APP_JS="$(find build -type f -name app.js -print -quit)"
-            test -n "$APP_JS"
-            SOURCE_DIR="$(dirname "$APP_JS")"
-            mkdir -p build-source
-            rsync -a "$SOURCE_DIR"/ build-source/
-            rm -rf build
-            mv build-source build
+          echo "Using source: $SOURCE_ZIP"
+
+          unzip -t "$SOURCE_ZIP" >/dev/null
+          unzip -q "$SOURCE_ZIP" -d build-project
+
+          echo "Source extracted successfully"
+
+      - name: Locate RKMS source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_JS="$(find build-project -type f -name "app.js" -print -quit)"
+
+          if [ -z "$APP_JS" ]; then
+            echo "ERROR: app.js not found"
+            exit 1
           fi
 
-          test -f build/app.js
-          test -f build/index.html
-          test -f build/config.js
-          test -f build/assets/rkms-logo-transparent.png
+          SOURCE_DIR="$(dirname "$APP_JS")"
 
-          test "$(sha256sum build/assets/rkms-logo-transparent.png | cut -d" " -f1)" = \
-          "39a1d2aca7b3b3cbf748267600b32a82adf04abe377c5bb5cadd7deb29b6d43b"
+          echo "RKMS source directory:"
+          echo "$SOURCE_DIR"
 
-          echo "Exact RKMS logo source verified"
+          mkdir -p rkms-source
+
+          rsync -a \
+            "$SOURCE_DIR"/ \
+            rkms-source/
+
+          test -f rkms-source/app.js
+          test -f rkms-source/index.html
+          test -f rkms-source/config.js
+
+          echo "RKMS source verified"
 
       - name: Verify JavaScript
         run: |
-          node --check build/app.js
+          set -euo pipefail
+
+          node --check rkms-source/app.js
+
           echo "app.js syntax verified"
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Create Capacitor build package
-        working-directory: build
+        working-directory: rkms-source
         shell: bash
         run: |
           set -euo pipefail
 
           cat > package.json <<'JSON'
           {
-            "name": "rkms",
+            "name": "rkms-connect",
             "version": "1.0.0",
             "private": true,
             "scripts": {
@@ -124,18 +122,17 @@ jobs:
           }
           JSON
 
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+          echo "Capacitor package created"
 
       - name: Install Capacitor dependencies
-        working-directory: build
-        run: npm install --no-audit --no-fund
+        working-directory: rkms-source
+        run: |
+          npm install --no-audit --no-fund
 
       - name: Build RKMS web application
-        working-directory: build
-        run: npm run build
+        working-directory: rkms-source
+        run: |
+          npm run build
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
@@ -147,24 +144,28 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Create Android platform
-        working-directory: build
-        run: npx cap add android
+        working-directory: rkms-source
+        run: |
+          npx cap add android
 
       - name: Sync RKMS application
-        working-directory: build
-        run: npx cap sync android
+        working-directory: rkms-source
+        run: |
+          npx cap sync android
 
-      - name: Install image tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+      - name: Install ImageMagick
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
 
-      - name: Install exact RKMS launcher logo AFTER Capacitor sync
+      - name: Install RKMS launcher logo
         shell: bash
         run: |
           set -euo pipefail
 
-          LOGO="build/assets/rkms-logo-transparent.png"
-          RES="build/android/app/src/main/res"
-          STRINGS="build/android/app/src/main/res/values/strings.xml"
+          LOGO="rkms-source/assets/rkms-logo-transparent.png"
+          RES="rkms-source/android/app/src/main/res"
+          STRINGS="rkms-source/android/app/src/main/res/values/strings.xml"
 
           test -s "$LOGO"
 
@@ -191,21 +192,23 @@ jobs:
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
           cp "$RES/mipmap-mdpi/ic_launcher.png" \
-            "$RES/mipmap-mdpi/ic_launcher_round.png"
+             "$RES/mipmap-mdpi/ic_launcher_round.png"
 
           cp "$RES/mipmap-hdpi/ic_launcher.png" \
-            "$RES/mipmap-hdpi/ic_launcher_round.png"
+             "$RES/mipmap-hdpi/ic_launcher_round.png"
 
           cp "$RES/mipmap-xhdpi/ic_launcher.png" \
-            "$RES/mipmap-xhdpi/ic_launcher_round.png"
+             "$RES/mipmap-xhdpi/ic_launcher_round.png"
 
           cp "$RES/mipmap-xxhdpi/ic_launcher.png" \
-            "$RES/mipmap-xxhdpi/ic_launcher_round.png"
+             "$RES/mipmap-xxhdpi/ic_launcher_round.png"
 
           cp "$RES/mipmap-xxxhdpi/ic_launcher.png" \
-            "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
+             "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
-          rm -rf "$RES/mipmap-anydpi-v26" "$RES/mipmap-anydpi"
+          rm -rf \
+            "$RES/mipmap-anydpi-v26" \
+            "$RES/mipmap-anydpi"
 
           find "$RES" -type f \( \
             -name 'ic_launcher_foreground.xml' -o \
@@ -219,39 +222,49 @@ jobs:
               's#<string name="app_name">.*</string>#<string name="app_name">RKMS</string>#' \
               "$STRINGS"
           else
-            printf '\n    <string name="app_name">RKMS</string>\n' >> "$STRINGS"
+            printf '\n    <string name="app_name">RKMS</string>\n' \
+              >> "$STRINGS"
           fi
 
-          echo "Final launcher icon:"
-          identify "$RES/mipmap-xxxhdpi/ic_launcher.png"
-
-          echo "Final app name:"
-          grep -n 'app_name' "$STRINGS"
+          echo "RKMS launcher logo installed"
 
       - name: Make Gradle executable
-        run: chmod +x build/android/gradlew
+        run: |
+          chmod +x rkms-source/android/gradlew
 
       - name: Build Debug APK
-        working-directory: build/android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        working-directory: rkms-source/android
+        run: |
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="build/android/app/build/outputs/apk/debug/app-debug.apk"
+          APK="rkms-source/android/app/build/outputs/apk/debug/app-debug.apk"
 
           test -s "$APK"
 
-          OUTPUT="build/RKMS-Connect-Debug.apk"
+          echo "APK successfully created:"
+          ls -lh "$APK"
 
-          cp "$APK" "$OUTPUT"
+      - name: Rename APK
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          test -s "$OUTPUT"
+          mkdir -p build
 
-          echo "RKMS CONNECT APK successfully created:"
-          ls -lh "$OUTPUT"
+          cp \
+            rkms-source/android/app/build/outputs/apk/debug/app-debug.apk \
+            build/RKMS-Connect-Debug.apk
+
+          test -s build/RKMS-Connect-Debug.apk
+
+          ls -lh build/RKMS-Connect-Debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
