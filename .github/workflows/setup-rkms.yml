@@ -2,72 +2,66 @@ name: RKMS Android APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
 
 jobs:
   build-apk:
-    name: Build RKMS APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Prepare RKMS source
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           rm -rf build
           mkdir -p build
 
           if [ -f app.js ] && [ -f index.html ] && [ -f config.js ]; then
+            echo "Using RKMS source files from repository root"
             rsync -a \
-              --exclude="build/" \
-              --exclude="android/" \
-              --exclude="node_modules/" \
-              --exclude=".git/" \
-              --exclude=".github/" \
-              --exclude="*.zip" \
+              --exclude='build/' \
+              --exclude='android/' \
+              --exclude='node_modules/' \
+              --exclude='.git/' \
+              --exclude='.github/' \
+              --exclude='*.zip' \
               ./ build/
           else
-            ZIP_FILE=""
-
+            SOURCE_ZIP=""
             for f in \
-              RKMS_CONNECT_FCM_FIXED_V13_SOURCE.zip \
-              RKMS_CONNECT_FCM_FIXED_V12_SOURCE.zip \
-              RKMS_CONNECT_FCM_FIXED_V11_SOURCE.zip \
-              RKMS_CONNECT_FCM_FIXED_V10_SOURCE.zip
-            do
+              RKMS_CONNECT_APK_BUILD_READY.zip \
+              RKMS_CONNECT_V9_APP_NAME_RKMS_LOGO_CLEAR_FINAL.zip; do
               if [ -f "$f" ]; then
-                ZIP_FILE="$f"
+                SOURCE_ZIP="$f"
                 break
               fi
             done
 
-            if [ -z "$ZIP_FILE" ]; then
-              ZIP_FILE="$(find . -maxdepth 1 -type f -name 'RKMS*.zip' | head -n 1)"
+            if [ -z "$SOURCE_ZIP" ]; then
+              SOURCE_ZIP="$(find . -maxdepth 1 -type f -name 'RKMS*.zip' -print -quit | sed 's#^./##')"
             fi
 
-            test -n "$ZIP_FILE"
+            if [ -z "$SOURCE_ZIP" ]; then
+              echo "ERROR: RKMS source not found"
+              exit 1
+            fi
 
-            unzip -q "$ZIP_FILE" -d build
+            echo "Using RKMS source ZIP: $SOURCE_ZIP"
+            unzip -t "$SOURCE_ZIP" >/dev/null
+            unzip -q "$SOURCE_ZIP" -d build
           fi
 
           if [ ! -f build/app.js ]; then
-            APP_JS="$(find build -type f -name app.js | head -n 1)"
+            APP_JS="$(find build -type f -name app.js -print -quit)"
             test -n "$APP_JS"
-
             SOURCE_DIR="$(dirname "$APP_JS")"
-            rm -rf build-source
-            mkdir build-source
+            mkdir -p build-source
             rsync -a "$SOURCE_DIR"/ build-source/
-
             rm -rf build
             mv build-source build
           fi
@@ -75,30 +69,24 @@ jobs:
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
+          test -f build/assets/rkms-logo-transparent.png
 
-          test -s build/assets/rkms-logo-transparent.png
-          test -s build/assets/rkms-app-icon-transparent.png
+          test "$(sha256sum build/assets/rkms-logo-transparent.png | cut -d" " -f1)" = "39a1d2aca7b3b3cbf748267600b32a82adf04abe377c5bb5cadd7deb29b6d43b"
 
-          HASH="$(sha256sum build/assets/rkms-logo-transparent.png | cut -d' ' -f1)"
-
-          test "$HASH" = "731117bca8a9b884bbe796b3a903e270f4b05b5fbf20bc3303ca0041e5125358"
-
-          echo "RKMS source verified."
+          echo "Exact RKMS logo source verified"
 
       - name: Verify JavaScript
         run: |
-          set -e
           node --check build/app.js
+          echo "app.js syntax verified"
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Create Capacitor configuration
+      - name: Create Capacitor build package
         working-directory: build
+        shell: bash
         run: |
-          cat > package.json <<'EOF'
+          set -euo pipefail
+
+          cat > package.json <<'JSON'
           {
             "name": "rkms",
             "version": "1.0.0",
@@ -109,140 +97,75 @@ jobs:
             "dependencies": {
               "@capacitor/core": "6.2.2",
               "@capacitor/android": "6.2.2",
-              "@capacitor/app": "6.0.3",
-              "@capacitor/push-notifications": "6.0.2"
+              "@capacitor/app": "6.0.3"
             },
             "devDependencies": {
               "@capacitor/cli": "6.2.2"
             }
           }
-          EOF
+          JSON
 
-          cat > capacitor.config.json <<'EOF'
+          cat > capacitor.config.json <<'JSON'
           {
             "appId": "org.rkms.connect",
             "appName": "RKMS",
             "webDir": "dist",
-            "bundledWebRuntime": false
+            "bundledWebRuntime": false,
+            "server": {
+              "androidScheme": "https",
+              "cleartext": true
+            },
+            "android": {
+              "allowMixedContent": true,
+              "captureInput": true,
+              "webContentsDebuggingEnabled": false
+            }
           }
-          EOF
+          JSON
 
-      - name: Install dependencies
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Capacitor dependencies
         working-directory: build
-        run: |
-          npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
-      - name: Build web application
+      - name: Build RKMS web application
         working-directory: build
-        run: |
-          npm run build
+        run: npm run build
 
-      - name: Setup Java
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: '21'
 
-      - name: Setup Android
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Create Android platform
         working-directory: build
-        run: |
-          npx cap add android
+        run: npx cap add android
 
-      - name: Sync Android
+      - name: Sync RKMS application
         working-directory: build
-        run: |
-          npx cap sync android
+        run: npx cap sync android
 
-      - name: Verify FCM plugin
-        working-directory: build
-        run: |
-          set -e
+      - name: Install image tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
 
-          test -d node_modules/@capacitor/push-notifications
-
-          test -f \
-            node_modules/@capacitor/push-notifications/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java
-
-          grep -q createChannel \
-            node_modules/@capacitor/push-notifications/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java
-
-          echo "FCM plugin verified."
-
-      - name: Configure Firebase
-        shell: bash
-        env:
-          RKMS_GOOGLE_SERVICES_JSON: ${{ secrets.RKMS_GOOGLE_SERVICES_JSON }}
-        run: |
-          set -e
-
-          if [ -n "${RKMS_GOOGLE_SERVICES_JSON:-}" ]; then
-            printf '%s' "$RKMS_GOOGLE_SERVICES_JSON" \
-              > build/android/app/google-services.json
-
-          elif [ -s build/android-config/google-services.json ]; then
-            cp build/android-config/google-services.json \
-              build/android/app/google-services.json
-
-          elif [ -s android-config/google-services.json ]; then
-            cp android-config/google-services.json \
-              build/android/app/google-services.json
-
-          else
-            echo "ERROR: Firebase configuration missing."
-            exit 1
-          fi
-
-          test -s build/android/app/google-services.json
-
-          echo "Firebase verified."
-
-      - name: Enable Google Services
-        working-directory: build/android
-        run: |
-          set -e
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          root = Path("build.gradle")
-          app = Path("app/build.gradle")
-
-          root_text = root.read_text()
-          app_text = app.read_text()
-
-          if "com.google.gms:google-services" not in root_text:
-              root_text = (
-                  "buildscript {\n"
-                  "    dependencies {\n"
-                  "        classpath 'com.google.gms:google-services:4.4.2'\n"
-                  "    }\n"
-                  "}\n\n" + root_text
-              )
-              root.write_text(root_text)
-
-          if "com.google.gms.google-services" not in app_text:
-              app_text += "\napply plugin: 'com.google.gms.google-services'\n"
-              app.write_text(app_text)
-          PY
-
-      - name: Install RKMS launcher icon
+      - name: Install exact RKMS launcher logo AFTER Capacitor sync
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          LOGO="build/assets/rkms-app-icon-transparent.png"
+          LOGO="build/assets/rkms-logo-transparent.png"
           RES="build/android/app/src/main/res"
+          STRINGS="build/android/app/src/main/res/values/strings.xml"
 
           test -s "$LOGO"
-
-          rm -rf "$RES/mipmap-anydpi"
-          rm -rf "$RES/mipmap-anydpi-v26"
-
-          rm -f "$RES"/mipmap-*/ic_launcher_foreground.*
-          rm -f "$RES"/mipmap-*/ic_launcher_background.*
 
           mkdir -p \
             "$RES/mipmap-mdpi" \
@@ -251,59 +174,59 @@ jobs:
             "$RES/mipmap-xxhdpi" \
             "$RES/mipmap-xxxhdpi"
 
-          cp "$LOGO" "$RES/mipmap-mdpi/ic_launcher.png"
-          cp "$LOGO" "$RES/mipmap-hdpi/ic_launcher.png"
-          cp "$LOGO" "$RES/mipmap-xhdpi/ic_launcher.png"
-          cp "$LOGO" "$RES/mipmap-xxhdpi/ic_launcher.png"
-          cp "$LOGO" "$RES/mipmap-xxxhdpi/ic_launcher.png"
+          convert "$LOGO" -resize 48x48! -strip "$RES/mipmap-mdpi/ic_launcher.png"
+          convert "$LOGO" -resize 72x72! -strip "$RES/mipmap-hdpi/ic_launcher.png"
+          convert "$LOGO" -resize 96x96! -strip "$RES/mipmap-xhdpi/ic_launcher.png"
+          convert "$LOGO" -resize 144x144! -strip "$RES/mipmap-xxhdpi/ic_launcher.png"
+          convert "$LOGO" -resize 192x192! -strip "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
-          cp "$LOGO" "$RES/mipmap-mdpi/ic_launcher_round.png"
-          cp "$LOGO" "$RES/mipmap-hdpi/ic_launcher_round.png"
-          cp "$LOGO" "$RES/mipmap-xhdpi/ic_launcher_round.png"
-          cp "$LOGO" "$RES/mipmap-xxhdpi/ic_launcher_round.png"
-          cp "$LOGO" "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
+          cp "$RES/mipmap-mdpi/ic_launcher.png" "$RES/mipmap-mdpi/ic_launcher_round.png"
+          cp "$RES/mipmap-hdpi/ic_launcher.png" "$RES/mipmap-hdpi/ic_launcher_round.png"
+          cp "$RES/mipmap-xhdpi/ic_launcher.png" "$RES/mipmap-xhdpi/ic_launcher_round.png"
+          cp "$RES/mipmap-xxhdpi/ic_launcher.png" "$RES/mipmap-xxhdpi/ic_launcher_round.png"
+          cp "$RES/mipmap-xxxhdpi/ic_launcher.png" "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
-          STRINGS="$RES/values/strings.xml"
-          sed -i \
-            's#<string name="app_name">.*</string>#<string name="app_name">RKMS</string>#' \
-            "$STRINGS"
+          rm -rf "$RES/mipmap-anydpi-v26" "$RES/mipmap-anydpi"
 
-          MANIFEST="build/android/app/src/main/AndroidManifest.xml"
+          find "$RES" -type f \( \
+            -name 'ic_launcher_foreground.xml' -o \
+            -name 'ic_launcher_background.xml' -o \
+            -name 'ic_launcher_foreground.png' -o \
+            -name 'ic_launcher_background.png' \
+          \) -delete || true
 
-          sed -i \
-            's#android:icon="[^"]*"#android:icon="@mipmap/ic_launcher"#g' \
-            "$MANIFEST"
+          if grep -q '<string name="app_name">' "$STRINGS"; then
+            sed -i 's#<string name="app_name">.*</string>#<string name="app_name">RKMS</string>#' "$STRINGS"
+          else
+            printf '\n    <string name="app_name">RKMS</string>\n' >> "$STRINGS"
+          fi
 
-          sed -i \
-            's#android:roundIcon="[^"]*"#android:roundIcon="@mipmap/ic_launcher_round"#g' \
-            "$MANIFEST"
+          echo "Final launcher icon:"
+          identify "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
-          echo "RKMS launcher configured."
+          echo "Final app name:"
+          grep -n 'app_name' "$STRINGS"
 
       - name: Make Gradle executable
-        run: |
-          chmod +x build/android/gradlew
+        run: chmod +x build/android/gradlew
 
       - name: Build Debug APK
         working-directory: build/android
-        run: |
-          ./gradlew assembleDebug \
-            --no-daemon \
-            --stacktrace
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Verify APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           APK="build/android/app/build/outputs/apk/debug/app-debug.apk"
 
           test -s "$APK"
 
-          echo "APK created:"
+          echo "RKMS APK successfully created:"
           ls -lh "$APK"
 
-      - name: Upload RKMS APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-debug-apk
