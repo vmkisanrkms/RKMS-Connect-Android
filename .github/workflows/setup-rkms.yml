@@ -11,8 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
 
       - name: Prepare RKMS source
         shell: bash
@@ -25,7 +27,8 @@ jobs:
           SOURCE_ZIP="RKMS_CONNECT_3_FIXES_FINAL.zip"
 
           test -f "$SOURCE_ZIP" || {
-            echo "Required RKMS source ZIP not found: $SOURCE_ZIP"
+            echo "ERROR: Required RKMS source ZIP not found:"
+            echo "$SOURCE_ZIP"
             exit 1
           }
 
@@ -39,6 +42,7 @@ jobs:
 
           echo "RKMS source verified"
 
+
       - name: Verify JavaScript
         run: |
           set -euo pipefail
@@ -46,6 +50,7 @@ jobs:
           node --check build/app.js
 
           echo "app.js syntax verified"
+
 
       - name: Create Capacitor build package
         working-directory: build
@@ -96,6 +101,7 @@ jobs:
 
           echo "Capacitor build package created"
 
+
       - name: Verify RKMS fixes and FCM
         working-directory: build
         shell: bash
@@ -114,6 +120,7 @@ jobs:
           grep -q "data-download-pdf" "$FILE"
 
           grep -q "rkmsSaveLoginCredentials" "$FILE"
+
           grep -q 'history.replaceState({rkmsRoute:"home"' "$FILE"
 
           grep -q "fillFromOfficer" "$FILE"
@@ -128,41 +135,61 @@ jobs:
 
           echo "RKMS + FCM source verification PASS"
 
+
       - name: Verify PDF pipeline
         working-directory: build
         run: |
+          set -euo pipefail
+
           python3 scripts/verify-pdf-pipeline.py
+
 
       - name: Verify report download security
         working-directory: build
         run: |
+          set -euo pipefail
+
           python3 scripts/verify-report-download-scope.py
+
 
       - name: Verify RKMS final static checks
         working-directory: build
         run: |
+          set -euo pipefail
+
           python3 scripts/verify-rkms-final.py
+
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+
       - name: Install Capacitor dependencies
         working-directory: build
         run: |
+          set -euo pipefail
+
           npm install --no-audit --no-fund
+
 
       - name: Build RKMS web application
         working-directory: build
         run: |
+          set -euo pipefail
+
           npm run build
+
 
       - name: Verify native bridge source
         working-directory: build
         run: |
+          set -euo pipefail
+
           bash -n scripts/setup-android-native.sh
           python3 scripts/verify-native-bridge.py
+
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
@@ -170,18 +197,26 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
 
       - name: Create Android platform
         working-directory: build
         run: |
+          set -euo pipefail
+
           npx cap add android
+
 
       - name: Add RKMS secure credential native bridge
         working-directory: build
         run: |
+          set -euo pipefail
+
           bash scripts/setup-android-native.sh
+
 
       - name: Configure Firebase Android client for FCM
         working-directory: build
@@ -191,29 +226,102 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "$FIREBASE_GOOGLE_SERVICES_JSON" || {
-            echo "ERROR: FIREBASE_GOOGLE_SERVICES_JSON GitHub Secret is required for FCM."
-            exit 1
-          }
+          TARGET="android/app/google-services.json"
 
-          printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON" \
-            > android/app/google-services.json
+          # First preference:
+          # Use an existing google-services.json if it was intentionally
+          # included in the source package.
+          if [ -s "$TARGET" ]; then
+            echo "Using existing Android Firebase configuration."
+          else
+            # Second preference:
+            # Use the GitHub Actions repository secret.
+            if [ -z "${FIREBASE_GOOGLE_SERVICES_JSON:-}" ]; then
+              echo ""
+              echo "ERROR: Firebase Android configuration is missing."
+              echo ""
+              echo "FCM requires a real google-services.json."
+              echo ""
+              echo "Provide it using GitHub Actions repository secret:"
+              echo "FIREBASE_GOOGLE_SERVICES_JSON"
+              echo ""
+              echo "Do NOT use a fabricated Firebase configuration."
+              exit 1
+            fi
 
-          test -s android/app/google-services.json
+            printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON" > "$TARGET"
+
+            echo "Firebase configuration supplied by GitHub Secret."
+          fi
+
+          test -s "$TARGET"
+
 
           python3 - <<'PY'
           import json
           from pathlib import Path
 
           p = Path("android/app/google-services.json")
-          d = json.loads(p.read_text(encoding="utf-8"))
 
-          assert d.get("project_info", {}).get("project_number")
-          assert d.get("project_info", {}).get("project_id")
-          assert d.get("client")
+          try:
+              data = json.loads(p.read_text(encoding="utf-8"))
+          except Exception as exc:
+              raise SystemExit(
+                  f"ERROR: google-services.json is not valid JSON: {exc}"
+              )
 
-          print("Firebase Android client configuration verified")
+          project_info = data.get("project_info") or {}
+          clients = data.get("client") or []
+
+          if not project_info.get("project_number"):
+              raise SystemExit(
+                  "ERROR: Firebase project_number is missing."
+              )
+
+          if not project_info.get("project_id"):
+              raise SystemExit(
+                  "ERROR: Firebase project_id is missing."
+              )
+
+          if not clients:
+              raise SystemExit(
+                  "ERROR: Firebase client configuration is missing."
+              )
+
+          package_name = None
+
+          for client in clients:
+              client_info = client.get("client_info") or {}
+              android_info = client_info.get("android_client_info") or {}
+
+              candidate = android_info.get("package_name")
+
+              if candidate == "org.rkms.connect":
+                  package_name = candidate
+                  break
+
+          if package_name != "org.rkms.connect":
+              raise SystemExit(
+                  "ERROR: google-services.json does not contain "
+                  "the required Android package: org.rkms.connect"
+              )
+
+          print("Firebase Android configuration verified.")
+          print("Android package: org.rkms.connect")
           PY
+
+
+      - name: Configure Google Services Gradle plugin
+        working-directory: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT_GRADLE="android/build.gradle"
+          APP_GRADLE="android/app/build.gradle"
+
+          test -f "$ROOT_GRADLE"
+          test -f "$APP_GRADLE"
 
           python3 - <<'PY'
           from pathlib import Path
@@ -221,43 +329,54 @@ jobs:
           root = Path("android/build.gradle")
           app = Path("android/app/build.gradle")
 
-          r = root.read_text(encoding="utf-8")
+          root_text = root.read_text(encoding="utf-8")
 
-          if "com.google.gms:google-services" not in r:
+          if "com.google.gms:google-services" not in root_text:
               marker = "dependencies {"
 
-              if marker not in r:
+              if marker not in root_text:
                   raise SystemExit(
-                      "android/build.gradle dependencies block not found"
+                      "ERROR: android/build.gradle dependencies block not found."
                   )
 
-              r = r.replace(
+              root_text = root_text.replace(
                   marker,
                   marker +
                   "\n        classpath 'com.google.gms:google-services:4.4.2'",
                   1
               )
 
-              root.write_text(r, encoding="utf-8")
+              root.write_text(root_text, encoding="utf-8")
 
-          a = app.read_text(encoding="utf-8")
+          app_text = app.read_text(encoding="utf-8")
 
-          if "com.google.gms.google-services" not in a:
-              a += "\napply plugin: 'com.google.gms.google-services'\n"
-              app.write_text(a, encoding="utf-8")
+          if "com.google.gms.google-services" not in app_text:
+              app_text += (
+                  "\n"
+                  "apply plugin: 'com.google.gms.google-services'\n"
+              )
 
-          print("Google Services Gradle plugin configured")
+              app.write_text(app_text, encoding="utf-8")
+
+          print("Google Services Gradle plugin configured.")
           PY
+
 
       - name: Sync RKMS application
         working-directory: build
         run: |
+          set -euo pipefail
+
           npx cap sync android
+
 
       - name: Verify generated Android PDF bridge
         working-directory: build
         run: |
+          set -euo pipefail
+
           python3 scripts/verify-android-pdf.py
+
 
       - name: Verify generated Android native bridge
         working-directory: build
@@ -297,10 +416,14 @@ jobs:
 
           echo "Native bridge verification PASS"
 
+
       - name: Install image tools
         run: |
+          set -euo pipefail
+
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick
+
 
       - name: Install exact RKMS launcher logo
         shell: bash
@@ -360,7 +483,8 @@ jobs:
           cp "$RES/mipmap-xxxhdpi/ic_launcher.png" \
              "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
-          rm -rf "$RES/mipmap-anydpi-v26" "$RES/mipmap-anydpi"
+          rm -rf "$RES/mipmap-anydpi-v26"
+          rm -rf "$RES/mipmap-anydpi"
 
           find "$RES" -type f \( \
             -name 'ic_launcher_foreground.xml' -o \
@@ -380,14 +504,21 @@ jobs:
 
           echo "Launcher icon configured"
 
+
       - name: Make Gradle executable
         run: |
           chmod +x build/android/gradlew
 
+
       - name: Build Debug APK
         working-directory: build/android
         run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          set -euo pipefail
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace
+
 
       - name: Verify APK
         shell: bash
@@ -400,6 +531,7 @@ jobs:
 
           echo "RKMS APK successfully created:"
           ls -lh "$APK"
+
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
