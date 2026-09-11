@@ -20,7 +20,7 @@ jobs:
 
 
       # =========================================================
-      # 2. Setup Node.js
+      # 2. Setup Node.js 22
       # =========================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -53,25 +53,35 @@ jobs:
           echo "Using EXACT V1D source:"
           echo "$SOURCE_ZIP"
 
+          echo
+          echo "Checking ZIP integrity..."
           unzip -t "$SOURCE_ZIP"
 
+          echo
+          echo "Extracting V1D source..."
           unzip -q "$SOURCE_ZIP" -d build-project
 
-          echo "V1D ZIP extracted."
+          echo
+          echo "V1D ZIP extracted successfully."
 
 
       # =========================================================
-      # 4. Locate source safely
+      # 4. Locate RKMS source
       # =========================================================
       - name: Locate RKMS source
         shell: bash
         run: |
           set -euo pipefail
 
-          APP_JS="$(find build-project -type f -name "app.js" -print -quit)"
+          APP_JS="$(find build-project \
+            -type f \
+            -name "app.js" \
+            -print -quit)"
 
           if [ -z "$APP_JS" ]; then
             echo "ERROR: app.js not found inside V1D ZIP."
+            echo
+            echo "Extracted files:"
             find build-project -maxdepth 5 -type f | sort
             exit 1
           fi
@@ -84,17 +94,20 @@ jobs:
           rm -rf rkms-source
           mkdir -p rkms-source
 
-          rsync -a "$SOURCE_DIR"/ rkms-source/
+          rsync -a \
+            "$SOURCE_DIR"/ \
+            rkms-source/
 
           test -f rkms-source/app.js
           test -f rkms-source/index.html
           test -f rkms-source/config.js
 
+          echo
           echo "RKMS V1D source verified."
 
 
       # =========================================================
-      # 5. Verify JavaScript
+      # 5. Verify JavaScript syntax
       # =========================================================
       - name: Verify JavaScript
         shell: bash
@@ -103,7 +116,7 @@ jobs:
 
           node --check rkms-source/app.js
 
-          echo "app.js syntax PASS."
+          echo "app.js syntax verification PASS."
 
 
       # =========================================================
@@ -114,17 +127,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          grep -q "function renderMemberDashboard" \
+          grep -q \
+            "function renderMemberDashboard" \
             rkms-source/app.js
 
-          grep -q 'name==="member-dashboard"' \
+          grep -q \
+            'name==="member-dashboard"' \
             rkms-source/app.js
 
+          echo "Member Dashboard function found."
+          echo "Member Dashboard route found."
           echo "Member Dashboard verification PASS."
 
 
       # =========================================================
-      # 7. Verify V1D fixes 1-8
+      # 7. Verify all 8 V1D fixes
       # =========================================================
       - name: Verify V1D fixes 1 to 8
         shell: bash
@@ -133,40 +150,80 @@ jobs:
 
           FILE="rkms-source/app.js"
 
-          echo "Checking V1D fixes..."
+          echo "=================================================="
+          echo "Checking V1D fixes 1-8"
+          echo "=================================================="
 
+          # -----------------------------------------------------
           # 1. Digital ID area
+          # -----------------------------------------------------
           grep -q "memberAreaLabel" "$FILE"
+          echo "PASS: Digital ID area"
 
+
+          # -----------------------------------------------------
           # 2. Digital ID PDF
+          # -----------------------------------------------------
           grep -q "downloadPdf" "$FILE"
           grep -q "pdfBlobFromCanvas" "$FILE"
+          echo "PASS: Digital ID PDF"
 
-          # 3. Print
+
+          # -----------------------------------------------------
+          # 3. Digital ID Print
+          # -----------------------------------------------------
           grep -q "printPage" "$FILE"
+          echo "PASS: Digital ID Print"
 
-          # 4. Profile
+
+          # -----------------------------------------------------
+          # 4. Member Profile
+          # -----------------------------------------------------
           grep -q "renderMemberProfile" "$FILE"
           grep -q "member-profile" "$FILE"
+          echo "PASS: Member Profile route"
 
+
+          # -----------------------------------------------------
           # 5. National President certificate
+          # -----------------------------------------------------
           grep -q "nationalName" "$FILE"
           grep -q "nationalPost" "$FILE"
+          echo "PASS: National President certificate block"
 
-          # 6. Certificate PDF
+
+          # -----------------------------------------------------
+          # 6. Membership Certificate PDF
+          # -----------------------------------------------------
           grep -q "data-download-pdf" "$FILE"
+          echo "PASS: Membership Certificate PDF"
 
-          # 7. Logo
-          test -s rkms-source/assets/rkms-logo-transparent.png
 
-          # 8. Saved credentials
-          grep -q "rkmsSaveLoginCredentials" "$FILE"
+          # -----------------------------------------------------
+          # 7. Launcher logo
+          # -----------------------------------------------------
+          test -s \
+            rkms-source/assets/rkms-logo-transparent.png
 
+          echo "PASS: RKMS launcher logo source"
+
+
+          # -----------------------------------------------------
+          # 8. Saved Login
+          # -----------------------------------------------------
+          grep -q \
+            "rkmsSaveLoginCredentials" \
+            "$FILE"
+
+          echo "PASS: Saved Login"
+
+
+          echo
           echo "V1D fixes 1-8 verification PASS."
 
 
       # =========================================================
-      # 8. PDF pipeline verification
+      # 8. PDF pipeline static verification
       # =========================================================
       - name: Verify PDF pipeline
         working-directory: rkms-source
@@ -198,7 +255,7 @@ jobs:
 
 
       # =========================================================
-      # 10. Native bridge source verification
+      # 10. Native bridge SOURCE verification
       # =========================================================
       - name: Verify native bridge source
         working-directory: rkms-source
@@ -214,7 +271,7 @@ jobs:
 
 
       # =========================================================
-      # 11. RKMS final verification
+      # 11. RKMS final static verification
       # =========================================================
       - name: RKMS final static verification
         working-directory: rkms-source
@@ -279,7 +336,7 @@ jobs:
 
 
       # =========================================================
-      # 13. Install dependencies
+      # 13. Install Capacitor dependencies
       # =========================================================
       - name: Install Capacitor dependencies
         working-directory: rkms-source
@@ -288,18 +345,20 @@ jobs:
 
 
       # =========================================================
-      # 14. Build web application
+      # 14. Build RKMS web application
       # =========================================================
       - name: Build RKMS web application
         working-directory: rkms-source
         run: |
+          set -euo pipefail
+
           npm run build
 
           test -f dist/index.html
           test -f dist/app.js
           test -f dist/config.js
 
-          echo "RKMS web build PASS."
+          echo "RKMS web application build PASS."
 
 
       # =========================================================
@@ -321,7 +380,7 @@ jobs:
 
 
       # =========================================================
-      # 17. Install Android SDK
+      # 17. Install Android SDK packages
       # =========================================================
       - name: Install Android SDK packages
         shell: bash
@@ -335,7 +394,7 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-          echo "Android SDK ready."
+          echo "Android SDK packages ready."
 
 
       # =========================================================
@@ -343,29 +402,37 @@ jobs:
       # =========================================================
       - name: Create Android platform
         working-directory: rkms-source
+        shell: bash
         run: |
           set -euo pipefail
 
           npx cap add android
 
           echo
-          echo "Generated Android Java/Kotlin files:"
-          find android/app/src/main -type f \
-            \( -name "MainActivity.java" -o -name "MainActivity.kt" \) \
+          echo "Generated Android MainActivity files:"
+
+          find android/app/src/main \
+            -type f \
+            \( \
+              -name "MainActivity.java" \
+              -o \
+              -name "MainActivity.kt" \
+            \) \
             -print
 
-          echo
-
-          MAIN_ACTIVITY="$(find android/app/src/main -type f \
-            \( -name "MainActivity.java" -o -name "MainActivity.kt" \) \
+          MAIN_ACTIVITY="$(find android/app/src/main \
+            -type f \
+            -name "MainActivity.java" \
             -print -quit)"
 
           if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: Capacitor did not generate MainActivity."
+            echo "ERROR: MainActivity.java not generated."
+            echo
             find android/app/src/main -type f | sort
             exit 1
           fi
 
+          echo
           echo "Generated MainActivity:"
           echo "$MAIN_ACTIVITY"
 
@@ -379,186 +446,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          MAIN_ACTIVITY="$(find android/app/src/main -type f \
-            \( -name "MainActivity.java" -o -name "MainActivity.kt" \) \
+          MAIN_ACTIVITY="$(find android/app/src/main \
+            -type f \
+            -name "MainActivity.java" \
             -print -quit)"
-
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity not found."
-            exit 1
-          fi
-
-          echo "Using:"
-          echo "$MAIN_ACTIVITY"
-
-          grep -q "BridgeActivity" "$MAIN_ACTIVITY" || {
-            echo "ERROR: MainActivity does not extend Capacitor BridgeActivity."
-            cat "$MAIN_ACTIVITY"
-            exit 1
-          }
-
-          echo "Generated MainActivity verification PASS."
-
-
-      # =========================================================
-      # 20. Setup RKMS native bridge
-      # =========================================================
-      - name: Setup RKMS Android native bridge
-        working-directory: rkms-source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f scripts/setup-android-native.sh
-
-          chmod +x scripts/setup-android-native.sh
-
-          bash scripts/setup-android-native.sh
-
-          echo "RKMS native bridge setup completed."
-
-
-      # =========================================================
-      # 21. Verify native files actually exist
-      # =========================================================
-      - name: Verify native bridge files
-        working-directory: rkms-source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          find android/app/src/main/java -type f | sort
-
-          RKMS_BRIDGE="$(find android/app/src/main/java -type f \
-            -name "RKMSNativeBridge.java" -print -quit)"
-
-          SECURE_PLUGIN="$(find android/app/src/main/java -type f \
-            -name "RKMSSecureCredentialsPlugin.java" -print -quit)"
-
-          if [ -z "$RKMS_BRIDGE" ]; then
-            echo "ERROR: RKMSNativeBridge.java was not generated."
-            exit 1
-          fi
-
-          if [ -z "$SECURE_PLUGIN" ]; then
-            echo "ERROR: RKMSSecureCredentialsPlugin.java was not generated."
-            exit 1
-          fi
-
-          echo "Native bridge:"
-          echo "$RKMS_BRIDGE"
-
-          echo "Secure credential plugin:"
-          echo "$SECURE_PLUGIN"
-
-          echo "Native bridge files PASS."
-
-
-      # =========================================================
-      # 22. Sync Capacitor
-      # =========================================================
-      - name: Sync RKMS application
-        working-directory: rkms-source
-        run: |
-          npx cap sync android
-
-
-      # =========================================================
-      # 23. Find MainActivity after sync
-      # =========================================================
-      - name: Verify MainActivity after Capacitor sync
-        working-directory: rkms-source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MAIN_ACTIVITY="$(find android/app/src/main -type f \
-            \( -name "MainActivity.java" -o -name "MainActivity.kt" \) \
-            -print -quit)"
-
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity disappeared after cap sync."
-            find android/app/src/main -type f | sort
-            exit 1
-          fi
-
-          echo "MainActivity after sync:"
-          echo "$MAIN_ACTIVITY"
-
-
-      # =========================================================
-      # 24. Verify generated Android PDF bridge
-      # =========================================================
-      - name: Verify generated Android PDF bridge
-        working-directory: rkms-source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MAIN_ACTIVITY="$(find android/app/src/main -type f \
-            -name "MainActivity.java" -print -quit)"
-
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: Java MainActivity not found for PDF bridge verification."
-            echo "Generated Android files:"
-            find android/app/src/main -type f | sort
-            exit 1
-          fi
-
-          echo "PDF bridge verifier target:"
-          echo "$MAIN_ACTIVITY"
-
-          # The old verifier used a hard-coded path.
-          # V1D uses the actual generated MainActivity discovered above.
-
-          python3 - "$MAIN_ACTIVITY" <<'PY'
-          import sys
-          from pathlib import Path
-
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
-
-          checks = [
-              "import android.content.ContentValues;",
-              "import android.media.MediaScannerConnection;",
-              "import android.os.Environment;",
-              "import android.provider.MediaStore;",
-              "import android.util.Base64;",
-              "beginPdfSave(String filename)",
-              "appendPdfChunk(String base64Chunk)",
-              "finishPdfSave()",
-              "cancelPdfSave()",
-              "MediaStore.Downloads.EXTERNAL_CONTENT_URI",
-              "MediaStore.Downloads.RELATIVE_PATH",
-              'Environment.DIRECTORY_DOWNLOADS + "/RKMS CONNECT"',
-              "application/pdf",
-          ]
-
-          missing = [x for x in checks if x not in s]
-
-          if missing:
-              print("ANDROID PDF BRIDGE: FAIL")
-              print("Target:", p)
-              print("Missing:")
-              print("\n".join(missing))
-              raise SystemExit(1)
-
-          print("ANDROID PDF BRIDGE: PASS")
-          print("Target:", p)
-          PY
-
-
-      # =========================================================
-      # 25. Verify generated MainActivity native registration
-      # =========================================================
-      - name: Verify generated MainActivity native registration
-        working-directory: rkms-source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MAIN_ACTIVITY="$(find android/app/src/main -type f \
-            -name "MainActivity.java" -print -quit)"
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             echo "ERROR: MainActivity.java not found."
@@ -568,22 +459,276 @@ jobs:
           echo "Checking:"
           echo "$MAIN_ACTIVITY"
 
-          grep -q "RKMSNativeBridge" "$MAIN_ACTIVITY"
+          grep -q \
+            "BridgeActivity" \
+            "$MAIN_ACTIVITY"
 
-          grep -q "RKMSSecureCredentialsPlugin" "$MAIN_ACTIVITY"
+          echo "Generated MainActivity verification PASS."
 
-          grep -q "getBridge().getWebView()" "$MAIN_ACTIVITY"
 
+      # =========================================================
+      # 20. Setup RKMS Android native bridge
+      # =========================================================
+      - name: Setup RKMS Android native bridge
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/setup-android-native.sh ]; then
+            echo "ERROR: setup-android-native.sh not found."
+            exit 1
+          fi
+
+          chmod +x scripts/setup-android-native.sh
+
+          bash scripts/setup-android-native.sh
+
+          echo
+          echo "RKMS Android native bridge setup completed."
+
+
+      # =========================================================
+      # 21. Verify generated native files
+      # =========================================================
+      - name: Verify generated native bridge files
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Generated Android native files:"
+          find android/app/src/main/java \
+            -type f \
+            | sort
+
+          MAIN_ACTIVITY="$(find android/app/src/main \
+            -type f \
+            -name "MainActivity.java" \
+            -print -quit)"
+
+          NATIVE_BRIDGE="$(find android/app/src/main \
+            -type f \
+            -name "RKMSNativeBridge.java" \
+            -print -quit)"
+
+          SECURE_PLUGIN="$(find android/app/src/main \
+            -type f \
+            -name "RKMSSecureCredentialsPlugin.java" \
+            -print -quit)"
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: MainActivity.java missing."
+            exit 1
+          fi
+
+          if [ -z "$NATIVE_BRIDGE" ]; then
+            echo "ERROR: RKMSNativeBridge.java missing."
+            exit 1
+          fi
+
+          if [ -z "$SECURE_PLUGIN" ]; then
+            echo "ERROR: RKMSSecureCredentialsPlugin.java missing."
+            exit 1
+          fi
+
+          echo
+          echo "MainActivity:"
+          echo "$MAIN_ACTIVITY"
+
+          echo
+          echo "RKMSNativeBridge:"
+          echo "$NATIVE_BRIDGE"
+
+          echo
+          echo "RKMSSecureCredentialsPlugin:"
+          echo "$SECURE_PLUGIN"
+
+          echo
+          echo "Generated native files PASS."
+
+
+      # =========================================================
+      # 22. Sync Capacitor
+      # =========================================================
+      - name: Sync RKMS application
+        working-directory: rkms-source
+        run: |
+          set -euo pipefail
+
+          npx cap sync android
+
+          echo "Capacitor Android sync PASS."
+
+
+      # =========================================================
+      # 23. Verify PDF functionality in CORRECT file
+      #
+      # IMPORTANT:
+      # PDF methods belong to RKMSNativeBridge.java,
+      # NOT MainActivity.java.
+      # =========================================================
+      - name: Verify generated Android PDF native bridge
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NATIVE_BRIDGE="$(find android/app/src/main \
+            -type f \
+            -name "RKMSNativeBridge.java" \
+            -print -quit)"
+
+          if [ -z "$NATIVE_BRIDGE" ]; then
+            echo "ERROR: RKMSNativeBridge.java not found."
+            find android/app/src/main/java -type f | sort
+            exit 1
+          fi
+
+          echo "PDF bridge target:"
+          echo "$NATIVE_BRIDGE"
+
+          echo
+          echo "Checking PDF methods..."
+
+          # PDF save lifecycle
+          grep -q "beginPdfSave" "$NATIVE_BRIDGE"
+          grep -q "appendPdfChunk" "$NATIVE_BRIDGE"
+          grep -q "finishPdfSave" "$NATIVE_BRIDGE"
+          grep -q "cancelPdfSave" "$NATIVE_BRIDGE"
+
+          echo "PASS: PDF lifecycle methods"
+
+
+          # Android PDF APIs
+          grep -q "ContentValues" "$NATIVE_BRIDGE"
+          grep -q "MediaStore" "$NATIVE_BRIDGE"
+          grep -q "Base64" "$NATIVE_BRIDGE"
+          grep -q "Environment.DIRECTORY_DOWNLOADS" "$NATIVE_BRIDGE"
+
+          echo "PASS: Android PDF APIs"
+
+
+          # PDF MIME type
+          grep -q "application/pdf" "$NATIVE_BRIDGE"
+
+          echo "PASS: PDF MIME type"
+
+
+          # RKMS download folder
+          grep -q "RKMS CONNECT" "$NATIVE_BRIDGE"
+
+          echo "PASS: RKMS CONNECT download folder"
+
+
+          # Activity/WebView required for print/native operations
+          grep -q \
+            "private final android.app.Activity activity" \
+            "$NATIVE_BRIDGE"
+
+          grep -q \
+            "private final android.webkit.WebView webView" \
+            "$NATIVE_BRIDGE"
+
+          echo "PASS: Activity/WebView references"
+
+
+          echo
+          echo "=================================================="
+          echo "ANDROID PDF NATIVE BRIDGE: PASS"
+          echo "=================================================="
+
+
+      # =========================================================
+      # 24. Verify MainActivity registration
+      # =========================================================
+      - name: Verify MainActivity native registration
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MAIN_ACTIVITY="$(find android/app/src/main \
+            -type f \
+            -name "MainActivity.java" \
+            -print -quit)"
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: MainActivity.java not found."
+            exit 1
+          fi
+
+          echo "MainActivity:"
+          echo "$MAIN_ACTIVITY"
+
+          # Native bridge registration
+          grep -q \
+            "RKMSNativeBridge" \
+            "$MAIN_ACTIVITY"
+
+          # WebView passed to bridge
+          grep -q \
+            "getBridge().getWebView()" \
+            "$MAIN_ACTIVITY"
+
+          # Secure credential plugin registration
+          grep -q \
+            "RKMSSecureCredentialsPlugin" \
+            "$MAIN_ACTIVITY"
+
+          # Capacitor plugin registration
+          grep -q \
+            "registerPlugin(RKMSSecureCredentialsPlugin.class)" \
+            "$MAIN_ACTIVITY"
+
+          echo
           echo "MainActivity native registration PASS."
+
+
+      # =========================================================
+      # 25. Verify secure credential plugin
+      # =========================================================
+      - name: Verify secure credentials plugin
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PLUGIN="$(find android/app/src/main \
+            -type f \
+            -name "RKMSSecureCredentialsPlugin.java" \
+            -print -quit)"
+
+          if [ -z "$PLUGIN" ]; then
+            echo "ERROR: Secure credentials plugin missing."
+            exit 1
+          fi
+
+          echo "Secure credentials plugin:"
+          echo "$PLUGIN"
+
+          grep -q "AndroidKeyStore" "$PLUGIN"
+          grep -q "AES/GCM/NoPadding" "$PLUGIN"
+          grep -q "BiometricPrompt" "$PLUGIN"
+          grep -q "authenticateAndGetCredentials" "$PLUGIN"
+          grep -q "save" "$PLUGIN"
+          grep -q "clear" "$PLUGIN"
+
+          echo "Secure credentials plugin verification PASS."
 
 
       # =========================================================
       # 26. Install ImageMagick
       # =========================================================
       - name: Install ImageMagick
+        shell: bash
         run: |
+          set -euo pipefail
+
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick
+
+          echo "ImageMagick installed."
 
 
       # =========================================================
@@ -609,9 +754,10 @@ jobs:
             "$RES/mipmap-xxhdpi" \
             "$RES/mipmap-xxxhdpi"
 
-          # =======================================================
-          # V1D corrected safe-area logo sizes
-          # =======================================================
+
+          # -------------------------------------------------------
+          # V1D corrected logo safe-area sizes
+          # -------------------------------------------------------
 
           convert "$LOGO" \
             -resize 26x26 \
@@ -654,26 +800,33 @@ jobs:
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
 
-          cp "$RES/mipmap-mdpi/ic_launcher.png" \
-             "$RES/mipmap-mdpi/ic_launcher_round.png"
+          # Round versions
+          cp \
+            "$RES/mipmap-mdpi/ic_launcher.png" \
+            "$RES/mipmap-mdpi/ic_launcher_round.png"
 
-          cp "$RES/mipmap-hdpi/ic_launcher.png" \
-             "$RES/mipmap-hdpi/ic_launcher_round.png"
+          cp \
+            "$RES/mipmap-hdpi/ic_launcher.png" \
+            "$RES/mipmap-hdpi/ic_launcher_round.png"
 
-          cp "$RES/mipmap-xhdpi/ic_launcher.png" \
-             "$RES/mipmap-xhdpi/ic_launcher_round.png"
+          cp \
+            "$RES/mipmap-xhdpi/ic_launcher.png" \
+            "$RES/mipmap-xhdpi/ic_launcher_round.png"
 
-          cp "$RES/mipmap-xxhdpi/ic_launcher.png" \
-             "$RES/mipmap-xxhdpi/ic_launcher_round.png"
+          cp \
+            "$RES/mipmap-xxhdpi/ic_launcher.png" \
+            "$RES/mipmap-xxhdpi/ic_launcher_round.png"
 
-          cp "$RES/mipmap-xxxhdpi/ic_launcher.png" \
-             "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
+          cp \
+            "$RES/mipmap-xxxhdpi/ic_launcher.png" \
+            "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
 
           # Remove adaptive launcher resources
           rm -rf \
             "$RES/mipmap-anydpi-v26" \
             "$RES/mipmap-anydpi"
+
 
           find "$RES" -type f \( \
             -name 'ic_launcher_foreground.xml' -o \
@@ -683,6 +836,7 @@ jobs:
           \) -delete || true
 
 
+          # App name
           if grep -q '<string name="app_name">' "$STRINGS"; then
             sed -i \
               's#<string name="app_name">.*</string>#<string name="app_name">RKMS</string>#' \
@@ -692,7 +846,12 @@ jobs:
               >> "$STRINGS"
           fi
 
-          echo "V1D launcher logo installed."
+
+          echo
+          echo "V1D corrected launcher logo installed."
+
+          identify \
+            "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
 
       # =========================================================
@@ -705,17 +864,24 @@ jobs:
 
           RES="rkms-source/android/app/src/main/res"
 
-          for FILE in \
-            "$RES/mipmap-mdpi/ic_launcher.png" \
-            "$RES/mipmap-hdpi/ic_launcher.png" \
-            "$RES/mipmap-xhdpi/ic_launcher.png" \
-            "$RES/mipmap-xxhdpi/ic_launcher.png" \
-            "$RES/mipmap-xxxhdpi/ic_launcher.png"
-          do
-            test -s "$FILE"
-          done
+          test -s \
+            "$RES/mipmap-mdpi/ic_launcher.png"
 
-          test ! -e "$RES/mipmap-anydpi-v26"
+          test -s \
+            "$RES/mipmap-hdpi/ic_launcher.png"
+
+          test -s \
+            "$RES/mipmap-xhdpi/ic_launcher.png"
+
+          test -s \
+            "$RES/mipmap-xxhdpi/ic_launcher.png"
+
+          test -s \
+            "$RES/mipmap-xxxhdpi/ic_launcher.png"
+
+          # Adaptive icon resources must not remain
+          test ! -e \
+            "$RES/mipmap-anydpi-v26"
 
           echo "Launcher logo verification PASS."
 
@@ -733,10 +899,15 @@ jobs:
       # =========================================================
       - name: Build Debug APK
         working-directory: rkms-source/android
+        shell: bash
         run: |
+          set -euo pipefail
+
           ./gradlew assembleDebug \
             --no-daemon \
             --stacktrace
+
+          echo "Gradle APK build completed."
 
 
       # =========================================================
@@ -750,11 +921,15 @@ jobs:
           APK="rkms-source/android/app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "ERROR: APK not generated."
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo "V1D APK successfully created:"
+          echo
+          echo "=================================================="
+          echo "RKMS V1D APK CREATED"
+          echo "=================================================="
+
           ls -lh "$APK"
 
           echo
@@ -763,7 +938,7 @@ jobs:
 
 
       # =========================================================
-      # 32. Rename APK
+      # 32. Rename final APK
       # =========================================================
       - name: Rename APK
         shell: bash
@@ -777,9 +952,11 @@ jobs:
             rkms-source/android/app/build/outputs/apk/debug/app-debug.apk \
             build/RKMS-Connect-V1D-Debug.apk
 
-          test -s build/RKMS-Connect-V1D-Debug.apk
+          test -s \
+            build/RKMS-Connect-V1D-Debug.apk
 
-          echo "Final V1D APK:"
+          echo
+          echo "Final APK:"
           ls -lh build/RKMS-Connect-V1D-Debug.apk
 
           echo
@@ -788,7 +965,7 @@ jobs:
 
 
       # =========================================================
-      # 33. Upload APK
+      # 33. Upload APK artifact
       # =========================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
