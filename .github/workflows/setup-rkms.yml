@@ -22,14 +22,18 @@ jobs:
           rm -rf build
           mkdir -p build
 
-          SOURCE_ZIP="RKMS_CONNECT_3_FIXES_FINAL.zip"
+          # IMPORTANT:
+          # This must be the latest audited source ZIP containing
+          # Authority + Saved Login fixes.
+          SOURCE_ZIP="RKMS_CONNECT_3_FIXES_FINAL_AUTHORITY_SAVED_LOGIN_FIXED_v2.zip"
 
           test -f "$SOURCE_ZIP" || {
             echo "Required RKMS source ZIP not found: $SOURCE_ZIP"
+            echo "Upload the exact audited source ZIP to the repository root."
             exit 1
           }
 
-          echo "Using exact RKMS final source ZIP: $SOURCE_ZIP"
+          echo "Using exact audited RKMS source ZIP: $SOURCE_ZIP"
 
           unzip -t "$SOURCE_ZIP" >/dev/null
           unzip -q "$SOURCE_ZIP" -d build
@@ -46,7 +50,9 @@ jobs:
       - name: Verify JavaScript
         run: |
           set -euo pipefail
+
           node --check build/app.js
+
           echo "app.js syntax verified"
 
       - name: Verify V1D fixes 1 to 8
@@ -66,7 +72,12 @@ jobs:
           grep -q "nationalName" "$FILE"
           grep -q "nationalPost" "$FILE"
           grep -q "data-download-pdf" "$FILE"
+
+          # Saved Login
           grep -q "rkmsSaveLoginCredentials" "$FILE"
+          grep -q "rkmsRestoreLoginCredentials" "$FILE"
+          grep -q "authenticateAndGetCredentials" "$FILE"
+          grep -q "getSavedIdentifier" "$FILE"
 
           test -s assets/rkms-logo-transparent.png
 
@@ -77,27 +88,37 @@ jobs:
           grep -q 'history.replaceState({rkmsRoute:"home"' "$FILE"
           grep -q 's.disabled=false' "$FILE"
 
+          # FCM
           grep -q 'rkmsRegisterFcmPush' "$FILE"
           grep -q 'rkms_notifications_v2' "$FILE"
           grep -q "action:'register_token'" "$FILE"
           grep -q 'rkms-fcm-push' "$FILE"
 
-          echo "RKMS fixes + FCM client source verification PASS"
+          echo "RKMS fixes + Saved Login + FCM client source verification PASS"
 
       - name: Verify PDF pipeline
         working-directory: build
         run: |
+          set -euo pipefail
           python3 scripts/verify-pdf-pipeline.py
 
       - name: Verify report download security
         working-directory: build
         run: |
+          set -euo pipefail
           python3 scripts/verify-report-download-scope.py
 
       - name: Verify RKMS final static checks
         working-directory: build
         run: |
+          set -euo pipefail
           python3 scripts/verify-rkms-final.py
+
+      - name: Verify PDA authority hierarchy
+        working-directory: build
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-authority-hierarchy.py
 
       - name: Create Capacitor build package
         working-directory: build
@@ -127,7 +148,7 @@ jobs:
 
           grep -q '@capacitor/push-notifications' package.json
 
-          echo "Capacitor FCM dependency verified"
+          echo "Capacitor dependencies verified"
 
           cat > capacitor.config.json <<'JSON'
           {
@@ -155,16 +176,20 @@ jobs:
       - name: Install Capacitor dependencies
         working-directory: build
         run: |
+          set -euo pipefail
           npm install --no-audit --no-fund
 
       - name: Build RKMS web application
         working-directory: build
         run: |
+          set -euo pipefail
           npm run build
 
       - name: Verify native bridge source
         working-directory: build
         run: |
+          set -euo pipefail
+
           bash -n scripts/setup-android-native.sh
           python3 scripts/verify-native-bridge.py
 
@@ -180,11 +205,13 @@ jobs:
       - name: Create Android platform
         working-directory: build
         run: |
+          set -euo pipefail
           npx cap add android
 
       - name: Add RKMS secure credential native bridge
         working-directory: build
         run: |
+          set -euo pipefail
           bash scripts/setup-android-native.sh
 
       - name: Configure Firebase Android client for FCM
@@ -274,11 +301,37 @@ jobs:
       - name: Sync RKMS application
         working-directory: build
         run: |
+          set -euo pipefail
           npx cap sync android
+
+      - name: Add Android biometric dependency
+        working-directory: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_GRADLE="android/app/build.gradle"
+
+          if ! grep -q 'androidx.biometric:biometric:' "$APP_GRADLE"; then
+            sed -i '/dependencies {/a\    implementation "androidx.biometric:biometric:1.1.0"' "$APP_GRADLE"
+          fi
+
+          grep -q 'androidx.biometric:biometric:1.1.0' "$APP_GRADLE"
+
+          echo "Android biometric dependency verified"
+
+      - name: Verify Saved Login implementation
+        working-directory: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 scripts/verify-saved-login.py
 
       - name: Verify generated Android PDF bridge
         working-directory: build
         run: |
+          set -euo pipefail
           python3 scripts/verify-android-pdf.py
 
       - name: Verify generated Android native bridge and PDF implementation
@@ -316,10 +369,12 @@ jobs:
           grep -q 'AES/GCM/NoPadding' "$SECURE_PLUGIN"
           grep -q 'BiometricPrompt' "$SECURE_PLUGIN"
 
-          echo "Generated Android native/PDF verification PASS"
+          echo "Generated Android native/PDF/Secure Login verification PASS"
 
       - name: Install image tools
         run: |
+          set -euo pipefail
+
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick
 
@@ -423,11 +478,20 @@ jobs:
 
       - name: Make Gradle executable
         run: |
+          set -euo pipefail
           chmod +x build/android/gradlew
+
+      - name: Clean Android build
+        working-directory: build/android
+        run: |
+          set -euo pipefail
+          ./gradlew clean --no-daemon
 
       - name: Build Debug APK
         working-directory: build/android
         run: |
+          set -euo pipefail
+
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Verify APK
@@ -441,6 +505,9 @@ jobs:
 
           echo "RKMS APK successfully created:"
           ls -lh "$APK"
+
+          echo "APK SHA256:"
+          sha256sum "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
