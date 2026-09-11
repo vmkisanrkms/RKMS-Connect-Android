@@ -22,18 +22,17 @@ jobs:
           rm -rf build
           mkdir -p build
 
-          # IMPORTANT:
-          # This must be the latest audited source ZIP containing
-          # Authority + Saved Login fixes.
-          SOURCE_ZIP="RKMS_CONNECT_3_FIXES_FINAL_AUTHORITY_SAVED_LOGIN_FIXED_v2.zip"
+          # Latest audited source:
+          # Authority + Saved Login + Native plugin registration fix
+          SOURCE_ZIP="RKMS_CONNECT_3_FIXES_FINAL_AUTHORITY_SAVED_LOGIN_FIXED_v3.zip"
 
           test -f "$SOURCE_ZIP" || {
-            echo "Required RKMS source ZIP not found: $SOURCE_ZIP"
-            echo "Upload the exact audited source ZIP to the repository root."
+            echo "ERROR: Required RKMS source ZIP not found: $SOURCE_ZIP"
+            echo "Upload the exact v3 audited ZIP to repository root."
             exit 1
           }
 
-          echo "Using exact audited RKMS source ZIP: $SOURCE_ZIP"
+          echo "Using audited RKMS source: $SOURCE_ZIP"
 
           unzip -t "$SOURCE_ZIP" >/dev/null
           unzip -q "$SOURCE_ZIP" -d build
@@ -43,11 +42,13 @@ jobs:
           test -f build/config.js
           test -f build/assets/rkms-logo-transparent.png
 
-          test "$(sha256sum build/assets/rkms-logo-transparent.png | cut -d" " -f1)" = "39a1d2aca7b3b3cbf748267600b32a82adf04abe377c5bb5cadd7deb29b6d43b"
+          test "$(sha256sum build/assets/rkms-logo-transparent.png | cut -d" " -f1)" = \
+            "39a1d2aca7b3b3cbf748267600b32a82adf04abe377c5bb5cadd7deb29b6d43b"
 
           echo "Exact RKMS logo source verified"
 
       - name: Verify JavaScript
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -73,12 +74,6 @@ jobs:
           grep -q "nationalPost" "$FILE"
           grep -q "data-download-pdf" "$FILE"
 
-          # Saved Login
-          grep -q "rkmsSaveLoginCredentials" "$FILE"
-          grep -q "rkmsRestoreLoginCredentials" "$FILE"
-          grep -q "authenticateAndGetCredentials" "$FILE"
-          grep -q "getSavedIdentifier" "$FILE"
-
           test -s assets/rkms-logo-transparent.png
 
           grep -q 'mode:"cors"' "$FILE"
@@ -94,28 +89,38 @@ jobs:
           grep -q "action:'register_token'" "$FILE"
           grep -q 'rkms-fcm-push' "$FILE"
 
-          echo "RKMS fixes + Saved Login + FCM client source verification PASS"
+          # Saved Login
+          grep -q 'rkmsSaveLoginCredentials' "$FILE"
+          grep -q 'rkmsRestoreLoginCredentials' "$FILE"
+          grep -q 'authenticateAndGetCredentials' "$FILE"
+          grep -q 'getSavedIdentifier' "$FILE"
+
+          echo "RKMS fixes + Saved Login + FCM verification PASS"
 
       - name: Verify PDF pipeline
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
           python3 scripts/verify-pdf-pipeline.py
 
       - name: Verify report download security
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
           python3 scripts/verify-report-download-scope.py
 
       - name: Verify RKMS final static checks
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
           python3 scripts/verify-rkms-final.py
 
       - name: Verify PDA authority hierarchy
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
           python3 scripts/verify-authority-hierarchy.py
@@ -148,8 +153,6 @@ jobs:
 
           grep -q '@capacitor/push-notifications' package.json
 
-          echo "Capacitor dependencies verified"
-
           cat > capacitor.config.json <<'JSON'
           {
             "appId": "org.rkms.connect",
@@ -167,6 +170,8 @@ jobs:
             }
           }
           JSON
+
+          echo "Capacitor build package verified"
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -187,6 +192,7 @@ jobs:
 
       - name: Verify native bridge source
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -204,15 +210,23 @@ jobs:
 
       - name: Create Android platform
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
           npx cap add android
 
       - name: Add RKMS secure credential native bridge
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
+
           bash scripts/setup-android-native.sh
+
+          test -f android/app/src/main/java/org/rkms/connect/RKMSSecureCredentialsPlugin.java
+          test -f android/app/src/main/java/org/rkms/connect/RKMSNativeBridge.java
+
+          echo "RKMS native secure credential bridge generated"
 
       - name: Configure Firebase Android client for FCM
         working-directory: build
@@ -250,10 +264,8 @@ jobs:
           assert d.get("project_info", {}).get("project_id"), \
               "google-services.json project_id missing"
 
-          assert d.get("client"), \
-              "google-services.json client section missing"
-
-          clients = d["client"]
+          clients = d.get("client", [])
+          assert clients, "google-services.json client section missing"
 
           assert any(
               c.get("client_info", {})
@@ -283,7 +295,8 @@ jobs:
 
               r = r.replace(
                   marker,
-                  marker + "\n        classpath 'com.google.gms:google-services:4.4.2'",
+                  marker +
+                  "\n        classpath 'com.google.gms:google-services:4.4.2'",
                   1
               )
 
@@ -300,21 +313,18 @@ jobs:
 
       - name: Sync RKMS application
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
           npx cap sync android
 
-      - name: Add Android biometric dependency
+      - name: Verify Android biometric dependency
         working-directory: build
         shell: bash
         run: |
           set -euo pipefail
 
           APP_GRADLE="android/app/build.gradle"
-
-          if ! grep -q 'androidx.biometric:biometric:' "$APP_GRADLE"; then
-            sed -i '/dependencies {/a\    implementation "androidx.biometric:biometric:1.1.0"' "$APP_GRADLE"
-          fi
 
           grep -q 'androidx.biometric:biometric:1.1.0' "$APP_GRADLE"
 
@@ -330,11 +340,12 @@ jobs:
 
       - name: Verify generated Android PDF bridge
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
           python3 scripts/verify-android-pdf.py
 
-      - name: Verify generated Android native bridge and PDF implementation
+      - name: Verify generated Android native bridge and Saved Login
         working-directory: build
         shell: bash
         run: |
@@ -352,6 +363,7 @@ jobs:
           echo "RKMSNativeBridge: $NATIVE_BRIDGE"
           echo "Secure plugin: $SECURE_PLUGIN"
 
+          # Native PDF bridge
           grep -q 'beginPdfSave' "$NATIVE_BRIDGE"
           grep -q 'appendPdfChunk' "$NATIVE_BRIDGE"
           grep -q 'finishPdfSave' "$NATIVE_BRIDGE"
@@ -361,17 +373,43 @@ jobs:
           grep -q 'application/pdf' "$NATIVE_BRIDGE"
           grep -q 'RKMS CONNECT' "$NATIVE_BRIDGE"
 
+          # MainActivity registration
           grep -q 'RKMSNativeBridge' "$MAIN_ACTIVITY"
           grep -q 'getBridge().getWebView()' "$MAIN_ACTIVITY"
           grep -q 'RKMSSecureCredentialsPlugin' "$MAIN_ACTIVITY"
 
+          # IMPORTANT:
+          # Secure plugin MUST be registered before BridgeActivity.onCreate().
+          python3 - "$MAIN_ACTIVITY" <<'PY2'
+          import sys
+          from pathlib import Path
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          needle = (
+              "registerPlugin(RKMSSecureCredentialsPlugin.class);"
+              "\n        super.onCreate(savedInstanceState);"
+          )
+
+          if needle not in s:
+              raise SystemExit(
+                  "ERROR: Secure credential plugin registration order is invalid."
+              )
+
+          print("Secure plugin registration order verified")
+          PY2
+
+          # Secure credential implementation
           grep -q 'AndroidKeyStore' "$SECURE_PLUGIN"
           grep -q 'AES/GCM/NoPadding' "$SECURE_PLUGIN"
           grep -q 'BiometricPrompt' "$SECURE_PLUGIN"
+          grep -q '@CapacitorPlugin(name = "RKMSSecureCredentials")' "$SECURE_PLUGIN"
 
-          echo "Generated Android native/PDF/Secure Login verification PASS"
+          echo "Generated Android native/PDF/Saved Login verification PASS"
 
       - name: Install image tools
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -489,6 +527,7 @@ jobs:
 
       - name: Build Debug APK
         working-directory: build/android
+        shell: bash
         run: |
           set -euo pipefail
 
