@@ -11,33 +11,52 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # =========================================================
+      # 1. Checkout
+      # =========================================================
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract RKMS Connect V1A source
+
+      # =========================================================
+      # 2. Extract EXACT RKMS V1D source
+      # =========================================================
+      - name: Extract RKMS Connect V1D source
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf build-project
           mkdir -p build-project
 
-          SOURCE_ZIP="RKMS_CONNECT_V1A_FINAL_BUILD_READY.zip"
+          SOURCE_ZIP="RKMS_CONNECT_V1D_FULL_FIX_CORRECTED_FINAL_FIXED_v2.zip"
 
           if [ ! -f "$SOURCE_ZIP" ]; then
-            echo "ERROR: $SOURCE_ZIP not found"
+            echo "ERROR: Required V1D source ZIP not found:"
+            echo "$SOURCE_ZIP"
+            echo
             echo "Available ZIP files:"
-            find . -maxdepth 1 -type f -name "*.zip" -print
+            find . -maxdepth 2 -type f -name "*.zip" -print
             exit 1
           fi
 
-          echo "Using source: $SOURCE_ZIP"
+          echo "Using EXACT V1D source:"
+          echo "$SOURCE_ZIP"
 
-          unzip -t "$SOURCE_ZIP" >/dev/null
+          echo "Checking ZIP integrity..."
+          unzip -t "$SOURCE_ZIP"
+
+          echo "Extracting V1D source..."
           unzip -q "$SOURCE_ZIP" -d build-project
 
-          echo "V1A source extracted successfully"
+          echo "V1D source extracted successfully."
 
-      - name: Locate RKMS source
+
+      # =========================================================
+      # 3. Locate RKMS source
+      # =========================================================
+      - name: Locate RKMS V1D source
         shell: bash
         run: |
           set -euo pipefail
@@ -45,15 +64,19 @@ jobs:
           APP_JS="$(find build-project -type f -name "app.js" -print -quit)"
 
           if [ -z "$APP_JS" ]; then
-            echo "ERROR: app.js not found"
+            echo "ERROR: app.js not found inside V1D ZIP."
+            echo
+            echo "Extracted files:"
+            find build-project -maxdepth 4 -type f | sort | head -300
             exit 1
           fi
 
           SOURCE_DIR="$(dirname "$APP_JS")"
 
-          echo "RKMS source directory:"
+          echo "RKMS V1D source directory:"
           echo "$SOURCE_DIR"
 
+          rm -rf rkms-source
           mkdir -p rkms-source
 
           rsync -a \
@@ -64,33 +87,156 @@ jobs:
           test -f rkms-source/index.html
           test -f rkms-source/config.js
 
-          echo "RKMS V1A source verified"
+          echo
+          echo "RKMS V1D source verified."
 
-      - name: Verify JavaScript
-        run: |
-          set -euo pipefail
 
-          node --check rkms-source/app.js
-
-          echo "app.js syntax verified"
-
-      - name: Verify Member Dashboard fix
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          grep -q "function renderMemberDashboard" rkms-source/app.js
-          grep -q 'name==="member-dashboard"' rkms-source/app.js
-
-          echo "Member Dashboard function found"
-          echo "Member Dashboard route found"
-          echo "Member Dashboard verification PASS"
-
+      # =========================================================
+      # 4. Setup Node.js
+      # =========================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+
+      # =========================================================
+      # 5. Verify JavaScript syntax
+      # =========================================================
+      - name: Verify JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --check rkms-source/app.js
+
+          echo "app.js syntax verification PASS."
+
+
+      # =========================================================
+      # 6. Verify Member Dashboard
+      # =========================================================
+      - name: Verify Member Dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -q "function renderMemberDashboard" \
+            rkms-source/app.js
+
+          grep -q 'name==="member-dashboard"' \
+            rkms-source/app.js
+
+          echo "Member Dashboard function found."
+          echo "Member Dashboard route found."
+          echo "Member Dashboard verification PASS."
+
+
+      # =========================================================
+      # 7. Verify V1D fixes 1-8
+      # =========================================================
+      - name: Verify V1D fixes 1 to 8
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="rkms-source/app.js"
+
+          echo "Checking V1D issue fixes..."
+
+          # 1. Member area
+          grep -q "memberAreaLabel" "$FILE"
+
+          # 2. PDF download
+          grep -q "downloadPdf" "$FILE"
+          grep -q "pdfBlobFromCanvas" "$FILE"
+
+          # 3. Native print
+          grep -q "printPage" "$FILE"
+
+          # 4. Member profile
+          grep -q "renderMemberProfile" "$FILE"
+          grep -q "member-profile" "$FILE"
+
+          # 5. National President certificate block
+          grep -q "nationalName" "$FILE"
+          grep -q "nationalPost" "$FILE"
+
+          # 6. Certificate PDF
+          grep -q "data-download-pdf" "$FILE"
+
+          # 7. Launcher logo source
+          test -s rkms-source/assets/rkms-logo-transparent.png
+
+          # 8. Saved credentials
+          grep -q "rkmsSaveLoginCredentials" "$FILE"
+
+          echo
+          echo "V1D fixes 1-8 verification PASS."
+
+
+      # =========================================================
+      # 8. Verify V1D static verification scripts
+      # =========================================================
+      - name: Run V1D PDF pipeline verification
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/verify-pdf-pipeline.py ]; then
+            echo "ERROR: verify-pdf-pipeline.py missing"
+            exit 1
+          fi
+
+          python scripts/verify-pdf-pipeline.py
+
+
+      - name: Run V1D report download security verification
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/verify-report-download-scope.py ]; then
+            echo "ERROR: verify-report-download-scope.py missing"
+            exit 1
+          fi
+
+          python scripts/verify-report-download-scope.py
+
+
+      - name: Run V1D native bridge verification
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/verify-native-bridge.py ]; then
+            echo "ERROR: verify-native-bridge.py missing"
+            exit 1
+          fi
+
+          python scripts/verify-native-bridge.py
+
+
+      - name: Run RKMS final static verification
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/verify-rkms-final.py ]; then
+            echo "ERROR: verify-rkms-final.py missing"
+            exit 1
+          fi
+
+          python scripts/verify-rkms-final.py
+
+
+      # =========================================================
+      # 9. Create Capacitor build package
+      # =========================================================
       - name: Create Capacitor build package
         working-directory: rkms-source
         shell: bash
@@ -134,32 +280,81 @@ jobs:
           }
           JSON
 
-          echo "Capacitor package created"
+          echo "V1D Capacitor package created."
 
+
+      # =========================================================
+      # 10. Install Capacitor dependencies
+      # =========================================================
       - name: Install Capacitor dependencies
         working-directory: rkms-source
         run: |
           npm install --no-audit --no-fund
 
+
+      # =========================================================
+      # 11. Build RKMS web application
+      # =========================================================
       - name: Build RKMS web application
         working-directory: rkms-source
         run: |
           npm run build
 
+          test -f dist/app.js
+          test -f dist/index.html
+          test -f dist/config.js
+
+          echo "RKMS web application build PASS."
+
+
+      # =========================================================
+      # 12. Setup Java 21
+      # =========================================================
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
+
+      # =========================================================
+      # 13. Setup Android SDK
+      # =========================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+
+      # =========================================================
+      # 14. Install Android SDK packages
+      # =========================================================
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "Android SDK packages ready."
+
+
+      # =========================================================
+      # 15. Create Android platform
+      # =========================================================
       - name: Create Android platform
         working-directory: rkms-source
         run: |
           npx cap add android
 
+
+      # =========================================================
+      # 16. Setup RKMS Android native bridge
+      # =========================================================
       - name: Setup RKMS Android native bridge
         working-directory: rkms-source
         shell: bash
@@ -167,25 +362,84 @@ jobs:
           set -euo pipefail
 
           if [ ! -f scripts/setup-android-native.sh ]; then
-            echo "ERROR: V1A native setup script not found"
+            echo "ERROR: V1D setup-android-native.sh not found."
             exit 1
           fi
 
           chmod +x scripts/setup-android-native.sh
+
           bash scripts/setup-android-native.sh
 
-          echo "RKMS Android native bridge setup completed"
+          echo "V1D Android native bridge setup completed."
 
+
+      # =========================================================
+      # 17. Sync Capacitor
+      # =========================================================
       - name: Sync RKMS application
         working-directory: rkms-source
         run: |
           npx cap sync android
 
+
+      # =========================================================
+      # 18. Verify GENERATED Android PDF bridge
+      # =========================================================
+      - name: Verify generated Android PDF bridge
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/verify-android-pdf.py ]; then
+            echo "ERROR: verify-android-pdf.py missing."
+            exit 1
+          fi
+
+          python scripts/verify-android-pdf.py
+
+          echo "Generated Android PDF bridge verification PASS."
+
+
+      # =========================================================
+      # 19. Verify generated MainActivity
+      # =========================================================
+      - name: Verify generated MainActivity native registration
+        working-directory: rkms-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MAIN_ACTIVITY="$(find android/app/src/main/java -type f \
+            -name "MainActivity.java" -print -quit)"
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: MainActivity.java not found."
+            exit 1
+          fi
+
+          echo "MainActivity:"
+          echo "$MAIN_ACTIVITY"
+
+          grep -q "RKMSNativeBridge" "$MAIN_ACTIVITY"
+          grep -q "getBridge().getWebView()" "$MAIN_ACTIVITY"
+
+          echo "Native bridge registration PASS."
+
+
+      # =========================================================
+      # 20. Install ImageMagick
+      # =========================================================
       - name: Install ImageMagick
+        shell: bash
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick
 
+
+      # =========================================================
+      # 21. Install corrected RKMS launcher logo
+      # =========================================================
       - name: Install RKMS launcher logo
         shell: bash
         run: |
@@ -204,19 +458,20 @@ jobs:
             "$RES/mipmap-xxhdpi" \
             "$RES/mipmap-xxxhdpi"
 
-          convert "$LOGO" -resize 48x48! -strip \
+          # V1D corrected launcher safe-area sizes
+          convert "$LOGO" -resize 26x26! -strip \
             "$RES/mipmap-mdpi/ic_launcher.png"
 
-          convert "$LOGO" -resize 72x72! -strip \
+          convert "$LOGO" -resize 39x39! -strip \
             "$RES/mipmap-hdpi/ic_launcher.png"
 
-          convert "$LOGO" -resize 96x96! -strip \
+          convert "$LOGO" -resize 52x52! -strip \
             "$RES/mipmap-xhdpi/ic_launcher.png"
 
-          convert "$LOGO" -resize 144x144! -strip \
+          convert "$LOGO" -resize 78x78! -strip \
             "$RES/mipmap-xxhdpi/ic_launcher.png"
 
-          convert "$LOGO" -resize 192x192! -strip \
+          convert "$LOGO" -resize 104x104! -strip \
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
           cp "$RES/mipmap-mdpi/ic_launcher.png" \
@@ -234,6 +489,8 @@ jobs:
           cp "$RES/mipmap-xxxhdpi/ic_launcher.png" \
              "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
+          # Remove adaptive launcher resources so Android does not
+          # apply another crop/zoom layer.
           rm -rf \
             "$RES/mipmap-anydpi-v26" \
             "$RES/mipmap-anydpi"
@@ -254,12 +511,41 @@ jobs:
               >> "$STRINGS"
           fi
 
-          echo "RKMS launcher logo installed"
+          echo "V1D corrected launcher logo installed."
 
+
+      # =========================================================
+      # 22. Verify launcher logo files
+      # =========================================================
+      - name: Verify launcher logo
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RES="rkms-source/android/app/src/main/res"
+
+          test -s "$RES/mipmap-mdpi/ic_launcher.png"
+          test -s "$RES/mipmap-hdpi/ic_launcher.png"
+          test -s "$RES/mipmap-xhdpi/ic_launcher.png"
+          test -s "$RES/mipmap-xxhdpi/ic_launcher.png"
+          test -s "$RES/mipmap-xxxhdpi/ic_launcher.png"
+
+          test ! -e "$RES/mipmap-anydpi-v26"
+
+          echo "Launcher logo verification PASS."
+
+
+      # =========================================================
+      # 23. Make Gradle executable
+      # =========================================================
       - name: Make Gradle executable
         run: |
           chmod +x rkms-source/android/gradlew
 
+
+      # =========================================================
+      # 24. Build Debug APK
+      # =========================================================
       - name: Build Debug APK
         working-directory: rkms-source/android
         run: |
@@ -267,6 +553,10 @@ jobs:
             --no-daemon \
             --stacktrace
 
+
+      # =========================================================
+      # 25. Verify generated APK
+      # =========================================================
       - name: Verify APK
         shell: bash
         run: |
@@ -274,33 +564,51 @@ jobs:
 
           APK="rkms-source/android/app/build/outputs/apk/debug/app-debug.apk"
 
-          test -s "$APK"
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
 
-          echo "V1A APK successfully created:"
+          echo "V1D APK successfully created:"
           ls -lh "$APK"
 
+          echo
           echo "APK SHA-256:"
           sha256sum "$APK"
 
+
+      # =========================================================
+      # 26. Rename APK
+      # =========================================================
       - name: Rename APK
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf build
           mkdir -p build
 
           cp \
             rkms-source/android/app/build/outputs/apk/debug/app-debug.apk \
-            build/RKMS-Connect-V1A-Debug.apk
+            build/RKMS-Connect-V1D-Debug.apk
 
-          test -s build/RKMS-Connect-V1A-Debug.apk
+          test -s build/RKMS-Connect-V1D-Debug.apk
 
-          ls -lh build/RKMS-Connect-V1A-Debug.apk
+          echo "Final APK:"
+          ls -lh build/RKMS-Connect-V1D-Debug.apk
 
+          echo
+          echo "Final APK SHA-256:"
+          sha256sum build/RKMS-Connect-V1D-Debug.apk
+
+
+      # =========================================================
+      # 27. Upload APK
+      # =========================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Connect-V1A-Debug-APK
-          path: build/RKMS-Connect-V1A-Debug.apk
+          name: RKMS-Connect-V1D-Debug-APK
+          path: build/RKMS-Connect-V1D-Debug.apk
           if-no-files-found: error
           retention-days: 30
