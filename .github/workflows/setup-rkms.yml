@@ -11,9 +11,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ============================================================
+      # 1. CHECKOUT CURRENT REPOSITORY
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ============================================================
+      # 2. PREPARE CURRENT RKMS SOURCE
+      # IMPORTANT:
+      # Never extract an old V8/V9/V10 ZIP here.
+      # The APK must be built from the exact current Git commit.
+      # ============================================================
       - name: Prepare RKMS source
         shell: bash
         run: |
@@ -22,38 +31,47 @@ jobs:
           rm -rf build
           mkdir -p build
 
-          # CURRENT FINAL SOURCE ZIP
-          SOURCE_ZIP="RKMS_CONNECT_3_FIXES_FINAL_AUTHORITY_SAVED_LOGIN_FIXED_v8.zip"
+          rsync -a \
+            --exclude='build/' \
+            --exclude='android/' \
+            --exclude='node_modules/' \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='*.zip' \
+            ./ build/
 
-          test -f "$SOURCE_ZIP" || {
-            echo "Required RKMS source ZIP not found: $SOURCE_ZIP"
-            exit 1
-          }
-
-          echo "Using exact RKMS final source ZIP: $SOURCE_ZIP"
-
-          unzip -t "$SOURCE_ZIP" >/dev/null
-          unzip -q "$SOURCE_ZIP" -d build
+          echo "Using current checked-out RKMS source."
 
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
-          test -f build/assets/rkms-logo-transparent.png
+          test -f build/styles.css
+          test -d build/assets
+          test -s build/assets/rkms-logo-transparent.png
 
-          test "$(sha256sum build/assets/rkms-logo-transparent.png | cut -d" " -f1)" = \
+          LOGO_SHA="$(sha256sum build/assets/rkms-logo-transparent.png | cut -d' ' -f1)"
+
+          test "$LOGO_SHA" = \
             "39a1d2aca7b3b3cbf748267600b32a82adf04abe377c5bb5cadd7deb29b6d43b"
 
-          echo "Exact RKMS logo source verified"
+          echo "Exact RKMS logo source verified."
 
+      # ============================================================
+      # 3. JAVASCRIPT SYNTAX
+      # ============================================================
       - name: Verify JavaScript
+        shell: bash
         run: |
           set -euo pipefail
 
           node --check build/app.js
 
-          echo "app.js syntax verified"
+          echo "app.js syntax verified."
 
-      - name: Verify V1D fixes 1 to 8
+      # ============================================================
+      # 4. V1D / EXISTING RKMS FIXES + JWT + FCM SOURCE
+      # ============================================================
+      - name: Verify RKMS fixes and FCM client source
         working-directory: build
         shell: bash
         run: |
@@ -61,6 +79,7 @@ jobs:
 
           FILE="app.js"
 
+          # Existing RKMS fixes
           grep -q "memberAreaLabel" "$FILE"
           grep -q "downloadPdf" "$FILE"
           grep -q "pdfBlobFromCanvas" "$FILE"
@@ -70,11 +89,9 @@ jobs:
           grep -q "nationalName" "$FILE"
           grep -q "nationalPost" "$FILE"
           grep -q "data-download-pdf" "$FILE"
-
           grep -q "rkmsSaveLoginCredentials" "$FILE"
 
-          test -s assets/rkms-logo-transparent.png
-
+          # Existing web/PDF fixes
           grep -q 'mode:"cors"' "$FILE"
           grep -q 'readAsDataURL' "$FILE"
           grep -q 'img.crossOrigin="anonymous"' "$FILE"
@@ -82,13 +99,29 @@ jobs:
           grep -q 'history.replaceState({rkmsRoute:"home"' "$FILE"
           grep -q 's.disabled=false' "$FILE"
 
-          grep -q 'rkmsRegisterFcmPush' "$FILE"
-          grep -q 'rkms_notifications_v2' "$FILE"
+          # JWT resume/refresh implementation
+          grep -q "jwtExpiryMs" "$FILE"
+          grep -q "refreshAccessTokenSilently" "$FILE"
+          grep -q "isJwtAuthFailure" "$FILE"
+          grep -q "visibilitychange" "$FILE"
+
+          # FCM client registration
+          grep -q "rkmsRegisterFcmPush" "$FILE"
+          grep -q "rkms_notifications_v2" "$FILE"
           grep -q "action:'register_token'" "$FILE"
-          grep -q 'rkms-fcm-push' "$FILE"
+          grep -q "rkms-fcm-push" "$FILE"
 
-          echo "RKMS fixes + FCM client source verification PASS"
+          # Chat must NOT perform a second client-side queue dispatch.
+          if grep -q "push_queue_ids" "$FILE"; then
+            echo "ERROR: client-side push_queue_ids dispatch still exists."
+            exit 1
+          fi
 
+          echo "RKMS + JWT + FCM source verification PASS."
+
+      # ============================================================
+      # 5. SAVED LOGIN
+      # ============================================================
       - name: Verify Saved Login
         working-directory: build
         shell: bash
@@ -97,6 +130,9 @@ jobs:
 
           python3 scripts/verify-saved-login.py
 
+      # ============================================================
+      # 6. DIRECTORY LISTS
+      # ============================================================
       - name: Verify Directory Lists
         working-directory: build
         shell: bash
@@ -105,6 +141,9 @@ jobs:
 
           python3 scripts/verify-directory-lists.py
 
+      # ============================================================
+      # 7. PDA AUTHORITY
+      # ============================================================
       - name: Verify PDA authority hierarchy
         working-directory: build
         shell: bash
@@ -113,6 +152,9 @@ jobs:
 
           python3 scripts/verify-authority-hierarchy.py
 
+      # ============================================================
+      # 8. PDF PIPELINE
+      # ============================================================
       - name: Verify PDF pipeline
         working-directory: build
         shell: bash
@@ -121,6 +163,9 @@ jobs:
 
           python3 scripts/verify-pdf-pipeline.py
 
+      # ============================================================
+      # 9. REPORT DOWNLOAD SECURITY
+      # ============================================================
       - name: Verify report download security
         working-directory: build
         shell: bash
@@ -129,6 +174,9 @@ jobs:
 
           python3 scripts/verify-report-download-scope.py
 
+      # ============================================================
+      # 10. RKMS FINAL STATIC AUDIT
+      # ============================================================
       - name: Verify RKMS final static checks
         working-directory: build
         shell: bash
@@ -137,6 +185,9 @@ jobs:
 
           python3 scripts/verify-rkms-final.py
 
+      # ============================================================
+      # 11. NATIVE BRIDGE SOURCE CHECK
+      # ============================================================
       - name: Verify native bridge source
         working-directory: build
         shell: bash
@@ -146,6 +197,9 @@ jobs:
           bash -n scripts/setup-android-native.sh
           python3 scripts/verify-native-bridge.py
 
+      # ============================================================
+      # 12. PYTHON VERIFICATION SCRIPTS
+      # ============================================================
       - name: Verify all Python verification scripts
         working-directory: build
         shell: bash
@@ -154,8 +208,14 @@ jobs:
 
           python3 -m py_compile scripts/*.py
 
-          echo "All Python verification scripts compile successfully"
+          echo "All Python verification scripts compile successfully."
 
+      # ============================================================
+      # 13. CREATE CAPACITOR PACKAGE
+      # IMPORTANT:
+      # Only runtime web files go into dist.
+      # Do NOT package migrations/scripts/docs into APK web assets.
+      # ============================================================
       - name: Create Capacitor build package
         working-directory: build
         shell: bash
@@ -168,7 +228,7 @@ jobs:
             "version": "1.0.0",
             "private": true,
             "scripts": {
-              "build": "rm -rf dist && mkdir -p dist && rsync -a --exclude='dist/' --exclude='android/' --exclude='node_modules/' --exclude='.git/' --exclude='.github/' --exclude='*.zip' ./ dist/"
+              "build": "rm -rf dist && mkdir -p dist && cp index.html app.js config.js styles.css manifest.webmanifest dist/ && cp -r assets dist/assets"
             },
             "dependencies": {
               "@capacitor/core": "6.2.2",
@@ -182,12 +242,12 @@ jobs:
           }
           JSON
 
-          grep -q '@capacitor/core' package.json
-          grep -q '@capacitor/android' package.json
-          grep -q '@capacitor/app' package.json
-          grep -q '@capacitor/push-notifications' package.json
+          grep -q '"@capacitor/core": "6.2.2"' package.json
+          grep -q '"@capacitor/android": "6.2.2"' package.json
+          grep -q '"@capacitor/app": "6.0.3"' package.json
+          grep -q '"@capacitor/push-notifications": "6.0.3"' package.json
 
-          echo "Capacitor dependencies verified"
+          echo "Capacitor dependencies verified."
 
           cat > capacitor.config.json <<'JSON'
           {
@@ -207,24 +267,33 @@ jobs:
           }
           JSON
 
-          echo "Capacitor configuration created"
+          echo "Capacitor configuration created."
 
+      # ============================================================
+      # 14. NODE.JS
+      # ============================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: build/package.json
 
+      # ============================================================
+      # 15. INSTALL CAPACITOR
+      # ============================================================
       - name: Install Capacitor dependencies
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
 
           npm install --no-audit --no-fund
 
+      # ============================================================
+      # 16. BUILD WEB APPLICATION
+      # ============================================================
       - name: Build RKMS web application
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -233,26 +302,41 @@ jobs:
           test -f dist/index.html
           test -f dist/app.js
           test -f dist/config.js
+          test -f dist/styles.css
+          test -f dist/manifest.webmanifest
           test -s dist/assets/rkms-logo-transparent.png
 
-          echo "RKMS web application build verified"
+          echo "RKMS web application build verified."
 
+      # ============================================================
+      # 17. JAVA
+      # ============================================================
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
+      # ============================================================
+      # 18. ANDROID SDK
+      # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # ============================================================
+      # 19. CREATE ANDROID PROJECT
+      # ============================================================
       - name: Create Android platform
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
 
           npx cap add android
 
+      # ============================================================
+      # 20. RKMS NATIVE BRIDGE
+      # ============================================================
       - name: Add RKMS secure credential native bridge
         working-directory: build
         shell: bash
@@ -261,6 +345,9 @@ jobs:
 
           bash scripts/setup-android-native.sh
 
+      # ============================================================
+      # 21. FIREBASE / FCM CONFIGURATION
+      # ============================================================
       - name: Configure Firebase Android client for FCM
         working-directory: build
         shell: bash
@@ -274,13 +361,13 @@ jobs:
             printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON" \
               > android/app/google-services.json
 
-            echo "Firebase config loaded from GitHub Secret"
+            echo "Firebase config loaded from GitHub Secret."
 
           elif [ -f google-services.json ]; then
 
             cp google-services.json android/app/google-services.json
 
-            echo "Firebase config loaded from bundled google-services.json"
+            echo "Firebase config loaded from bundled google-services.json."
 
           else
 
@@ -291,67 +378,118 @@ jobs:
 
           test -s android/app/google-services.json
 
-          python3 - <<'PY2'
+          python3 - <<'PY'
           import json
           from pathlib import Path
 
           p = Path("android/app/google-services.json")
-          d = json.loads(p.read_text(encoding="utf-8"))
 
-          assert d.get("project_info", {}).get("project_number"), \
+          try:
+              data = json.loads(
+                  p.read_text(encoding="utf-8")
+              )
+          except Exception as exc:
+              raise SystemExit(
+                  f"Invalid google-services.json: {exc}"
+              )
+
+          project_info = data.get("project_info", {})
+
+          assert project_info.get("project_number"), \
               "google-services.json project_number missing"
 
-          assert d.get("project_info", {}).get("project_id"), \
+          assert project_info.get("project_id"), \
               "google-services.json project_id missing"
 
-          assert d.get("client"), \
+          assert data.get("client"), \
               "google-services.json client section missing"
 
-          print("Firebase Android client config verified")
-          PY2
+          print("Firebase Android client config verified.")
+          PY
 
-          python3 - <<'PY2'
+          # Configure Google Services Gradle plugin.
+          python3 - <<'PY'
           from pathlib import Path
 
           root = Path("android/build.gradle")
           app = Path("android/app/build.gradle")
 
-          r = root.read_text(encoding="utf-8")
+          if not root.exists():
+              raise SystemExit(
+                  "android/build.gradle not found"
+              )
 
-          if "com.google.gms:google-services" not in r:
+          if not app.exists():
+              raise SystemExit(
+                  "android/app/build.gradle not found"
+              )
+
+          root_text = root.read_text(
+              encoding="utf-8"
+          )
+
+          app_text = app.read_text(
+              encoding="utf-8"
+          )
+
+          plugin_dependency = (
+              "com.google.gms:google-services:4.4.2"
+          )
+
+          if plugin_dependency not in root_text:
 
               marker = "dependencies {"
 
-              if marker not in r:
+              if marker not in root_text:
                   raise SystemExit(
                       "android/build.gradle dependencies block not found"
                   )
 
-              r = r.replace(
+              root_text = root_text.replace(
                   marker,
                   marker +
-                  "\n        classpath 'com.google.gms:google-services:4.4.2'",
+                  "\n        classpath '" +
+                  plugin_dependency +
+                  "'",
                   1
               )
 
-              root.write_text(r, encoding="utf-8")
+              root.write_text(
+                  root_text,
+                  encoding="utf-8"
+              )
 
-          a = app.read_text(encoding="utf-8")
+          if "com.google.gms.google-services" not in app_text:
 
-          if "com.google.gms.google-services" not in a:
-              a += "\napply plugin: 'com.google.gms.google-services'\n"
-              app.write_text(a, encoding="utf-8")
+              app_text += (
+                  "\napply plugin: "
+                  "'com.google.gms.google-services'\n"
+              )
 
-          print("Google Services Gradle plugin configured")
-          PY2
+              app.write_text(
+                  app_text,
+                  encoding="utf-8"
+              )
 
+          print(
+              "Google Services Gradle plugin configured."
+          )
+          PY
+
+      # ============================================================
+      # 22. CAPACITOR SYNC
+      # ============================================================
       - name: Sync RKMS application
         working-directory: build
+        shell: bash
         run: |
           set -euo pipefail
 
           npx cap sync android
 
+      # ============================================================
+      # 23. GENERATED ANDROID PDF BRIDGE
+      # ============================================================
       - name: Verify generated Android PDF bridge
         working-directory: build
         shell: bash
@@ -360,6 +498,9 @@ jobs:
 
           python3 scripts/verify-android-pdf.py
 
+      # ============================================================
+      # 24. BIOMETRIC DEPENDENCY
+      # ============================================================
       - name: Add Android biometric dependency
         working-directory: build
         shell: bash
@@ -368,14 +509,23 @@ jobs:
 
           APP_GRADLE="android/app/build.gradle"
 
-          grep -q 'androidx.biometric:biometric' "$APP_GRADLE" || \
-            sed -i '/dependencies {/a\    implementation "androidx.biometric:biometric:1.1.0"' \
+          test -f "$APP_GRADLE"
+
+          if ! grep -q 'androidx.biometric:biometric' "$APP_GRADLE"; then
+            sed -i \
+              '/dependencies {/a\    implementation "androidx.biometric:biometric:1.1.0"' \
+              "$APP_GRADLE"
+          fi
+
+          grep -q \
+            'androidx.biometric:biometric:1.1.0' \
             "$APP_GRADLE"
 
-          grep -q 'androidx.biometric:biometric:1.1.0' "$APP_GRADLE"
+          echo "Android biometric dependency verified."
 
-          echo "Android biometric dependency verified"
-
+      # ============================================================
+      # 25. GENERATED NATIVE IMPLEMENTATION VERIFICATION
+      # ============================================================
       - name: Verify generated Android native bridge and PDF implementation
         working-directory: build
         shell: bash
@@ -417,27 +567,53 @@ jobs:
           grep -q 'finishPdfSave' "$NATIVE_BRIDGE"
           grep -q 'cancelPdfSave' "$NATIVE_BRIDGE"
 
-          grep -q 'MediaStore.Downloads.EXTERNAL_CONTENT_URI' \
+          grep -q \
+            'MediaStore.Downloads.EXTERNAL_CONTENT_URI' \
             "$NATIVE_BRIDGE"
 
-          grep -q 'Environment.DIRECTORY_DOWNLOADS' \
+          grep -q \
+            'Environment.DIRECTORY_DOWNLOADS' \
             "$NATIVE_BRIDGE"
 
-          grep -q 'application/pdf' "$NATIVE_BRIDGE"
-          grep -q 'RKMS CONNECT' "$NATIVE_BRIDGE"
+          grep -q \
+            'application/pdf' \
+            "$NATIVE_BRIDGE"
 
-          # MainActivity bridge
-          grep -q 'RKMSNativeBridge' "$MAIN_ACTIVITY"
-          grep -q 'getBridge().getWebView()' "$MAIN_ACTIVITY"
-          grep -q 'RKMSSecureCredentialsPlugin' "$MAIN_ACTIVITY"
+          grep -q \
+            'RKMS CONNECT' \
+            "$NATIVE_BRIDGE"
 
-          # Secure Saved Login plugin
-          grep -q 'AndroidKeyStore' "$SECURE_PLUGIN"
-          grep -q 'AES/GCM/NoPadding' "$SECURE_PLUGIN"
-          grep -q 'BiometricPrompt' "$SECURE_PLUGIN"
+          # MainActivity
+          grep -q \
+            'RKMSNativeBridge' \
+            "$MAIN_ACTIVITY"
 
-          echo "Generated Android native/PDF/Saved Login verification PASS"
+          grep -q \
+            'getBridge().getWebView()' \
+            "$MAIN_ACTIVITY"
 
+          grep -q \
+            'RKMSSecureCredentialsPlugin' \
+            "$MAIN_ACTIVITY"
+
+          # Secure credentials
+          grep -q \
+            'AndroidKeyStore' \
+            "$SECURE_PLUGIN"
+
+          grep -q \
+            'AES/GCM/NoPadding' \
+            "$SECURE_PLUGIN"
+
+          grep -q \
+            'BiometricPrompt' \
+            "$SECURE_PLUGIN"
+
+          echo "Generated Android native/PDF/Saved Login verification PASS."
+
+      # ============================================================
+      # 26. SAVED LOGIN NATIVE REGISTRATION
+      # ============================================================
       - name: Verify Saved Login native registration
         working-directory: build
         shell: bash
@@ -461,39 +637,74 @@ jobs:
           test -n "$MAIN_ACTIVITY"
           test -n "$PLUGIN"
 
-          grep -q 'RKMSSecureCredentialsPlugin' "$MAIN_ACTIVITY"
-          grep -q 'registerPlugin' "$MAIN_ACTIVITY"
-          grep -q 'AndroidKeyStore' "$PLUGIN"
-          grep -q 'AES/GCM/NoPadding' "$PLUGIN"
-          grep -q 'BiometricPrompt' "$PLUGIN"
-          grep -q 'BIOMETRIC_STRONG' "$PLUGIN"
-          grep -q 'DEVICE_CREDENTIAL' "$PLUGIN"
+          grep -q \
+            'RKMSSecureCredentialsPlugin' \
+            "$MAIN_ACTIVITY"
 
-          echo "Saved Login native registration/security verification PASS"
+          grep -q \
+            'registerPlugin' \
+            "$MAIN_ACTIVITY"
 
+          grep -q \
+            'AndroidKeyStore' \
+            "$PLUGIN"
+
+          grep -q \
+            'AES/GCM/NoPadding' \
+            "$PLUGIN"
+
+          grep -q \
+            'BiometricPrompt' \
+            "$PLUGIN"
+
+          grep -q \
+            'BIOMETRIC_STRONG' \
+            "$PLUGIN"
+
+          grep -q \
+            'DEVICE_CREDENTIAL' \
+            "$PLUGIN"
+
+          echo "Saved Login native registration/security verification PASS."
+
+      # ============================================================
+      # 27. FCM ANDROID INTEGRATION
+      # ============================================================
       - name: Verify FCM Android integration
         working-directory: build
         shell: bash
         run: |
           set -euo pipefail
 
-          test -s android/app/google-services.json
+          test -s \
+            android/app/google-services.json
 
-          grep -q 'com.google.gms.google-services' \
+          grep -q \
+            'com.google.gms.google-services' \
             android/app/build.gradle
 
-          grep -q '@capacitor/push-notifications' package.json
+          grep -q \
+            '@capacitor/push-notifications' \
+            package.json
 
-          echo "FCM Android integration verification PASS"
+          echo "FCM Android integration verification PASS."
 
+      # ============================================================
+      # 28. IMAGE TOOLS
+      # ============================================================
       - name: Install image tools
+        shell: bash
         run: |
           set -euo pipefail
 
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick
 
-      - name: Install exact RKMS launcher logo AFTER Capacitor sync
+      # ============================================================
+      # 29. INSTALL FINAL RKMS LAUNCHER LOGO
+      # AFTER CAPACITOR SYNC
+      # ============================================================
+      - name: Install exact RKMS launcher logo
         shell: bash
         run: |
           set -euo pipefail
@@ -503,6 +714,7 @@ jobs:
           STRINGS="build/android/app/src/main/res/values/strings.xml"
 
           test -s "$LOGO"
+          test -f "$STRINGS"
 
           mkdir -p \
             "$RES/mipmap-mdpi" \
@@ -510,6 +722,9 @@ jobs:
             "$RES/mipmap-xhdpi" \
             "$RES/mipmap-xxhdpi" \
             "$RES/mipmap-xxxhdpi"
+
+          # Keep generous transparent safe area so Android launchers
+          # do not clip the RKMS emblem.
 
           convert "$LOGO" \
             -resize 32x32 \
@@ -551,20 +766,29 @@ jobs:
             -extent 192x192 \
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
-          cp "$RES/mipmap-mdpi/ic_launcher.png" \
-             "$RES/mipmap-mdpi/ic_launcher_round.png"
+          # Round launcher versions use the same exact RKMS artwork.
+          cp \
+            "$RES/mipmap-mdpi/ic_launcher.png" \
+            "$RES/mipmap-mdpi/ic_launcher_round.png"
 
-          cp "$RES/mipmap-hdpi/ic_launcher.png" \
-             "$RES/mipmap-hdpi/ic_launcher_round.png"
+          cp \
+            "$RES/mipmap-hdpi/ic_launcher.png" \
+            "$RES/mipmap-hdpi/ic_launcher_round.png"
 
-          cp "$RES/mipmap-xhdpi/ic_launcher.png" \
-             "$RES/mipmap-xhdpi/ic_launcher_round.png"
+          cp \
+            "$RES/mipmap-xhdpi/ic_launcher.png" \
+            "$RES/mipmap-xhdpi/ic_launcher_round.png"
 
-          cp "$RES/mipmap-xxhdpi/ic_launcher.png" \
-             "$RES/mipmap-xxhdpi/ic_launcher_round.png"
+          cp \
+            "$RES/mipmap-xxhdpi/ic_launcher.png" \
+            "$RES/mipmap-xxhdpi/ic_launcher_round.png"
 
-          cp "$RES/mipmap-xxxhdpi/ic_launcher.png" \
-             "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
+          cp \
+            "$RES/mipmap-xxxhdpi/ic_launcher.png" \
+            "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
+
+          # Remove adaptive icon resources so Android resolves
+          # directly to the RKMS PNG launcher artwork.
 
           rm -rf \
             "$RES/mipmap-anydpi-v26" \
@@ -577,7 +801,9 @@ jobs:
             -name 'ic_launcher_background.png' \
           \) -delete || true
 
-          if grep -q '<string name="app_name">' "$STRINGS"; then
+          if grep -q \
+            '<string name="app_name">' \
+            "$STRINGS"; then
 
             sed -i \
               's#<string name="app_name">.*</string>#<string name="app_name">RKMS</string>#' \
@@ -591,11 +817,17 @@ jobs:
           fi
 
           echo "Final launcher icon:"
-          identify "$RES/mipmap-xxxhdpi/ic_launcher.png"
+          identify \
+            "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
           echo "Final app name:"
-          grep -n 'app_name' "$STRINGS"
+          grep -n \
+            'app_name' \
+            "$STRINGS"
 
+      # ============================================================
+      # 30. VERIFY LAUNCHER
+      # ============================================================
       - name: Verify launcher icon
         shell: bash
         run: |
@@ -603,31 +835,42 @@ jobs:
 
           RES="build/android/app/src/main/res"
 
-          test -s "$RES/mipmap-mdpi/ic_launcher.png"
-          test -s "$RES/mipmap-hdpi/ic_launcher.png"
-          test -s "$RES/mipmap-xhdpi/ic_launcher.png"
-          test -s "$RES/mipmap-xxhdpi/ic_launcher.png"
-          test -s "$RES/mipmap-xxxhdpi/ic_launcher.png"
+          for density in \
+            mdpi \
+            hdpi \
+            xhdpi \
+            xxhdpi \
+            xxxhdpi
+          do
+            test -s \
+              "$RES/mipmap-$density/ic_launcher.png"
 
-          test -s "$RES/mipmap-mdpi/ic_launcher_round.png"
-          test -s "$RES/mipmap-hdpi/ic_launcher_round.png"
-          test -s "$RES/mipmap-xhdpi/ic_launcher_round.png"
-          test -s "$RES/mipmap-xxhdpi/ic_launcher_round.png"
-          test -s "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
+            test -s \
+              "$RES/mipmap-$density/ic_launcher_round.png"
+          done
 
-          grep -q '<string name="app_name">RKMS</string>' \
+          grep -q \
+            '<string name="app_name">RKMS</string>' \
             "$RES/values/strings.xml"
 
-          echo "RKMS launcher icon and app name verification PASS"
+          echo "RKMS launcher icon and app name verification PASS."
 
+      # ============================================================
+      # 31. GRADLE EXECUTABLE
+      # ============================================================
       - name: Make Gradle executable
+        shell: bash
         run: |
           set -euo pipefail
 
           chmod +x build/android/gradlew
 
+      # ============================================================
+      # 32. BUILD DEBUG APK
+      # ============================================================
       - name: Build Debug APK
         working-directory: build/android
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -635,6 +878,9 @@ jobs:
             --no-daemon \
             --stacktrace
 
+      # ============================================================
+      # 33. VERIFY APK
+      # ============================================================
       - name: Verify APK
         shell: bash
         run: |
@@ -647,6 +893,12 @@ jobs:
           echo "RKMS APK successfully created:"
           ls -lh "$APK"
 
+          echo "APK SHA256:"
+          sha256sum "$APK"
+
+      # ============================================================
+      # 34. UPLOAD APK
+      # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
