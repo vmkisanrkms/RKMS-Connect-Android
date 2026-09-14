@@ -18,14 +18,67 @@ jobs:
     steps:
 
       # =========================================================
-      # SOURCE
+      # CHECKOUT
       # =========================================================
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # =========================================================
-      # NODE.JS
+      # EXTRACT RKMS SOURCE PACKAGE
+      # =========================================================
+
+      - name: Extract RKMS project package
+        shell: bash
+        run: |
+
+          set -e
+
+          PACKAGE="RKMS_CONNECT_V18_ANDROID16_API36_AAB_FINAL_READY.zip"
+
+          if [ ! -f "$PACKAGE" ]; then
+            echo "ERROR: RKMS source package not found:"
+            echo "$PACKAGE"
+            echo ""
+            echo "Repository files:"
+            find . -maxdepth 2 -type f -print
+            exit 1
+          fi
+
+          echo "Found RKMS package:"
+          ls -lh "$PACKAGE"
+
+          rm -rf .rkms_extract
+          mkdir -p .rkms_extract
+
+          unzip -q "$PACKAGE" -d .rkms_extract
+
+          # The package contains rkms_android/
+          if [ ! -d ".rkms_extract/rkms_android" ]; then
+            echo "ERROR: rkms_android directory not found inside package."
+            find .rkms_extract -maxdepth 3 -print
+            exit 1
+          fi
+
+          # Copy the actual project into repository root.
+          cp -a .rkms_extract/rkms_android/. .
+
+          rm -rf .rkms_extract
+
+          echo ""
+          echo "RKMS source extracted successfully."
+          echo ""
+
+          test -f package.json
+          test -f capacitor.config.json
+          test -f index.html
+          test -f app.js
+          test -f styles.css
+
+          echo "Project root verified."
+
+      # =========================================================
+      # NODE.JS 22
       # =========================================================
 
       - name: Setup Node.js 22
@@ -37,13 +90,18 @@ jobs:
         run: |
           node --version
           npm --version
+          test -f package.json
+
+      # =========================================================
+      # INSTALL DEPENDENCIES
+      # =========================================================
 
       - name: Install npm dependencies
         run: |
           npm install
 
       # =========================================================
-      # JAVA
+      # JAVA 17
       # =========================================================
 
       - name: Setup JDK 17
@@ -77,17 +135,14 @@ jobs:
 
       - name: Verify Android SDK
         run: |
+
           test -d "$ANDROID_HOME/platforms/android-36"
           test -d "$ANDROID_HOME/build-tools/36.0.0"
 
-          echo "Android 16 / API 36 SDK:"
-          ls -la "$ANDROID_HOME/platforms/android-36"
-
-          echo "Build Tools 36.0.0:"
-          ls -la "$ANDROID_HOME/build-tools/36.0.0"
+          echo "Android API 36 installed."
 
       # =========================================================
-      # CAPACITOR DEPENDENCIES
+      # CAPACITOR
       # =========================================================
 
       - name: Verify Capacitor packages
@@ -108,11 +163,12 @@ jobs:
       - name: Verify web build
         run: |
           test -d dist
-          echo "Web build verified."
-          find dist -maxdepth 2 -type f | head -50
+          test -f dist/index.html
+
+          echo "Web build PASS."
 
       # =========================================================
-      # CREATE ANDROID PROJECT
+      # ANDROID PROJECT
       # =========================================================
 
       - name: Add Capacitor Android platform
@@ -132,24 +188,27 @@ jobs:
 
       - name: Copy Firebase configuration
         run: |
+
           test -f google-services.json
 
           mkdir -p android/app
 
           cp google-services.json \
-             android/app/google-services.json
+            android/app/google-services.json
 
           test -f android/app/google-services.json
 
-          echo "Firebase configuration copied."
+          echo "Firebase configuration PASS."
 
       # =========================================================
-      # ANDROID 16 / API 36 CONFIGURATION
+      # ANDROID 16 / API 36
       # =========================================================
 
       - name: Configure Android 16 API 36
         run: |
+
           chmod +x scripts/configure-android-16.sh
+
           ./scripts/configure-android-16.sh
 
       # =========================================================
@@ -161,16 +220,18 @@ jobs:
           npx cap sync android
 
       # =========================================================
-      # NATIVE ANDROID BRIDGE
+      # NATIVE BRIDGE
       # =========================================================
 
       - name: Setup RKMS native Android bridge
         run: |
+
           chmod +x scripts/setup-android-native.sh
+
           ./scripts/setup-android-native.sh
 
       # =========================================================
-      # ANDROID 16 CONFIGURATION VERIFICATION
+      # VERIFY ANDROID 16
       # =========================================================
 
       - name: Verify Android 16 API 36 configuration
@@ -178,20 +239,32 @@ jobs:
           python3 scripts/verify-android-16.py
 
       # =========================================================
-      # APPLICATION VERIFICATIONS
+      # VERIFY FCM
       # =========================================================
 
       - name: Verify FCM pipeline
         run: |
           python3 scripts/verify-fcm-pipeline.py
 
+      # =========================================================
+      # VERIFY LOGIN
+      # =========================================================
+
       - name: Verify saved login
         run: |
           python3 scripts/verify-saved-login.py
 
+      # =========================================================
+      # VERIFY PDF
+      # =========================================================
+
       - name: Verify Android PDF pipeline
         run: |
           python3 scripts/verify-android-pdf.py
+
+      # =========================================================
+      # VERIFY NATIVE BRIDGE
+      # =========================================================
 
       - name: Verify native bridge
         run: |
@@ -199,9 +272,6 @@ jobs:
 
       # =========================================================
       # RELEASE KEYSTORE
-      #
-      # Secrets are passed through ENV.
-      # They are NOT used directly in if expressions.
       # =========================================================
 
       - name: Prepare release keystore
@@ -220,22 +290,22 @@ jobs:
 
             test -s android/rkms-release.keystore
 
-            echo "Release keystore successfully prepared."
+            echo "Release keystore prepared."
 
           else
 
             echo "has_keystore=false" >> "$GITHUB_OUTPUT"
 
-            echo "No RKMS release keystore configured."
-            echo "Continuing with unsigned release artifact."
+            echo "No release keystore configured."
+            echo "Continuing with unsigned release build."
 
           fi
 
       # =========================================================
-      # RELEASE SIGNING
+      # VALIDATE SIGNING SECRETS
       # =========================================================
 
-      - name: Validate signing secrets
+      - name: Validate release signing secrets
         if: steps.keystore.outputs.has_keystore == 'true'
         env:
           RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
@@ -248,6 +318,10 @@ jobs:
           test -n "$RKMS_KEY_PASSWORD"
 
           echo "Release signing secrets verified."
+
+      # =========================================================
+      # CONFIGURE SIGNING
+      # =========================================================
 
       - name: Configure release signing
         if: steps.keystore.outputs.has_keystore == 'true'
@@ -293,19 +367,19 @@ jobs:
 
           path.write_text(text)
 
-          print("Release signing configuration added.")
+          print("Release signing configured.")
           PY
 
-          grep -n "rkmsRelease" app/build.gradle
-
       # =========================================================
-      # GRADLE VERIFICATION
+      # GRADLE
       # =========================================================
 
-      - name: Verify Gradle environment
+      - name: Verify Gradle
         working-directory: android
         run: |
+
           chmod +x gradlew
+
           ./gradlew --version
 
       # =========================================================
@@ -315,26 +389,30 @@ jobs:
       - name: Clean Android project
         working-directory: android
         run: |
-          ./gradlew clean --no-daemon
+
+          ./gradlew clean \
+            --no-daemon
 
       # =========================================================
-      # RELEASE APK
+      # BUILD APK
       # =========================================================
 
       - name: Build Release APK
         working-directory: android
         run: |
+
           ./gradlew assembleRelease \
             --no-daemon \
             --stacktrace
 
       # =========================================================
-      # RELEASE AAB
+      # BUILD AAB
       # =========================================================
 
       - name: Build Release AAB
         working-directory: android
         run: |
+
           ./gradlew bundleRelease \
             --no-daemon \
             --stacktrace
@@ -355,9 +433,12 @@ jobs:
             -name "*.apk" \
             -print -quit)"
 
-          test -n "$APK_FILE"
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
 
-          echo "APK generated:"
+          echo "APK generated successfully:"
           ls -lh "$APK_FILE"
 
       # =========================================================
@@ -376,13 +457,16 @@ jobs:
             -name "*.aab" \
             -print -quit)"
 
-          test -n "$AAB_FILE"
+          if [ -z "$AAB_FILE" ]; then
+            echo "ERROR: AAB was not generated."
+            exit 1
+          fi
 
-          echo "AAB generated:"
+          echo "AAB generated successfully:"
           ls -lh "$AAB_FILE"
 
       # =========================================================
-      # FINAL BUILD INFORMATION
+      # FINAL INFORMATION
       # =========================================================
 
       - name: Show final build information
@@ -390,15 +474,14 @@ jobs:
 
           echo ""
           echo "=============================================="
-          echo "       RKMS CONNECT FINAL BUILD"
+          echo "       RKMS CONNECT FINAL ANDROID BUILD"
           echo "=============================================="
           echo ""
 
-          echo "Android:"
-          echo "  API: 36"
-          echo "  Android: 16"
-          echo "  JDK: 17"
-          echo "  Node: 22"
+          echo "Android Version: 16"
+          echo "API Level: 36"
+          echo "JDK: 17"
+          echo "Node.js: 22"
 
           echo ""
           echo "APK:"
