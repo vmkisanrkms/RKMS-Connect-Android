@@ -54,30 +54,29 @@ jobs:
 
 
           # ==========================================================
-          # FIND ACTUAL WORKFLOW CURRENTLY RUNNING
+          # WORKFLOW FOR STATIC VERIFICATION
           #
-          # GITHUB_WORKFLOW_REF example:
-          # owner/repository/.github/workflows/android-apk.yml@main
+          # Clean ZIP intentionally does not contain .github/workflows.
+          # Existing verification scripts expect:
           #
-          # The clean source ZIP intentionally does not contain
-          # .github/workflows. Existing verification scripts expect
-          # android-apk.yml, so we copy the current workflow there
-          # only inside the temporary build directory.
+          # .github/workflows/android-apk.yml
+          #
+          # Therefore copy the workflow currently present in the
+          # repository into the temporary extracted build only.
           # ==========================================================
-          WORKFLOW_REF_PATH="${GITHUB_WORKFLOW_REF%%@*}"
+          WORKFLOW_PATH="$GITHUB_WORKSPACE/.github/workflows/android-apk.yml"
 
-          WORKFLOW_REL_PATH="${WORKFLOW_REF_PATH#*/}"
-          WORKFLOW_REL_PATH="${WORKFLOW_REL_PATH#*/}"
-
-          echo "Detected workflow path:"
-          echo "$WORKFLOW_REL_PATH"
-
-          test -f "$GITHUB_WORKSPACE/$WORKFLOW_REL_PATH"
+          if [ ! -f "$WORKFLOW_PATH" ]; then
+            echo "ERROR: Expected workflow not found:"
+            echo "$WORKFLOW_PATH"
+            echo "Make sure this workflow file is named android-apk.yml."
+            exit 1
+          fi
 
           mkdir -p build/.github/workflows
 
           cp \
-            "$GITHUB_WORKSPACE/$WORKFLOW_REL_PATH" \
+            "$WORKFLOW_PATH" \
             build/.github/workflows/android-apk.yml
 
           test -s build/.github/workflows/android-apk.yml
@@ -295,7 +294,7 @@ jobs:
 
 
       # ============================================================
-      # 12. CREATE CAPACITOR PACKAGE
+      # 12. CREATE CAPACITOR BUILD PACKAGE
       # ============================================================
       - name: Create Capacitor build package
         working-directory: build
@@ -325,7 +324,7 @@ jobs:
 
           grep -q '@capacitor/push-notifications' package.json
 
-          echo "Capacitor package configuration verified"
+          echo "Capacitor FCM dependency verified"
 
 
           cat > capacitor.config.json <<'JSON'
@@ -359,7 +358,7 @@ jobs:
 
 
       # ============================================================
-      # 14. INSTALL DEPENDENCIES
+      # 14. INSTALL CAPACITOR DEPENDENCIES
       # ============================================================
       - name: Install Capacitor dependencies
         working-directory: build
@@ -450,7 +449,7 @@ jobs:
 
 
       # ============================================================
-      # 20. CREATE ANDROID PROJECT
+      # 20. CREATE ANDROID PLATFORM
       # ============================================================
       - name: Create Android platform
         working-directory: build
@@ -466,7 +465,7 @@ jobs:
 
 
       # ============================================================
-      # 21. RKMS NATIVE BRIDGE
+      # 21. ADD RKMS NATIVE BRIDGE
       # ============================================================
       - name: Add RKMS secure credential native bridge
         working-directory: build
@@ -515,7 +514,9 @@ jobs:
           test -s android/app/google-services.json
 
 
+          # ----------------------------------------------------------
           # Validate Firebase JSON
+          # ----------------------------------------------------------
           python3 - <<'PY2'
           import json
           from pathlib import Path
@@ -539,7 +540,9 @@ jobs:
           PY2
 
 
+          # ----------------------------------------------------------
           # Configure Google Services Gradle plugin
+          # ----------------------------------------------------------
           python3 - <<'PY2'
           from pathlib import Path
 
@@ -638,6 +641,11 @@ jobs:
 
       # ============================================================
       # 26. GENERATED ANDROID NATIVE / PDF / LOGIN VERIFICATION
+      #
+      # IMPORTANT:
+      # This step intentionally uses Python for file discovery and
+      # verification instead of Bash command substitutions.
+      # This avoids the EOF/quote parsing problem seen earlier.
       # ============================================================
       - name: Verify generated Android native bridge and PDF implementation
         working-directory: build
@@ -645,80 +653,127 @@ jobs:
         run: |
           set -euo pipefail
 
-          MAIN_ACTIVITY="$(
-            find android/app/src/main \
-              -type f \
-              -name 'MainActivity.java' \
-              -print -quit
-          )"
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
 
-          NATIVE_BRIDGE="$(
-            find android/app/src/main \
-              -type f \
-              -name 'RKMSNativeBridge.java' \
-              -print -quit
-          )"
+          root = Path("android/app/src/main")
 
-          SECURE_PLUGIN="$(
-            find android/app/src/main \
-              -type f \
-              -name 'RKMSSecureCredentialsPlugin.java' \
-              -print -quit
+          if not root.exists():
+              print("ERROR: Android source directory not found")
+              sys.exit(1)
+
+
+          def find_file(name):
+              matches = list(root.rglob(name))
+
+              if not matches:
+                  print(f"ERROR: {name} not found")
+                  sys.exit(1)
+
+              if len(matches) > 1:
+                  print(
+                      f"WARNING: Multiple {name} files found; "
+                      f"using {matches[0]}"
+                  )
+
+              return matches[0]
+
+
+          main_activity = find_file("MainActivity.java")
+          native_bridge = find_file("RKMSNativeBridge.java")
+          secure_plugin = find_file(
+              "RKMSSecureCredentialsPlugin.java"
           )
 
 
-          test -n "$MAIN_ACTIVITY"
-          test -n "$NATIVE_BRIDGE"
-          test -n "$SECURE_PLUGIN"
+          print(f"MainActivity: {main_activity}")
+          print(f"RKMSNativeBridge: {native_bridge}")
+          print(f"Secure plugin: {secure_plugin}")
 
 
-          echo "MainActivity: $MAIN_ACTIVITY"
-          echo "RKMSNativeBridge: $NATIVE_BRIDGE"
-          echo "Secure plugin: $SECURE_PLUGIN"
+          main_text = main_activity.read_text(
+              encoding="utf-8",
+              errors="replace"
+          )
+
+          native_text = native_bridge.read_text(
+              encoding="utf-8",
+              errors="replace"
+          )
+
+          secure_text = secure_plugin.read_text(
+              encoding="utf-8",
+              errors="replace"
+          )
 
 
-          # PDF lifecycle
-          grep -q 'beginPdfSave' "$NATIVE_BRIDGE"
-          grep -q 'appendPdfChunk' "$NATIVE_BRIDGE"
-          grep -q 'finishPdfSave' "$NATIVE_BRIDGE"
-          grep -q 'cancelPdfSave' "$NATIVE_BRIDGE"
+          # ==========================================================
+          # PDF LIFECYCLE
+          # ==========================================================
+          required_native = [
+              "beginPdfSave",
+              "appendPdfChunk",
+              "finishPdfSave",
+              "cancelPdfSave",
+              "MediaStore.Downloads.EXTERNAL_CONTENT_URI",
+              "Environment.DIRECTORY_DOWNLOADS",
+              "application/pdf",
+              "RKMS CONNECT",
+          ]
 
-          grep -q 'MediaStore.Downloads.EXTERNAL_CONTENT_URI' \
-            "$NATIVE_BRIDGE"
+          for item in required_native:
 
-          grep -q 'Environment.DIRECTORY_DOWNLOADS' \
-            "$NATIVE_BRIDGE"
-
-          grep -q 'application/pdf' \
-            "$NATIVE_BRIDGE"
-
-          grep -q 'RKMS CONNECT' \
-            "$NATIVE_BRIDGE"
-
-
-          # MainActivity bridge registration
-          grep -q 'RKMSNativeBridge' \
-            "$MAIN_ACTIVITY"
-
-          grep -q 'getBridge().getWebView()' \
-            "$MAIN_ACTIVITY"
-
-          grep -q 'RKMSSecureCredentialsPlugin' \
-            "$MAIN_ACTIVITY"
+              if item not in native_text:
+                  print(
+                      "ERROR: Missing PDF/native item:",
+                      item
+                  )
+                  sys.exit(1)
 
 
-          # Secure credentials / biometric
-          grep -q 'AndroidKeyStore' \
-            "$SECURE_PLUGIN"
+          # ==========================================================
+          # MAIN ACTIVITY BRIDGE REGISTRATION
+          # ==========================================================
+          required_main = [
+              "RKMSNativeBridge",
+              "getBridge().getWebView()",
+              "RKMSSecureCredentialsPlugin",
+          ]
 
-          grep -q 'AES/GCM/NoPadding' \
-            "$SECURE_PLUGIN"
+          for item in required_main:
 
-          grep -q 'BiometricPrompt' \
-            "$SECURE_PLUGIN"
+              if item not in main_text:
+                  print(
+                      "ERROR: Missing MainActivity item:",
+                      item
+                  )
+                  sys.exit(1)
 
 
-          echo "Generated Android native/PDF verification PASS"
+          # ==========================================================
+          # SECURE CREDENTIALS / BIOMETRIC
+          # ==========================================================
+          required_secure = [
+              "AndroidKeyStore",
+              "AES/GCM/NoPadding",
+              "BiometricPrompt",
+          ]
+
+          for item in required_secure:
+
+              if item not in secure_text:
+                  print(
+                      "ERROR: Missing secure/biometric item:",
+                      item
+                  )
+                  sys.exit(1)
+
+
+          print(
+              "Generated Android native/PDF verification PASS"
+          )
+          PY
 
 
       # ============================================================
@@ -762,7 +817,9 @@ jobs:
             "$RES/mipmap-xxxhdpi"
 
 
+          # ----------------------------------------------------------
           # MDPI
+          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 40x40 \
             -strip \
@@ -772,7 +829,9 @@ jobs:
             "$RES/mipmap-mdpi/ic_launcher.png"
 
 
+          # ----------------------------------------------------------
           # HDPI
+          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 60x60 \
             -strip \
@@ -782,7 +841,9 @@ jobs:
             "$RES/mipmap-hdpi/ic_launcher.png"
 
 
+          # ----------------------------------------------------------
           # XHDPI
+          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 80x80 \
             -strip \
@@ -792,7 +853,9 @@ jobs:
             "$RES/mipmap-xhdpi/ic_launcher.png"
 
 
+          # ----------------------------------------------------------
           # XXHDPI
+          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 120x120 \
             -strip \
@@ -802,7 +865,9 @@ jobs:
             "$RES/mipmap-xxhdpi/ic_launcher.png"
 
 
+          # ----------------------------------------------------------
           # XXXHDPI
+          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 172x172 \
             -strip \
@@ -812,7 +877,9 @@ jobs:
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
 
-          # Round icons
+          # ----------------------------------------------------------
+          # ROUND ICONS
+          # ----------------------------------------------------------
           cp \
             "$RES/mipmap-mdpi/ic_launcher.png" \
             "$RES/mipmap-mdpi/ic_launcher_round.png"
@@ -834,7 +901,9 @@ jobs:
             "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
 
-          # Remove adaptive/default Capacitor launcher resources
+          # ----------------------------------------------------------
+          # REMOVE ADAPTIVE/DEFAULT CAPACITOR RESOURCES
+          # ----------------------------------------------------------
           rm -rf \
             "$RES/mipmap-anydpi-v26" \
             "$RES/mipmap-anydpi"
@@ -851,7 +920,9 @@ jobs:
             -delete || true
 
 
-          # App name
+          # ----------------------------------------------------------
+          # APP NAME
+          # ----------------------------------------------------------
           if grep -q '<string name="app_name">' "$STRINGS"; then
 
             sed -i \
