@@ -40,20 +40,20 @@ jobs:
 
           echo "Using source ZIP: $SOURCE_ZIP"
 
-          # --------------------------------------------------------
-          # Clean source ZIP check
-          # --------------------------------------------------------
+          # ========================================================
+          # CLEAN SOURCE ZIP CHECK
+          # ========================================================
           if unzip -l "$SOURCE_ZIP" | grep -E '(^|[[:space:]])dist/'; then
             echo "ERROR: V18 clean source ZIP contains dist/"
-            echo "Generated dist/ must not be inside source ZIP."
+            echo "Generated dist/ must not be inside the source ZIP."
             exit 1
           fi
 
           echo "V18 clean source ZIP verified: no dist/"
 
-          # --------------------------------------------------------
-          # Find current GitHub workflow automatically
-          # --------------------------------------------------------
+          # ========================================================
+          # FIND CURRENT WORKFLOW AUTOMATICALLY
+          # ========================================================
           WORKFLOW_DIR="$GITHUB_WORKSPACE/.github/workflows"
 
           test -d "$WORKFLOW_DIR"
@@ -89,9 +89,9 @@ jobs:
           echo "Detected workflow:"
           echo "$WORKFLOW_PATH"
 
-          # --------------------------------------------------------
-          # Copy workflow into source for static audit scripts
-          # --------------------------------------------------------
+          # ========================================================
+          # COPY WORKFLOW FOR STATIC AUDIT SCRIPTS
+          # ========================================================
           mkdir -p build/.github/workflows
 
           cp \
@@ -102,9 +102,9 @@ jobs:
 
           echo "Workflow copied for static verification"
 
-          # --------------------------------------------------------
-          # Required RKMS files
-          # --------------------------------------------------------
+          # ========================================================
+          # REQUIRED RKMS SOURCE FILES
+          # ========================================================
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
@@ -116,9 +116,9 @@ jobs:
 
           test -d build/assets/book
 
-          # --------------------------------------------------------
-          # Required V18 verification files
-          # --------------------------------------------------------
+          # ========================================================
+          # REQUIRED V18 AUDIT FILES
+          # ========================================================
           test -f build/scripts/verify-directory-contact-actions.py
           test -f build/scripts/verify-directory-lists.py
           test -f build/scripts/verify-v17-directory-deep.py
@@ -138,9 +138,9 @@ jobs:
 
           echo "V18 source structure verified"
 
-          # --------------------------------------------------------
-          # Logo verification
-          # --------------------------------------------------------
+          # ========================================================
+          # LOGO VERIFICATION
+          # ========================================================
           LOGO_SHA=$(
             sha256sum build/assets/rkms-logo-transparent.png |
             cut -d' ' -f1
@@ -156,7 +156,7 @@ jobs:
 
 
       # ============================================================
-      # 3. JAVASCRIPT + V18 RUNTIME FIX
+      # 3. JAVASCRIPT + V18 ISMGMT RUNTIME FIX
       # ============================================================
       - name: Verify JavaScript and V18 runtime fix
         shell: bash
@@ -164,6 +164,8 @@ jobs:
           set -euo pipefail
 
           node --check build/app.js
+
+          echo "Checking obsolete isMgmt reference..."
 
           if grep -n "isMgmt" build/app.js; then
             echo "ERROR: obsolete isMgmt reference found in V18 app.js"
@@ -314,7 +316,7 @@ jobs:
 
 
       # ============================================================
-      # 11. V18 CONTACT + CHAT + ISMGMT AUDIT
+      # 11. V18 CONTACT + CHAT
       # ============================================================
       - name: Verify V18 Contact and Chat Actions
         working-directory: build
@@ -324,11 +326,14 @@ jobs:
 
           test -f scripts/verify-directory-contact-actions.py
 
-          # Absolute protection against the old runtime error.
+          echo "Checking V18 isMgmt runtime fix..."
+
           if grep -n "isMgmt" app.js; then
             echo "ERROR: obsolete isMgmt reference found."
             exit 1
           fi
+
+          echo "No isMgmt reference found."
 
           python3 scripts/verify-directory-contact-actions.py
 
@@ -337,6 +342,9 @@ jobs:
 
       # ============================================================
       # 12. V18 CHAT AUTHORITY MIGRATION
+      #
+      # grep -i is intentional because SQL keywords can be written
+      # in upper/lower/mixed case.
       # ============================================================
       - name: Verify V18 Chat Authority Migration
         working-directory: build
@@ -346,30 +354,32 @@ jobs:
 
           MIGRATION="supabase/migrations/20260914110000_directory_contact_chat_authority_v18.sql"
 
+          echo "Checking V18 Chat Authority migration..."
+
           test -f "$MIGRATION"
 
-          grep -q \
-            "CREATE OR REPLACE FUNCTION public.rkms_chat_open" \
+          grep -qi \
+            "create or replace function public.rkms_chat_open" \
             "$MIGRATION"
 
-          grep -q \
+          grep -qi \
             "rkms_chat_officer_can_access_member" \
             "$MIGRATION"
 
-          grep -q \
+          grep -qi \
             "rkms_can_manage_officer" \
             "$MIGRATION"
 
-          grep -q \
+          grep -qi \
             "rkms_is_top_authority" \
             "$MIGRATION"
 
-          grep -q \
-            "REVOKE EXECUTE" \
+          grep -qi \
+            "revoke execute" \
             "$MIGRATION"
 
-          grep -q \
-            "GRANT EXECUTE" \
+          grep -qi \
+            "grant execute" \
             "$MIGRATION"
 
           echo "V18 Chat Authority migration source verification PASS"
@@ -782,6 +792,9 @@ jobs:
               errors="replace"
           )
 
+          # --------------------------------------------------------
+          # PDF lifecycle
+          # --------------------------------------------------------
           required_native = [
               "beginPdfSave",
               "appendPdfChunk",
@@ -800,6 +813,9 @@ jobs:
                   )
                   sys.exit(1)
 
+          # --------------------------------------------------------
+          # MainActivity bridge registration
+          # --------------------------------------------------------
           required_main = [
               "RKMSNativeBridge",
               "getBridge().getWebView()",
@@ -813,6 +829,9 @@ jobs:
                   )
                   sys.exit(1)
 
+          # --------------------------------------------------------
+          # Secure credentials / biometric
+          # --------------------------------------------------------
           required_secure = [
               "AndroidKeyStore",
               "AES/GCM/NoPadding",
@@ -955,10 +974,12 @@ jobs:
           fi
 
           echo "Final launcher icon:"
+
           identify \
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
           echo "Final app name:"
+
           grep -n 'app_name' "$STRINGS"
 
 
@@ -1005,6 +1026,7 @@ jobs:
           test -s "$APK"
 
           echo "RKMS APK successfully created:"
+
           ls -lh "$APK"
 
 
