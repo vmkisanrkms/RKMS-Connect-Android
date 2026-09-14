@@ -13,16 +13,16 @@ jobs:
   ios-build:
     name: Build RKMS CONNECT for iOS
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Show environment
         run: |
@@ -31,30 +31,112 @@ jobs:
           xcode-select -p
           xcodebuild -version
 
+      - name: Find and extract RKMS iOS ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE=""
+
+          # New final ZIP, if uploaded
+          ZIP_FILE=$(find . -maxdepth 1 -type f \
+            -name 'RKMS_CONNECT_V18_IOS_GITHUB_READY_FINAL*.zip' \
+            -print -quit || true)
+
+          # Existing audited ZIP
+          if [ -z "$ZIP_FILE" ]; then
+            ZIP_FILE=$(find . -maxdepth 1 -type f \
+              -name 'RKMS_CONNECT_V18_IOS_GITHUB_READY_AUDITED*.zip' \
+              -print -quit || true)
+          fi
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: RKMS iOS ZIP not found."
+            exit 1
+          fi
+
+          echo "Using: $ZIP_FILE"
+
+          rm -rf _rkms_ios_source
+          mkdir -p _rkms_ios_source
+
+          unzip -q "$ZIP_FILE" -d _rkms_ios_source
+
+          PACKAGE_JSON=$(find _rkms_ios_source \
+            -type f \
+            -name package.json \
+            -not -path '*/node_modules/*' \
+            -print -quit)
+
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json not found inside ZIP."
+            find _rkms_ios_source -maxdepth 4 -type f | head -100
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+          test -f "$PROJECT_DIR/capacitor.config.json"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Verify RKMS source
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          test -f package.json
+          test -f capacitor.config.json
+          test -f index.html
+          test -f app.js
+
+          echo "RKMS source verified."
+
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: |
+          cd "$PROJECT_DIR"
+          npm install --no-audit --no-fund
 
       - name: Build web application
-        run: npm run build
+        run: |
+          cd "$PROJECT_DIR"
+          npm run build
 
-      - name: Add Capacitor iOS platform
-        run: npx cap add ios --packagemanager SPM
+      - name: Add Capacitor iOS
+        run: |
+          cd "$PROJECT_DIR"
+          npx cap add ios --packagemanager SPM
 
       - name: Sync Capacitor iOS
-        run: npx cap sync ios
-
-      - name: Prepare RKMS iOS project
         run: |
-          chmod +x scripts/prepare-ios-build.sh
-          ./scripts/prepare-ios-build.sh
+          cd "$PROJECT_DIR"
+          npx cap sync ios
 
-      - name: Verify iOS project
+      - name: Prepare iOS project
         run: |
+          cd "$PROJECT_DIR"
+
+          if [ -f scripts/prepare-ios-build.sh ]; then
+            chmod +x scripts/prepare-ios-build.sh
+            ./scripts/prepare-ios-build.sh
+          fi
+
+      - name: Verify Xcode project
+        run: |
+          cd "$PROJECT_DIR"
+
           test -f ios/App/App.xcodeproj/project.pbxproj
+
           echo "iOS Xcode project verified."
 
-      - name: Build iPhoneOS app
+      - name: Build iPhoneOS
         run: |
+          cd "$PROJECT_DIR"
+
           xcodebuild \
             -project ios/App/App.xcodeproj \
             -scheme App \
@@ -67,8 +149,10 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=13.0 \
             build
 
-      - name: Build iOS Simulator app
+      - name: Build iOS Simulator
         run: |
+          cd "$PROJECT_DIR"
+
           xcodebuild \
             -project ios/App/App.xcodeproj \
             -scheme App \
@@ -81,22 +165,35 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=13.0 \
             build
 
-      - name: Package iOS artifacts
+      - name: Package builds
         run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
           mkdir -p artifacts
 
+          DEVICE_APP=$(find build/ios-device/Build/Products \
+            -type d -name 'App.app' -print -quit)
+
+          SIM_APP=$(find build/ios-simulator/Build/Products \
+            -type d -name 'App.app' -print -quit)
+
+          test -n "$DEVICE_APP"
+          test -n "$SIM_APP"
+
           ditto -c -k --sequesterRsrc --keepParent \
-            build/ios-device/Build/Products/Release-iphoneos/App.app \
+            "$DEVICE_APP" \
             artifacts/RKMS-iOS-device-unsigned.zip
 
           ditto -c -k --sequesterRsrc --keepParent \
-            build/ios-simulator/Build/Products/Release-iphonesimulator/App.app \
+            "$SIM_APP" \
             artifacts/RKMS-iOS-simulator.zip
 
-      - name: Upload iOS build artifacts
+      - name: Upload iOS builds
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-iOS-builds
-          path: artifacts/*.zip
+          path: ${{ env.PROJECT_DIR }}/artifacts/*.zip
           if-no-files-found: error
           retention-days: 14
