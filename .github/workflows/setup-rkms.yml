@@ -2,73 +2,149 @@ name: RKMS Android 16 API 36 AAB
 
 on:
   workflow_dispatch:
+
   push:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   android:
+    name: Build RKMS Android 16 / API 36
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+
+      # =========================================================
+      # SOURCE
+      # =========================================================
+
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      # =========================================================
+      # NODE
+      # =========================================================
+
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: npm install
+
+      # =========================================================
+      # JAVA
+      # =========================================================
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Setup Android SDK API 36
+      - name: Verify Java
+        run: |
+          java -version
+          javac -version
+
+      # =========================================================
+      # ANDROID SDK
+      # =========================================================
+
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android 16 API 36
         run: |
-          sdkmanager "platform-tools" \
+          yes | sdkmanager --licenses || true
+
+          sdkmanager \
+            "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
 
-      - name: Verify Capacitor Push Notifications
+      - name: Verify Android SDK
         run: |
+          sdkmanager --list_installed | grep -E \
+            "platforms;android-36|build-tools;36.0.0|platform-tools" || true
+
+      # =========================================================
+      # CAPACITOR DEPENDENCIES
+      # =========================================================
+
+      - name: Verify Capacitor packages
+        run: |
+          npm ls @capacitor/core
+          npm ls @capacitor/android
+          npm ls @capacitor/app
           npm ls @capacitor/push-notifications
+
+      # =========================================================
+      # WEB BUILD
+      # =========================================================
 
       - name: Build web application
         run: npm run build
 
-      - name: Add Android platform
+      # =========================================================
+      # ANDROID PLATFORM
+      # =========================================================
+
+      - name: Add Capacitor Android platform
         run: npx cap add android
+
+      # =========================================================
+      # FIREBASE / FCM
+      # =========================================================
 
       - name: Copy Firebase configuration
         run: |
+          test -f google-services.json
           mkdir -p android/app
           cp google-services.json android/app/google-services.json
+
+      # =========================================================
+      # ANDROID 16 / API 36 CONFIGURATION
+      # =========================================================
 
       - name: Configure Android 16 API 36
         run: |
           chmod +x scripts/configure-android-16.sh
           ./scripts/configure-android-16.sh
 
-      - name: Capacitor sync
-        run: npx cap sync android
+      # =========================================================
+      # CAPACITOR SYNC
+      # =========================================================
 
-      - name: Setup native Android bridge
+      - name: Capacitor sync Android
+        run: |
+          npx cap sync android
+
+      # =========================================================
+      # NATIVE BRIDGE
+      # =========================================================
+
+      - name: Setup RKMS native Android bridge
         run: |
           chmod +x scripts/setup-android-native.sh
           ./scripts/setup-android-native.sh
 
-      - name: Verify Android 16 configuration
+      # =========================================================
+      # ANDROID CONFIGURATION VERIFICATION
+      # =========================================================
+
+      - name: Verify Android 16 API 36 configuration
         run: |
           python3 scripts/verify-android-16.py
+
+      # =========================================================
+      # APPLICATION VERIFICATIONS
+      # =========================================================
 
       - name: Verify FCM pipeline
         run: |
@@ -78,7 +154,7 @@ jobs:
         run: |
           python3 scripts/verify-saved-login.py
 
-      - name: Verify native PDF pipeline
+      - name: Verify Android PDF pipeline
         run: |
           python3 scripts/verify-android-pdf.py
 
@@ -86,17 +162,42 @@ jobs:
         run: |
           python3 scripts/verify-native-bridge.py
 
-      # ----------------------------------------------------
-      # Optional release signing
-      # ----------------------------------------------------
+      # =========================================================
+      # RELEASE KEYSTORE
+      #
+      # IMPORTANT:
+      # secrets are passed through env.
+      # They are NOT used directly in an if expression.
+      # This fixes the previous:
+      # "Unrecognized named-value: 'secrets'"
+      # workflow validation error.
+      # =========================================================
 
       - name: Prepare release keystore
-        if: ${{ secrets.RKMS_KEYSTORE_BASE64 != '' }}
+        id: keystore
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
         run: |
-          echo "${{ secrets.RKMS_KEYSTORE_BASE64 }}" | base64 --decode > android/rkms-release.keystore
+          if [ -n "$RKMS_KEYSTORE_BASE64" ]; then
+            echo "has_keystore=true" >> "$GITHUB_OUTPUT"
+
+            echo "$RKMS_KEYSTORE_BASE64" | base64 --decode > android/rkms-release.keystore
+
+            test -s android/rkms-release.keystore
+
+            echo "Release keystore prepared."
+          else
+            echo "has_keystore=false" >> "$GITHUB_OUTPUT"
+            echo "No release keystore secret configured."
+            echo "Release build will be generated without custom signing."
+          fi
+
+      # =========================================================
+      # RELEASE SIGNING
+      # =========================================================
 
       - name: Configure release signing
-        if: ${{ secrets.RKMS_KEYSTORE_BASE64 != '' }}
+        if: steps.keystore.outputs.has_keystore == 'true'
         working-directory: android
         env:
           RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
@@ -106,13 +207,15 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          p = Path("app/build.gradle")
-          s = p.read_text()
+          path = Path("app/build.gradle")
+          text = path.read_text()
 
-          signing = r'''
+          signing_block = r'''
+
+          // RKMS production release signing
           android {
               signingConfigs {
-                  release {
+                  rkmsRelease {
                       storeFile file("../rkms-release.keystore")
                       storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
                       keyAlias System.getenv("RKMS_KEY_ALIAS")
@@ -122,51 +225,128 @@ jobs:
 
               buildTypes {
                   release {
-                      signingConfig signingConfigs.release
+                      signingConfig signingConfigs.rkmsRelease
                   }
               }
           }
           '''
 
-          if "signingConfigs" not in s:
-              s += "\n" + signing
+          if "rkmsRelease" not in text:
+              text += signing_block
 
-          p.write_text(s)
+          path.write_text(text)
           PY
 
-      # ----------------------------------------------------
-      # Build APK + AAB
-      # ----------------------------------------------------
+          grep -n "rkmsRelease" app/build.gradle
 
-      - name: Build release APK
+      # =========================================================
+      # GRADLE VERIFICATION
+      # =========================================================
+
+      - name: Verify Gradle environment
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew --version
 
-      - name: Build release AAB
+      # =========================================================
+      # CLEAN BUILD
+      # =========================================================
+
+      - name: Clean Android build
         working-directory: android
         run: |
-          ./gradlew bundleRelease --no-daemon
+          ./gradlew clean --no-daemon
 
-      # ----------------------------------------------------
-      # Verify generated artifacts
-      # ----------------------------------------------------
+      # =========================================================
+      # RELEASE APK
+      # =========================================================
 
-      - name: List generated files
+      - name: Build Release APK
+        working-directory: android
         run: |
-          find android/app/build/outputs -type f -print
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Upload APK
+      # =========================================================
+      # RELEASE AAB
+      # =========================================================
+
+      - name: Build Release AAB
+        working-directory: android
+        run: |
+          ./gradlew bundleRelease --no-daemon --stacktrace
+
+      # =========================================================
+      # VERIFY OUTPUTS
+      # =========================================================
+
+      - name: Verify APK output
+        run: |
+          test -d android/app/build/outputs/apk/release
+
+          find android/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          test -n "$(find android/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" -print -quit)"
+
+      - name: Verify AAB output
+        run: |
+          test -d android/app/build/outputs/bundle/release
+
+          find android/app/build/outputs/bundle/release \
+            -type f \
+            -name "*.aab" \
+            -print
+
+          test -n "$(find android/app/build/outputs/bundle/release \
+            -type f \
+            -name "*.aab" -print -quit)"
+
+      # =========================================================
+      # SHOW BUILD INFORMATION
+      # =========================================================
+
+      - name: Show final build files
+        run: |
+          echo "========================================"
+          echo "RKMS ANDROID 16 / API 36 BUILD OUTPUT"
+          echo "========================================"
+
+          echo ""
+          echo "APK:"
+          ls -lh android/app/build/outputs/apk/release/*.apk
+
+          echo ""
+          echo "AAB:"
+          ls -lh android/app/build/outputs/bundle/release/*.aab
+
+          echo ""
+          echo "========================================"
+
+      # =========================================================
+      # UPLOAD APK ARTIFACT
+      # =========================================================
+
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Android-16-API36-APK
+          name: RKMS-Android-16-API36-Release-APK
           path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+          retention-days: 30
 
-      - name: Upload AAB
+      # =========================================================
+      # UPLOAD AAB ARTIFACT
+      # =========================================================
+
+      - name: Upload Release AAB
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Android-16-API36-AAB
+          name: RKMS-Android-16-API36-Release-AAB
           path: android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
+          retention-days: 30
