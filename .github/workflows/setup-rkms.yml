@@ -20,9 +20,9 @@ jobs:
 
 
       # ============================================================
-      # 2. PREPARE CLEAN V17.1 SOURCE
+      # 2. PREPARE CLEAN V18 SOURCE
       # ============================================================
-      - name: Prepare RKMS source
+      - name: Prepare RKMS V18 source
         shell: bash
         run: |
           set -euo pipefail
@@ -30,35 +30,30 @@ jobs:
           rm -rf build
           mkdir -p build
 
-          SOURCE_ZIP="RKMS_CONNECT_V17_1_MEMBER_PDA_DIRECTORY_FINAL_DEEP_AUDITED_CLEAN.zip"
+          SOURCE_ZIP="RKMS_CONNECT_V18_ISMGMT_FIXED_FINAL_AUDITED.zip"
 
-          echo "Checking source ZIP..."
+          echo "Checking V18 source ZIP..."
           test -f "$SOURCE_ZIP"
 
-          echo "Extracting RKMS source..."
+          echo "Extracting V18 RKMS source..."
           unzip -q "$SOURCE_ZIP" -d build
 
           echo "Using source ZIP: $SOURCE_ZIP"
 
-
-          # ==========================================================
-          # CLEAN SOURCE ZIP CHECK
-          # ==========================================================
+          # --------------------------------------------------------
+          # Clean source ZIP check
+          # --------------------------------------------------------
           if unzip -l "$SOURCE_ZIP" | grep -E '(^|[[:space:]])dist/'; then
-            echo "ERROR: Clean V17.1 source ZIP contains dist/"
-            echo "Generated dist/ must not be inside the source ZIP."
+            echo "ERROR: V18 clean source ZIP contains dist/"
+            echo "Generated dist/ must not be inside source ZIP."
             exit 1
           fi
 
-          echo "Clean source ZIP (no dist/) verified"
+          echo "V18 clean source ZIP verified: no dist/"
 
-
-          # ==========================================================
-          # FIND WORKFLOW AUTOMATICALLY
-          #
-          # Do NOT assume the workflow filename.
-          # Find the repository's YAML workflow automatically.
-          # ==========================================================
+          # --------------------------------------------------------
+          # Find current GitHub workflow automatically
+          # --------------------------------------------------------
           WORKFLOW_DIR="$GITHUB_WORKSPACE/.github/workflows"
 
           test -d "$WORKFLOW_DIR"
@@ -80,22 +75,23 @@ jobs:
 
           if [ -z "$WORKFLOW_PATH" ]; then
             echo "ERROR: RKMS Android workflow YAML was not found."
+
             echo "Available workflow files:"
             find "$WORKFLOW_DIR" \
               -maxdepth 1 \
               -type f \
               \( -name '*.yml' -o -name '*.yaml' \) \
               -print || true
+
             exit 1
           fi
 
           echo "Detected workflow:"
           echo "$WORKFLOW_PATH"
 
-
-          # ==========================================================
-          # COPY WORKFLOW FOR EXISTING STATIC AUDIT SCRIPTS
-          # ==========================================================
+          # --------------------------------------------------------
+          # Copy workflow into source for static audit scripts
+          # --------------------------------------------------------
           mkdir -p build/.github/workflows
 
           cp \
@@ -106,10 +102,9 @@ jobs:
 
           echo "Workflow copied for static verification"
 
-
-          # ==========================================================
-          # REQUIRED RKMS SOURCE FILES
-          # ==========================================================
+          # --------------------------------------------------------
+          # Required RKMS files
+          # --------------------------------------------------------
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
@@ -121,14 +116,31 @@ jobs:
 
           test -d build/assets/book
 
-          echo "RKMS source structure verified"
+          # --------------------------------------------------------
+          # Required V18 verification files
+          # --------------------------------------------------------
+          test -f build/scripts/verify-directory-contact-actions.py
+          test -f build/scripts/verify-directory-lists.py
+          test -f build/scripts/verify-v17-directory-deep.py
 
+          test -f build/scripts/verify-authority-hierarchy.py
+          test -f build/scripts/verify-report-download-scope.py
+          test -f build/scripts/verify-rkms-final.py
+          test -f build/scripts/verify-saved-login.py
+          test -f build/scripts/verify-fcm-pipeline.py
+          test -f build/scripts/verify-pdf-pipeline.py
+          test -f build/scripts/verify-native-bridge.py
+          test -f build/scripts/setup-android-native.sh
+          test -f build/scripts/verify-android-pdf.py
 
-          # ==========================================================
-          # LOGO VERIFICATION
-          #
-          # No old hard-coded SHA is used.
-          # ==========================================================
+          test -f \
+            build/supabase/migrations/20260914110000_directory_contact_chat_authority_v18.sql
+
+          echo "V18 source structure verified"
+
+          # --------------------------------------------------------
+          # Logo verification
+          # --------------------------------------------------------
           LOGO_SHA=$(
             sha256sum build/assets/rkms-logo-transparent.png |
             cut -d' ' -f1
@@ -144,16 +156,22 @@ jobs:
 
 
       # ============================================================
-      # 3. JAVASCRIPT SYNTAX
+      # 3. JAVASCRIPT + V18 RUNTIME FIX
       # ============================================================
-      - name: Verify JavaScript
+      - name: Verify JavaScript and V18 runtime fix
         shell: bash
         run: |
           set -euo pipefail
 
           node --check build/app.js
 
-          echo "app.js syntax verified"
+          if grep -n "isMgmt" build/app.js; then
+            echo "ERROR: obsolete isMgmt reference found in V18 app.js"
+            exit 1
+          fi
+
+          echo "app.js syntax PASS"
+          echo "V18 isMgmt runtime fix PASS"
 
 
       # ============================================================
@@ -278,9 +296,9 @@ jobs:
 
 
       # ============================================================
-      # 10. V17.1 MEMBER + OFFICER DIRECTORY
+      # 10. V18 MEMBER + OFFICER DIRECTORY
       # ============================================================
-      - name: Verify V17.1 Member and Officer Directory
+      - name: Verify V18 Member and Officer Directory
         working-directory: build
         shell: bash
         run: |
@@ -292,11 +310,73 @@ jobs:
           python3 scripts/verify-directory-lists.py
           python3 scripts/verify-v17-directory-deep.py
 
-          echo "V17.1 Member/PDA Directory verification PASS"
+          echo "V18 Member/PDA Directory verification PASS"
 
 
       # ============================================================
-      # 11. SAVED LOGIN
+      # 11. V18 CONTACT + CHAT + ISMGMT AUDIT
+      # ============================================================
+      - name: Verify V18 Contact and Chat Actions
+        working-directory: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f scripts/verify-directory-contact-actions.py
+
+          # Absolute protection against the old runtime error.
+          if grep -n "isMgmt" app.js; then
+            echo "ERROR: obsolete isMgmt reference found."
+            exit 1
+          fi
+
+          python3 scripts/verify-directory-contact-actions.py
+
+          echo "V18 Contact + Chat verification PASS"
+
+
+      # ============================================================
+      # 12. V18 CHAT AUTHORITY MIGRATION
+      # ============================================================
+      - name: Verify V18 Chat Authority Migration
+        working-directory: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MIGRATION="supabase/migrations/20260914110000_directory_contact_chat_authority_v18.sql"
+
+          test -f "$MIGRATION"
+
+          grep -q \
+            "CREATE OR REPLACE FUNCTION public.rkms_chat_open" \
+            "$MIGRATION"
+
+          grep -q \
+            "rkms_chat_officer_can_access_member" \
+            "$MIGRATION"
+
+          grep -q \
+            "rkms_can_manage_officer" \
+            "$MIGRATION"
+
+          grep -q \
+            "rkms_is_top_authority" \
+            "$MIGRATION"
+
+          grep -q \
+            "REVOKE EXECUTE" \
+            "$MIGRATION"
+
+          grep -q \
+            "GRANT EXECUTE" \
+            "$MIGRATION"
+
+          echo "V18 Chat Authority migration source verification PASS"
+
+
+      # ============================================================
+      # 13. SAVED LOGIN
       # ============================================================
       - name: Verify Saved Login implementation
         working-directory: build
@@ -312,7 +392,7 @@ jobs:
 
 
       # ============================================================
-      # 12. CREATE CAPACITOR PACKAGE
+      # 14. CREATE CAPACITOR PACKAGE
       # ============================================================
       - name: Create Capacitor build package
         working-directory: build
@@ -340,10 +420,11 @@ jobs:
           }
           JSON
 
-          grep -q '@capacitor/push-notifications' package.json
+          grep -q \
+            '@capacitor/push-notifications' \
+            package.json
 
           echo "Capacitor FCM dependency verified"
-
 
           cat > capacitor.config.json <<'JSON'
           {
@@ -367,7 +448,7 @@ jobs:
 
 
       # ============================================================
-      # 13. NODE 22
+      # 15. NODE 22
       # ============================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -376,7 +457,7 @@ jobs:
 
 
       # ============================================================
-      # 14. INSTALL DEPENDENCIES
+      # 16. INSTALL DEPENDENCIES
       # ============================================================
       - name: Install Capacitor dependencies
         working-directory: build
@@ -390,7 +471,7 @@ jobs:
 
 
       # ============================================================
-      # 15. BUILD WEB APPLICATION
+      # 17. BUILD WEB APPLICATION
       # ============================================================
       - name: Build RKMS web application
         working-directory: build
@@ -406,7 +487,7 @@ jobs:
 
 
       # ============================================================
-      # 16. VERIFY GENERATED DIST
+      # 18. VERIFY GENERATED DIST
       # ============================================================
       - name: Verify generated web build
         working-directory: build
@@ -431,7 +512,7 @@ jobs:
 
 
       # ============================================================
-      # 17. VERIFY NATIVE BRIDGE SOURCE
+      # 19. VERIFY NATIVE BRIDGE SOURCE
       # ============================================================
       - name: Verify native bridge source
         working-directory: build
@@ -450,7 +531,7 @@ jobs:
 
 
       # ============================================================
-      # 18. JAVA 21
+      # 20. JAVA 21
       # ============================================================
       - name: Setup Java 21
         uses: actions/setup-java@v4
@@ -460,14 +541,14 @@ jobs:
 
 
       # ============================================================
-      # 19. ANDROID SDK
+      # 21. ANDROID SDK
       # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
 
       # ============================================================
-      # 20. CREATE ANDROID PLATFORM
+      # 22. CREATE ANDROID PLATFORM
       # ============================================================
       - name: Create Android platform
         working-directory: build
@@ -483,7 +564,7 @@ jobs:
 
 
       # ============================================================
-      # 21. ADD RKMS NATIVE BRIDGE
+      # 23. ADD RKMS NATIVE BRIDGE
       # ============================================================
       - name: Add RKMS secure credential native bridge
         working-directory: build
@@ -497,7 +578,7 @@ jobs:
 
 
       # ============================================================
-      # 22. FIREBASE / FCM
+      # 24. FIREBASE / FCM
       # ============================================================
       - name: Configure Firebase Android client for FCM
         working-directory: build
@@ -528,9 +609,7 @@ jobs:
 
           fi
 
-
           test -s android/app/google-services.json
-
 
           python3 - <<'PY2'
           import json
@@ -553,7 +632,6 @@ jobs:
 
           print("Firebase Android client config verified")
           PY2
-
 
           python3 - <<'PY2'
           from pathlib import Path
@@ -581,7 +659,6 @@ jobs:
 
               root.write_text(r, encoding="utf-8")
 
-
           a = app.read_text(encoding="utf-8")
 
           if "com.google.gms.google-services" not in a:
@@ -590,13 +667,12 @@ jobs:
 
               app.write_text(a, encoding="utf-8")
 
-
           print("Google Services Gradle plugin configured")
           PY2
 
 
       # ============================================================
-      # 23. CAPACITOR SYNC
+      # 25. CAPACITOR SYNC
       # ============================================================
       - name: Sync RKMS application
         working-directory: build
@@ -610,7 +686,7 @@ jobs:
 
 
       # ============================================================
-      # 24. ANDROID PDF BRIDGE
+      # 26. ANDROID PDF BRIDGE
       # ============================================================
       - name: Verify generated Android PDF bridge
         working-directory: build
@@ -626,7 +702,7 @@ jobs:
 
 
       # ============================================================
-      # 25. BIOMETRIC DEPENDENCY
+      # 27. BIOMETRIC DEPENDENCY
       # ============================================================
       - name: Add Android biometric dependency
         working-directory: build
@@ -636,7 +712,9 @@ jobs:
 
           APP_GRADLE="android/app/build.gradle"
 
-          if ! grep -q 'androidx.biometric:biometric' "$APP_GRADLE"; then
+          if ! grep -q \
+            'androidx.biometric:biometric' \
+            "$APP_GRADLE"; then
 
             sed -i \
               '/dependencies {/a\    implementation "androidx.biometric:biometric:1.1.0"' \
@@ -652,10 +730,7 @@ jobs:
 
 
       # ============================================================
-      # 26. GENERATED ANDROID NATIVE / PDF / LOGIN VERIFICATION
-      #
-      # Python is used for file discovery and verification to avoid
-      # Bash quote/EOF parsing problems.
+      # 28. GENERATED ANDROID NATIVE / PDF / LOGIN VERIFICATION
       # ============================================================
       - name: Verify generated Android native bridge and PDF implementation
         working-directory: build
@@ -673,7 +748,6 @@ jobs:
               print("ERROR: Android source directory not found")
               sys.exit(1)
 
-
           def find_file(name):
               matches = list(root.rglob(name))
 
@@ -683,18 +757,15 @@ jobs:
 
               return matches[0]
 
-
           main_activity = find_file("MainActivity.java")
           native_bridge = find_file("RKMSNativeBridge.java")
           secure_plugin = find_file(
               "RKMSSecureCredentialsPlugin.java"
           )
 
-
           print(f"MainActivity: {main_activity}")
           print(f"RKMSNativeBridge: {native_bridge}")
           print(f"Secure plugin: {secure_plugin}")
-
 
           main_text = main_activity.read_text(
               encoding="utf-8",
@@ -711,8 +782,6 @@ jobs:
               errors="replace"
           )
 
-
-          # PDF lifecycle
           required_native = [
               "beginPdfSave",
               "appendPdfChunk",
@@ -731,8 +800,6 @@ jobs:
                   )
                   sys.exit(1)
 
-
-          # MainActivity bridge registration
           required_main = [
               "RKMSNativeBridge",
               "getBridge().getWebView()",
@@ -746,8 +813,6 @@ jobs:
                   )
                   sys.exit(1)
 
-
-          # Secure credentials / biometric
           required_secure = [
               "AndroidKeyStore",
               "AES/GCM/NoPadding",
@@ -761,7 +826,6 @@ jobs:
                   )
                   sys.exit(1)
 
-
           print(
               "Generated Android native/PDF verification PASS"
           )
@@ -769,7 +833,7 @@ jobs:
 
 
       # ============================================================
-      # 27. IMAGE TOOLS
+      # 29. IMAGE TOOLS
       # ============================================================
       - name: Install image tools
         shell: bash
@@ -777,14 +841,13 @@ jobs:
           set -euo pipefail
 
           sudo apt-get update -qq
-
           sudo apt-get install -y -qq imagemagick
 
           echo "ImageMagick installed"
 
 
       # ============================================================
-      # 28. RKMS LAUNCHER LOGO
+      # 30. RKMS LAUNCHER LOGO
       # ============================================================
       - name: Install exact RKMS launcher logo AFTER Capacitor sync
         shell: bash
@@ -792,14 +855,10 @@ jobs:
           set -euo pipefail
 
           LOGO="build/assets/rkms-logo-transparent.png"
-
           RES="build/android/app/src/main/res"
-
           STRINGS="build/android/app/src/main/res/values/strings.xml"
 
-
           test -s "$LOGO"
-
 
           mkdir -p \
             "$RES/mipmap-mdpi" \
@@ -807,7 +866,6 @@ jobs:
             "$RES/mipmap-xhdpi" \
             "$RES/mipmap-xxhdpi" \
             "$RES/mipmap-xxxhdpi"
-
 
           convert "$LOGO" \
             -resize 40x40 \
@@ -817,7 +875,6 @@ jobs:
             -extent 48x48 \
             "$RES/mipmap-mdpi/ic_launcher.png"
 
-
           convert "$LOGO" \
             -resize 60x60 \
             -strip \
@@ -825,7 +882,6 @@ jobs:
             -background none \
             -extent 72x72 \
             "$RES/mipmap-hdpi/ic_launcher.png"
-
 
           convert "$LOGO" \
             -resize 80x80 \
@@ -835,7 +891,6 @@ jobs:
             -extent 96x96 \
             "$RES/mipmap-xhdpi/ic_launcher.png"
 
-
           convert "$LOGO" \
             -resize 120x120 \
             -strip \
@@ -844,7 +899,6 @@ jobs:
             -extent 144x144 \
             "$RES/mipmap-xxhdpi/ic_launcher.png"
 
-
           convert "$LOGO" \
             -resize 172x172 \
             -strip \
@@ -852,7 +906,6 @@ jobs:
             -background none \
             -extent 192x192 \
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
-
 
           cp \
             "$RES/mipmap-mdpi/ic_launcher.png" \
@@ -874,11 +927,9 @@ jobs:
             "$RES/mipmap-xxxhdpi/ic_launcher.png" \
             "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
-
           rm -rf \
             "$RES/mipmap-anydpi-v26" \
             "$RES/mipmap-anydpi"
-
 
           find "$RES" \
             -type f \
@@ -889,7 +940,6 @@ jobs:
               -name 'ic_launcher_background.png' \
             \) \
             -delete || true
-
 
           if grep -q '<string name="app_name">' "$STRINGS"; then
 
@@ -904,20 +954,16 @@ jobs:
 
           fi
 
-
           echo "Final launcher icon:"
-
           identify \
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
-
           echo "Final app name:"
-
           grep -n 'app_name' "$STRINGS"
 
 
       # ============================================================
-      # 29. GRADLE EXECUTABLE
+      # 31. GRADLE EXECUTABLE
       # ============================================================
       - name: Make Gradle executable
         shell: bash
@@ -932,7 +978,7 @@ jobs:
 
 
       # ============================================================
-      # 30. BUILD DEBUG APK
+      # 32. BUILD DEBUG APK
       # ============================================================
       - name: Build Debug APK
         working-directory: build/android
@@ -947,7 +993,7 @@ jobs:
 
 
       # ============================================================
-      # 31. VERIFY APK
+      # 33. VERIFY APK
       # ============================================================
       - name: Verify APK
         shell: bash
@@ -959,12 +1005,11 @@ jobs:
           test -s "$APK"
 
           echo "RKMS APK successfully created:"
-
           ls -lh "$APK"
 
 
       # ============================================================
-      # 32. UPLOAD APK
+      # 34. UPLOAD APK
       # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
