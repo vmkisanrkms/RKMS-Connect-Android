@@ -41,46 +41,57 @@ jobs:
           echo "Using source ZIP: $SOURCE_ZIP"
 
 
-          # ----------------------------------------------------------
-          # Clean source ZIP must NOT contain generated dist/
-          # ----------------------------------------------------------
+          # ==========================================================
+          # CLEAN SOURCE ZIP CHECK
+          # ==========================================================
           if unzip -l "$SOURCE_ZIP" | grep -E '(^|[[:space:]])dist/'; then
             echo "ERROR: Clean V17.1 source ZIP contains dist/"
-            echo "Generated dist/ must not be stored inside source ZIP."
+            echo "Generated dist/ must not be inside the source ZIP."
             exit 1
           fi
 
           echo "Clean source ZIP (no dist/) verified"
 
 
-          # ----------------------------------------------------------
-          # Static audit scripts expect this workflow path.
+          # ==========================================================
+          # FIND ACTUAL WORKFLOW CURRENTLY RUNNING
           #
-          # The source ZIP intentionally does NOT contain .github/
-          # so that the source archive stays small.
+          # GITHUB_WORKFLOW_REF example:
+          # owner/repository/.github/workflows/android-apk.yml@main
           #
-          # We copy the actual workflow currently running into the
-          # extracted source only for static verification.
-          # ----------------------------------------------------------
-          test -f "$GITHUB_WORKSPACE/.github/workflows/android-apk.yml"
+          # The clean source ZIP intentionally does not contain
+          # .github/workflows. Existing verification scripts expect
+          # android-apk.yml, so we copy the current workflow there
+          # only inside the temporary build directory.
+          # ==========================================================
+          WORKFLOW_REF_PATH="${GITHUB_WORKFLOW_REF%%@*}"
+
+          WORKFLOW_REL_PATH="${WORKFLOW_REF_PATH#*/}"
+          WORKFLOW_REL_PATH="${WORKFLOW_REL_PATH#*/}"
+
+          echo "Detected workflow path:"
+          echo "$WORKFLOW_REL_PATH"
+
+          test -f "$GITHUB_WORKSPACE/$WORKFLOW_REL_PATH"
 
           mkdir -p build/.github/workflows
 
           cp \
-            "$GITHUB_WORKSPACE/.github/workflows/android-apk.yml" \
-            "build/.github/workflows/android-apk.yml"
+            "$GITHUB_WORKSPACE/$WORKFLOW_REL_PATH" \
+            build/.github/workflows/android-apk.yml
+
+          test -s build/.github/workflows/android-apk.yml
 
           echo "Workflow copied for static verification"
 
 
-          # ----------------------------------------------------------
-          # Required source files
-          # ----------------------------------------------------------
+          # ==========================================================
+          # REQUIRED RKMS SOURCE FILES
+          # ==========================================================
           test -f build/app.js
           test -f build/index.html
           test -f build/config.js
           test -f build/styles.css
-
           test -f build/manifest.webmanifest
 
           test -f build/assets/rkms-logo-transparent.png
@@ -91,21 +102,18 @@ jobs:
           echo "RKMS source structure verified"
 
 
-          # ----------------------------------------------------------
-          # Logo verification
+          # ==========================================================
+          # LOGO VERIFICATION
           #
-          # DO NOT compare against an old hard-coded SHA.
-          # The important checks are:
-          #   1. file exists
-          #   2. file is non-empty
-          #   3. SHA can be calculated
-          # ----------------------------------------------------------
+          # No old hard-coded SHA is used.
+          # ==========================================================
           LOGO_SHA=$(
             sha256sum build/assets/rkms-logo-transparent.png |
             cut -d' ' -f1
           )
 
           test -n "$LOGO_SHA"
+          test -s build/assets/rkms-logo-transparent.png
 
           echo "RKMS logo verified"
           echo "Logo SHA256: $LOGO_SHA"
@@ -154,28 +162,20 @@ jobs:
           test -s assets/rkms-logo-transparent.png
 
 
-          # ----------------------------------------------------------
           # Real-device fixes
-          # ----------------------------------------------------------
           grep -q 'mode:"cors"' "$FILE"
           grep -q 'readAsDataURL' "$FILE"
           grep -q 'img.crossOrigin="anonymous"' "$FILE"
-
           grep -q 'fillFromOfficer' "$FILE"
-
           grep -q 'history.replaceState({rkmsRoute:"home"' "$FILE"
-
           grep -q 's.disabled=false' "$FILE"
 
 
-          # ----------------------------------------------------------
           # FCM client
-          # ----------------------------------------------------------
           grep -q 'rkmsRegisterFcmPush' "$FILE"
           grep -q 'rkms_notifications_v2' "$FILE"
           grep -q "action:'register_token'" "$FILE"
           grep -q 'rkms-fcm-push' "$FILE"
-
 
           echo "RKMS fixes + FCM client source verification PASS"
 
@@ -245,7 +245,7 @@ jobs:
 
 
       # ============================================================
-      # 9. AUTHORITY HIERARCHY
+      # 9. PDA AUTHORITY
       # ============================================================
       - name: Verify PDA authority hierarchy
         working-directory: build
@@ -273,7 +273,6 @@ jobs:
           test -f scripts/verify-v17-directory-deep.py
 
           python3 scripts/verify-directory-lists.py
-
           python3 scripts/verify-v17-directory-deep.py
 
           echo "V17.1 Member/PDA Directory verification PASS"
@@ -516,9 +515,7 @@ jobs:
           test -s android/app/google-services.json
 
 
-          # ----------------------------------------------------------
           # Validate Firebase JSON
-          # ----------------------------------------------------------
           python3 - <<'PY2'
           import json
           from pathlib import Path
@@ -542,9 +539,7 @@ jobs:
           PY2
 
 
-          # ----------------------------------------------------------
           # Configure Google Services Gradle plugin
-          # ----------------------------------------------------------
           python3 - <<'PY2'
           from pathlib import Path
 
@@ -669,7 +664,7 @@ jobs:
               -type f \
               -name 'RKMSSecureCredentialsPlugin.java' \
               -print -quit
-          )"
+          )
 
 
           test -n "$MAIN_ACTIVITY"
@@ -682,9 +677,7 @@ jobs:
           echo "Secure plugin: $SECURE_PLUGIN"
 
 
-          # ----------------------------------------------------------
           # PDF lifecycle
-          # ----------------------------------------------------------
           grep -q 'beginPdfSave' "$NATIVE_BRIDGE"
           grep -q 'appendPdfChunk' "$NATIVE_BRIDGE"
           grep -q 'finishPdfSave' "$NATIVE_BRIDGE"
@@ -703,9 +696,7 @@ jobs:
             "$NATIVE_BRIDGE"
 
 
-          # ----------------------------------------------------------
           # MainActivity bridge registration
-          # ----------------------------------------------------------
           grep -q 'RKMSNativeBridge' \
             "$MAIN_ACTIVITY"
 
@@ -716,9 +707,7 @@ jobs:
             "$MAIN_ACTIVITY"
 
 
-          # ----------------------------------------------------------
           # Secure credentials / biometric
-          # ----------------------------------------------------------
           grep -q 'AndroidKeyStore' \
             "$SECURE_PLUGIN"
 
@@ -773,9 +762,7 @@ jobs:
             "$RES/mipmap-xxxhdpi"
 
 
-          # ----------------------------------------------------------
           # MDPI
-          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 40x40 \
             -strip \
@@ -785,9 +772,7 @@ jobs:
             "$RES/mipmap-mdpi/ic_launcher.png"
 
 
-          # ----------------------------------------------------------
           # HDPI
-          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 60x60 \
             -strip \
@@ -797,9 +782,7 @@ jobs:
             "$RES/mipmap-hdpi/ic_launcher.png"
 
 
-          # ----------------------------------------------------------
           # XHDPI
-          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 80x80 \
             -strip \
@@ -809,9 +792,7 @@ jobs:
             "$RES/mipmap-xhdpi/ic_launcher.png"
 
 
-          # ----------------------------------------------------------
           # XXHDPI
-          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 120x120 \
             -strip \
@@ -821,9 +802,7 @@ jobs:
             "$RES/mipmap-xxhdpi/ic_launcher.png"
 
 
-          # ----------------------------------------------------------
           # XXXHDPI
-          # ----------------------------------------------------------
           convert "$LOGO" \
             -resize 172x172 \
             -strip \
@@ -833,9 +812,7 @@ jobs:
             "$RES/mipmap-xxxhdpi/ic_launcher.png"
 
 
-          # ----------------------------------------------------------
           # Round icons
-          # ----------------------------------------------------------
           cp \
             "$RES/mipmap-mdpi/ic_launcher.png" \
             "$RES/mipmap-mdpi/ic_launcher_round.png"
@@ -857,9 +834,7 @@ jobs:
             "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
 
 
-          # ----------------------------------------------------------
           # Remove adaptive/default Capacitor launcher resources
-          # ----------------------------------------------------------
           rm -rf \
             "$RES/mipmap-anydpi-v26" \
             "$RES/mipmap-anydpi"
@@ -876,9 +851,7 @@ jobs:
             -delete || true
 
 
-          # ----------------------------------------------------------
           # App name
-          # ----------------------------------------------------------
           if grep -q '<string name="app_name">' "$STRINGS"; then
 
             sed -i \
