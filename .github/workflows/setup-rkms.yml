@@ -1,12 +1,19 @@
-name: RKMS CONNECT iOS Build
+name: Build RKMS CONNECT for iOS
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
-  build-ios:
+  ios-build:
     name: Build RKMS CONNECT for iOS
     runs-on: macos-26
+    timeout-minutes: 45
 
     steps:
       - name: Checkout source
@@ -16,62 +23,80 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
-      - name: Show versions
+      - name: Show environment
         run: |
           node --version
           npm --version
-          xcodebuild -version
           xcode-select -p
+          xcodebuild -version
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Build web application
         run: npm run build
 
-      - name: Add iOS platform
-        run: npx cap add ios
+      - name: Add Capacitor iOS platform
+        run: npx cap add ios --packagemanager SPM
 
-      - name: Sync Capacitor
+      - name: Sync Capacitor iOS
         run: npx cap sync ios
+
+      - name: Prepare RKMS iOS project
+        run: |
+          chmod +x scripts/prepare-ios-build.sh
+          ./scripts/prepare-ios-build.sh
 
       - name: Verify iOS project
         run: |
-          test -d ios/App
           test -f ios/App/App.xcodeproj/project.pbxproj
-          echo "iOS project verified successfully."
+          echo "iOS Xcode project verified."
 
-      - name: Build unsigned iOS app
+      - name: Build iPhoneOS app
         run: |
           xcodebuild \
             -project ios/App/App.xcodeproj \
             -scheme App \
+            -configuration Release \
             -sdk iphoneos \
-            -configuration Debug \
-            -derivedDataPath build/ios \
+            -derivedDataPath build/ios-device \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            IPHONEOS_DEPLOYMENT_TARGET=13.0 \
             build
 
-      - name: Package iOS app
+      - name: Build iOS Simulator app
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -derivedDataPath build/ios-simulator \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            IPHONEOS_DEPLOYMENT_TARGET=13.0 \
+            build
+
+      - name: Package iOS artifacts
         run: |
           mkdir -p artifacts
-          APP_PATH=$(find build/ios/Build/Products -type d -name "*.app" | head -n 1)
 
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: iOS .app was not generated."
-            exit 1
-          fi
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/ios-device/Build/Products/Release-iphoneos/App.app \
+            artifacts/RKMS-iOS-device-unsigned.zip
 
-          echo "Found app: $APP_PATH"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" artifacts/RKMS_CONNECT_iOS.app.zip
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/ios-simulator/Build/Products/Release-iphonesimulator/App.app \
+            artifacts/RKMS-iOS-simulator.zip
 
-      - name: Upload iOS build
+      - name: Upload iOS build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-CONNECT-iOS-Build
-          path: artifacts/RKMS_CONNECT_iOS.app.zip
+          name: RKMS-iOS-builds
+          path: artifacts/*.zip
           if-no-files-found: error
           retention-days: 14
