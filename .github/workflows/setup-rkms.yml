@@ -21,14 +21,26 @@ jobs:
           rm -rf build
           mkdir -p build
 
-          # The repository stores the complete RKMS source as a ZIP.
-          # Always use the exact current release ZIP.
+          # Exact current Clean V17.1 release ZIP
           SOURCE_ZIP="RKMS_CONNECT_V17_1_MEMBER_PDA_DIRECTORY_FINAL_DEEP_AUDITED_CLEAN.zip"
 
           test -f "$SOURCE_ZIP"
           unzip -q "$SOURCE_ZIP" -d build
 
+          # Static verification scripts expect this canonical workflow path.
+          # The clean source ZIP intentionally excludes .github/workflows.
+          WORKFLOW_FILE="${GITHUB_WORKFLOW_REF##*/}"
+          WORKFLOW_FILE="${WORKFLOW_FILE%@*}"
+
+          test -f "$GITHUB_WORKSPACE/.github/workflows/$WORKFLOW_FILE"
+
+          mkdir -p build/.github/workflows
+
+          cp "$GITHUB_WORKSPACE/.github/workflows/$WORKFLOW_FILE" \
+             build/.github/workflows/android-apk.yml
+
           echo "Using source ZIP: $SOURCE_ZIP"
+          echo "Workflow used for static verification: $WORKFLOW_FILE"
 
           # Clean V17.1 source ZIP must not contain generated dist/.
           if unzip -l "$SOURCE_ZIP" | grep -E '(^|[[:space:]])dist/'; then
@@ -52,10 +64,11 @@ jobs:
           echo "Exact RKMS logo source verified"
 
       - name: Verify JavaScript
-        shell: bash
         run: |
           set -euo pipefail
+
           node --check build/app.js
+
           echo "app.js syntax verified"
 
       - name: Verify V1D fixes 1 to 8
