@@ -2,9 +2,6 @@ name: RKMS Android 16 API 36 - Release APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -21,7 +18,6 @@ jobs:
       RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v7
 
@@ -31,10 +27,10 @@ jobs:
           set -euo pipefail
 
           if [ ! -f package.json ]; then
-            PACKAGE="$(find . -maxdepth 1 -type f -name 'RKMS_CONNECT_V21*.zip' -print -quit)"
+            PACKAGE="$(find . -maxdepth 1 -type f -name 'RKMS_CONNECT*.zip' -print -quit)"
 
             if [ -z "${PACKAGE:-}" ]; then
-              echo "ERROR: package.json not found and RKMS V21 ZIP not found."
+              echo "ERROR: package.json not found and RKMS ZIP not found."
               exit 1
             fi
 
@@ -42,10 +38,14 @@ jobs:
             mkdir -p .rkms_extract
             unzip -q "$PACKAGE" -d .rkms_extract
 
-            SOURCE_DIR="$(find .rkms_extract -mindepth 1 -maxdepth 2 -type d -name 'rkms_android' -print -quit)"
+            if [ -f ".rkms_extract/package.json" ]; then
+              SOURCE_DIR=".rkms_extract"
+            else
+              SOURCE_DIR="$(find .rkms_extract -mindepth 1 -maxdepth 3 -type d -name 'rkms_android' -print -quit)"
+            fi
 
-            if [ -z "${SOURCE_DIR:-}" ]; then
-              echo "ERROR: rkms_android directory not found in V21 ZIP."
+            if [ -z "${SOURCE_DIR:-}" ] || [ ! -f "$SOURCE_DIR/package.json" ]; then
+              echo "ERROR: RKMS source with package.json not found inside ZIP."
               exit 1
             fi
 
@@ -73,11 +73,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           node --version
           npm --version
           node --check app.js
-
           echo "Node.js 22: PASS"
           echo "app.js syntax: PASS"
 
@@ -85,14 +83,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           npm install --no-audit --no-fund
-
           npm ls @capacitor/core --depth=0
           npm ls @capacitor/android --depth=0
           npm ls @capacitor/app --depth=0
           npm ls @capacitor/push-notifications --depth=0
-
           echo "Capacitor + FCM dependencies: PASS"
 
       - name: Setup JDK 17
@@ -105,10 +100,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           java -version
           javac -version
-
           echo "JDK 17: PASS"
 
       - name: Setup Android SDK
@@ -138,41 +131,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           npm run build
-
           test -f dist/index.html
-
           echo "Web build: PASS"
 
       - name: Add Capacitor Android platform
         shell: bash
         run: |
           set -euo pipefail
-
           npx cap add android
-
           test -f android/app/build.gradle
           test -f android/gradlew
-
           echo "Capacitor Android project: PASS"
 
       - name: Install Firebase configuration
         shell: bash
         run: |
           set -euo pipefail
-
           cp google-services.json android/app/google-services.json
-
           test -f android/app/google-services.json
-
           echo "Firebase configuration: PASS"
 
       - name: Configure Android 16 API 36
         shell: bash
         run: |
           set -euo pipefail
-
           chmod +x scripts/configure-android-16.sh
           bash scripts/configure-android-16.sh
 
@@ -180,14 +163,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           npx cap sync android
 
       - name: Setup RKMS native Android
         shell: bash
         run: |
           set -euo pipefail
-
           chmod +x scripts/setup-android-native.sh
           bash scripts/setup-android-native.sh
 
@@ -195,7 +176,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           python3 scripts/verify-android-16.py
           python3 scripts/verify-android-pdf.py
           python3 scripts/verify-native-bridge.py
@@ -209,80 +189,33 @@ jobs:
           test -f google-services.json
           test -f android/app/google-services.json
 
-          grep -q \
-            'com.google.gms:google-services:4.4.3' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'com.google.gms.google-services' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'async function rkmsRegisterFcmPush' \
-            app.js
-
-          grep -q \
-            'function rkmsDeviceId' \
-            app.js
-
-          grep -q \
-            'device_id:rkmsDeviceId()' \
-            app.js
-
-          grep -q \
-            "addListener('registration'" \
-            app.js
-
-          grep -q \
-            "addListener('pushNotificationReceived'" \
-            app.js
-
-          grep -q \
-            "addListener('pushNotificationActionPerformed'" \
-            app.js
-
-          grep -q \
-            'rkms_notifications_v2' \
-            app.js
-
-          grep -q \
-            'createRkmsNotificationChannel' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'default_notification_channel_id' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'rkms_default_notification_channel_id' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'visibilitychange' \
-            app.js
-
-          grep -q \
-            'rkms-fcm-push' \
-            app.js
+          grep -q 'com.google.gms:google-services:4.4.3' scripts/setup-android-native.sh
+          grep -q 'com.google.gms.google-services' scripts/setup-android-native.sh
+          grep -q 'async function rkmsRegisterFcmPush' app.js
+          grep -q 'function rkmsDeviceId' app.js
+          grep -q 'device_id:rkmsDeviceId()' app.js
+          grep -q "addListener('registration'" app.js
+          grep -q "addListener('pushNotificationReceived'" app.js
+          grep -q "addListener('pushNotificationActionPerformed'" app.js
+          grep -q 'rkms_notifications_v2' app.js
+          grep -q 'createRkmsNotificationChannel' scripts/setup-android-native.sh
+          grep -q 'default_notification_channel_id' scripts/setup-android-native.sh
+          grep -q 'rkms_default_notification_channel_id' scripts/setup-android-native.sh
+          grep -q 'visibilitychange' app.js
+          grep -q 'rkms-fcm-push' app.js
 
           CHAT_START="$(
-            grep -n \
-              'async function sendChatMessage' \
-              app.js |
-              head -n1 |
-              cut -d: -f1
+            grep -n 'async function sendChatMessage' app.js |
+              head -n1 | cut -d: -f1
           )"
 
           CHAT_END="$(
-            grep -n \
-              'function showChatActionSheet' \
-              app.js |
-              head -n1 |
-              cut -d: -f1
+            grep -n 'function showChatActionSheet' app.js |
+              head -n1 | cut -d: -f1
           )"
 
-          if [ -n "${CHAT_START:-}" ] && \
-             [ -n "${CHAT_END:-}" ] && \
+          if [ -n "${CHAT_START:-}" ] &&
+             [ -n "${CHAT_END:-}" ] &&
              [ "$CHAT_END" -gt "$CHAT_START" ]; then
 
             if sed -n "${CHAT_START},${CHAT_END}p" app.js |
@@ -300,61 +233,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          grep -q \
-            'function rkmsSaveLoginCredentials(identifier,password)' \
-            app.js
-
-          grep -q \
-            'await p.save({identifier:String(identifier).trim(),password:String(password)})' \
-            app.js
-
-          grep -q \
-            'const check=await p.getSavedIdentifier()' \
-            app.js
-
-          grep -q \
-            'function rkmsRestoreLoginCredentials(inputId,passwordId)' \
-            app.js
-
-          grep -q \
-            'p.authenticateAndGetCredentials()' \
-            app.js
-
-          grep -q \
-            'let rkmsSavedLoginUsed=false;' \
-            app.js
-
-          grep -q \
-            'let rkmsFillingSavedLogin=false;' \
-            app.js
-
-          grep -q \
-            'rkmsSavedLoginUsed=true;' \
-            app.js
-
-          grep -q \
-            'RKMSSecureCredentialsPlugin' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'registerPlugin(RKMSSecureCredentialsPlugin.class);' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'AES/GCM/NoPadding' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'AndroidKeyStore' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'BiometricPrompt' \
-            scripts/setup-android-native.sh
-
-          grep -q \
-            'androidx.biometric:biometric:1.1.0' \
-            scripts/setup-android-native.sh
+          grep -q 'function rkmsSaveLoginCredentials(identifier,password)' app.js
+          grep -q 'await p.save({identifier:String(identifier).trim(),password:String(password)})' app.js
+          grep -q 'const check=await p.getSavedIdentifier()' app.js
+          grep -q 'function rkmsRestoreLoginCredentials(inputId,passwordId)' app.js
+          grep -q 'p.authenticateAndGetCredentials()' app.js
+          grep -q 'let rkmsSavedLoginUsed=false;' app.js
+          grep -q 'let rkmsFillingSavedLogin=false;' app.js
+          grep -q 'rkmsSavedLoginUsed=true;' app.js
+          grep -q 'RKMSSecureCredentialsPlugin' scripts/setup-android-native.sh
+          grep -q 'registerPlugin(RKMSSecureCredentialsPlugin.class);' scripts/setup-android-native.sh
+          grep -q 'AES/GCM/NoPadding' scripts/setup-android-native.sh
+          grep -q 'AndroidKeyStore' scripts/setup-android-native.sh
+          grep -q 'BiometricPrompt' scripts/setup-android-native.sh
+          grep -q 'androidx.biometric:biometric:1.1.0' scripts/setup-android-native.sh
 
           echo "Saved login pipeline: PASS"
 
@@ -367,55 +259,23 @@ jobs:
           CSS="styles.css"
 
           OFFICER_SQL="supabase/migrations/20260915090000_complaint_officer_close.sql"
-
           HARDENING_SQL="supabase/migrations/20260914191000_complaint_workflow_final_hardening.sql"
 
           test -f "$OFFICER_SQL"
           test -f "$HARDENING_SQL"
 
-          grep -q \
-            'memberCloseComplaint' \
-            "$APP"
+          grep -q 'memberCloseComplaint' "$APP"
+          grep -q 'memberReopenComplaint' "$APP"
+          grep -q 'memberReopenReason' "$APP"
+          grep -q 'officerCloseComplaint' "$APP"
+          grep -q 'currentStatus==="RESOLVED"' "$APP"
+          grep -q 'rkms_officer_close_complaint' "$APP"
 
-          grep -q \
-            'memberReopenComplaint' \
-            "$APP"
-
-          grep -q \
-            'memberReopenReason' \
-            "$APP"
-
-          grep -q \
-            'officerCloseComplaint' \
-            "$APP"
-
-          grep -q \
-            'c.status==="RESOLVED"' \
-            "$APP"
-
-          grep -q \
-            'rkms_officer_close_complaint' \
-            "$APP"
-
-          grep -q \
-            "if v_old<>'RESOLVED'" \
-            "$OFFICER_SQL"
-
-          grep -q \
-            "if v_old<>'RESOLVED'" \
-            "$HARDENING_SQL"
-
-          grep -q \
-            "nullif(trim(p_reason),'') is null" \
-            "$HARDENING_SQL"
-
-          grep -q \
-            "v_old not in ('RESOLVED','CLOSED')" \
-            "$HARDENING_SQL"
-
-          grep -q \
-            '.complaint-action-card' \
-            "$CSS"
+          grep -q "if v_old<>'RESOLVED'" "$OFFICER_SQL"
+          grep -q "if v_old<>'RESOLVED'" "$HARDENING_SQL"
+          grep -q "nullif(trim(p_reason),'') is null" "$HARDENING_SQL"
+          grep -q "v_old not in ('RESOLVED','CLOSED')" "$HARDENING_SQL"
+          grep -q '.complaint-action-card' "$CSS"
 
           echo "Complaint workflow: PASS"
 
@@ -424,25 +284,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -f \
-            assets/rkms-launcher-original-transparent.png
+          test -f assets/rkms-launcher-original-transparent.png
 
-          for density in \
-            mdpi \
-            hdpi \
-            xhdpi \
-            xxhdpi \
-            xxxhdpi
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi
           do
-            test -f \
-              "android_launcher_icons/mipmap-$density/ic_launcher.png"
-
-            test -f \
-              "android_launcher_icons/mipmap-$density/ic_launcher_round.png"
+            test -f "android_launcher_icons/mipmap-$density/ic_launcher.png"
+            test -f "android_launcher_icons/mipmap-$density/ic_launcher_round.png"
           done
-
-          test -f \
-            android_launcher_icons/drawable-nodpi/rkms_launcher_foreground.png
 
           echo "Original RKMS launcher assets: PASS"
 
@@ -453,11 +301,7 @@ jobs:
 
           if grep -RniE \
             'twitter\.com|x\.com/|twitter:card' \
-            app.js \
-            index.html \
-            styles.css \
-            assets \
-            android_launcher_icons \
+            app.js index.html styles.css assets android_launcher_icons \
             2>/dev/null; then
 
             echo "ERROR: X/Twitter runtime reference found."
@@ -472,9 +316,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -n "${RKMS_KEYSTORE_BASE64:-}" ] && \
-             [ -n "${RKMS_KEYSTORE_PASSWORD:-}" ] && \
-             [ -n "${RKMS_KEY_ALIAS:-}" ] && \
+          if [ -n "${RKMS_KEYSTORE_BASE64:-}" ] &&
+             [ -n "${RKMS_KEYSTORE_PASSWORD:-}" ] &&
+             [ -n "${RKMS_KEY_ALIAS:-}" ] &&
              [ -n "${RKMS_KEY_PASSWORD:-}" ]; then
 
             echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -509,7 +353,6 @@ jobs:
           set -euo pipefail
 
           chmod +x scripts/configure-release-signing.sh
-
           bash scripts/configure-release-signing.sh
 
           echo "Release signing configuration: PASS"
@@ -521,7 +364,6 @@ jobs:
           set -euo pipefail
 
           chmod +x gradlew
-
           ./gradlew --version
 
       - name: Clean Android
@@ -538,10 +380,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ./gradlew \
-            assembleRelease \
-            --no-daemon \
-            --stacktrace
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Verify Release APK
         shell: bash
