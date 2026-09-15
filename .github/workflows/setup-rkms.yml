@@ -41,15 +41,21 @@ jobs:
             "styles.css"
             "capacitor.config.json"
             "google-services.json"
+
             "scripts/configure-android-16.sh"
             "scripts/setup-android-native.sh"
             "scripts/verify-android-16.py"
+            "scripts/verify-android-pdf.py"
+            "scripts/verify-native-bridge.py"
+            "scripts/verify-rkms-final.py"
             "scripts/verify-member-directory-scope.py"
             "scripts/verify-directory-lists.py"
             "scripts/verify-v17-directory-deep.py"
             "scripts/verify-authority-hierarchy.py"
             "scripts/verify-directory-contact-actions.py"
             "scripts/verify-final-login-navigation.py"
+            "scripts/verify-report-download-scope.py"
+
             "supabase/migrations"
           )
 
@@ -63,37 +69,64 @@ jobs:
           done
 
           # ----------------------------------------------------------
-          # If complete source is already present, do not touch it.
+          # If complete source already exists, do not replace it.
           # ----------------------------------------------------------
           if [ "$SOURCE_COMPLETE" = "true" ]; then
             echo "Complete RKMS source already present."
+
           else
-            echo "Complete source is not present."
-            echo "Searching RKMS ZIP files..."
+            echo "Complete RKMS source is not present."
+            echo "Searching for RKMS source ZIP..."
 
             BEST_ZIP=""
 
             while IFS= read -r ZIP; do
 
-              echo "Checking ZIP: $ZIP"
+              echo ""
+              echo "Checking ZIP:"
+              echo "$ZIP"
 
-              if unzip -l "$ZIP" | grep -q "scripts/verify-member-directory-scope.py" \
-                 && unzip -l "$ZIP" | grep -q "scripts/verify-directory-lists.py" \
-                 && unzip -l "$ZIP" | grep -q "scripts/verify-v17-directory-deep.py" \
-                 && unzip -l "$ZIP" | grep -q "scripts/verify-authority-hierarchy.py" \
-                 && unzip -l "$ZIP" | grep -q "scripts/verify-directory-contact-actions.py" \
-                 && unzip -l "$ZIP" | grep -q "scripts/verify-final-login-navigation.py" \
-                 && unzip -l "$ZIP" | grep -q "scripts/configure-android-16.sh" \
-                 && unzip -l "$ZIP" | grep -q "scripts/setup-android-native.sh"; then
+              if unzip -l "$ZIP" \
+                | grep -q "scripts/verify-member-directory-scope.py" \
+                && unzip -l "$ZIP" \
+                | grep -q "scripts/verify-directory-lists.py" \
+                && unzip -l "$ZIP" \
+                | grep -q "scripts/verify-v17-directory-deep.py" \
+                && unzip -l "$ZIP" \
+                | grep -q "scripts/verify-authority-hierarchy.py" \
+                && unzip -l "$ZIP" \
+                | grep -q "scripts/verify-directory-contact-actions.py" \
+                && unzip -l "$ZIP" \
+                | grep -q "scripts/verify-final-login-navigation.py" \
+                && unzip -l "$ZIP" \
+                | grep -q "scripts/verify-android-16.py" \
+                && unzip -l "$ZIP" \
+                | grep -q "scripts/configure-android-16.sh" \
+                && unzip -l "$ZIP" \
+                | grep -q "scripts/setup-android-native.sh" \
+                && unzip -l "$ZIP" \
+                | grep -q "assets/rkms-launcher-original-transparent.png" \
+                && unzip -l "$ZIP" \
+                | grep -q "android_launcher_icons/mipmap-mdpi/ic_launcher.png"
+              then
 
                 BEST_ZIP="$ZIP"
-                echo "COMPLETE RKMS ZIP FOUND: $ZIP"
+
+                echo ""
+                echo "=========================================================="
+                echo " COMPLETE RKMS SOURCE ZIP FOUND"
+                echo "$ZIP"
+                echo "=========================================================="
+
                 break
               fi
 
             done < <(
               find . -maxdepth 3 -type f \
-                \( -iname "RKMS_CONNECT*.zip" -o -iname "*RKMS*.zip" \) \
+                \( \
+                  -iname "RKMS_CONNECT*.zip" \
+                  -o -iname "*RKMS*.zip" \
+                \) \
                 -print | sort
             )
 
@@ -101,17 +134,12 @@ jobs:
               echo ""
               echo "=========================================================="
               echo "ERROR: Complete RKMS source ZIP was not found."
-              echo "The repository must contain the RKMS source ZIP"
-              echo "with all required scripts."
               echo "=========================================================="
               exit 1
             fi
 
             rm -rf .rkms_extract
             mkdir -p .rkms_extract
-
-            echo "Extracting:"
-            echo "$BEST_ZIP"
 
             unzip -q "$BEST_ZIP" -d .rkms_extract
 
@@ -125,12 +153,14 @@ jobs:
                   -type f \
                   -name "package.json" \
                   -print \
-                  -quit | xargs -r dirname
+                  -quit \
+                  | xargs -r dirname
               )"
             fi
 
-            if [ -z "${SOURCE_DIR:-}" ] || \
-               [ ! -f "$SOURCE_DIR/package.json" ]; then
+            if [ -z "${SOURCE_DIR:-}" ] \
+              || [ ! -f "$SOURCE_DIR/package.json" ]
+            then
               echo "ERROR: package.json not found inside RKMS ZIP."
               exit 1
             fi
@@ -138,8 +168,8 @@ jobs:
             echo "RKMS source directory:"
             echo "$SOURCE_DIR"
 
-            # Copy complete source.
-            # Do not overwrite repository .github workflow.
+            # Copy the complete source.
+            # Keep the repository workflow itself untouched.
             rsync -a \
               --exclude=".github/" \
               "$SOURCE_DIR"/ ./
@@ -163,7 +193,7 @@ jobs:
           echo ""
           echo "=========================================================="
           echo " COMPLETE RKMS SOURCE: PASS"
-          echo " ALL REQUIRED AUDIT SCRIPTS: PASS"
+          echo " ALL REQUIRED AUDIT FILES: PASS"
           echo "=========================================================="
 
 
@@ -300,7 +330,7 @@ jobs:
 
 
       # ============================================================
-      # 11. FIREBASE CONFIG
+      # 11. FIREBASE CONFIGURATION
       # ============================================================
       - name: Install Firebase configuration
         shell: bash
@@ -340,7 +370,7 @@ jobs:
 
 
       # ============================================================
-      # 14. NATIVE ANDROID SETUP
+      # 14. RKMS NATIVE ANDROID SETUP
       # ============================================================
       - name: Setup RKMS native Android
         shell: bash
@@ -365,6 +395,7 @@ jobs:
           python3 scripts/verify-native-bridge.py
           python3 scripts/verify-rkms-final.py
 
+          echo ""
           echo "Android 16 + native audits: PASS"
 
 
@@ -461,22 +492,26 @@ jobs:
           CHAT_START="$(
             grep -n \
               'async function sendChatMessage' \
-              app.js | head -n1 | cut -d: -f1
+              app.js \
+              | head -n1 \
+              | cut -d: -f1
           )"
 
           CHAT_END="$(
             grep -n \
               'function showChatActionSheet' \
-              app.js | head -n1 | cut -d: -f1
+              app.js \
+              | head -n1 \
+              | cut -d: -f1
           )"
 
-          if [ -n "${CHAT_START:-}" ] && \
-             [ -n "${CHAT_END:-}" ] && \
-             [ "$CHAT_END" -gt "$CHAT_START" ]; then
-
+          if [ -n "${CHAT_START:-}" ] \
+            && [ -n "${CHAT_END:-}" ] \
+            && [ "$CHAT_END" -gt "$CHAT_START" ]
+          then
             if sed -n "${CHAT_START},${CHAT_END}p" app.js \
-              | grep -q 'rkms-fcm-dispatch'; then
-
+              | grep -q 'rkms-fcm-dispatch'
+            then
               echo "ERROR: duplicate client chat push fallback found."
               exit 1
             fi
@@ -633,16 +668,33 @@ jobs:
 
 
       # ============================================================
-      # 21. RKMS ORIGINAL LAUNCHER AUDIT
+      # 21. RKMS ORGANIZATION LOGO / LAUNCHER AUDIT
+      #
+      # IMPORTANT:
+      # Do NOT require the foreground PNG that the native setup
+      # intentionally removes.
+      #
+      # The actual RKMS logo source and all launcher logo PNGs
+      # MUST remain present.
       # ============================================================
-      - name: Audit original RKMS launcher
+      - name: Audit RKMS organization logo and launcher
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "Checking original RKMS organization logo..."
+
+          # Original transparent RKMS logo MUST exist.
           test -f \
             assets/rkms-launcher-original-transparent.png
 
+          test -s \
+            assets/rkms-launcher-original-transparent.png
+
+
+          echo "Checking RKMS launcher source icons..."
+
+          # Every density must contain the RKMS launcher logo.
           for density in \
             mdpi \
             hdpi \
@@ -650,21 +702,123 @@ jobs:
             xxhdpi \
             xxxhdpi
           do
-            test -f \
-              "android_launcher_icons/mipmap-$density/ic_launcher.png"
 
-            test -f \
-              "android_launcher_icons/mipmap-$density/ic_launcher_round.png"
+            ICON="android_launcher_icons/mipmap-$density/ic_launcher.png"
+            ROUND="android_launcher_icons/mipmap-$density/ic_launcher_round.png"
+
+            test -f "$ICON"
+            test -s "$ICON"
+
+            test -f "$ROUND"
+            test -s "$ROUND"
+
           done
 
-          test -f \
-            android_launcher_icons/drawable-nodpi/rkms_launcher_foreground.png
 
-          echo "Original RKMS launcher assets: PASS"
+          echo "Checking generated Android RKMS launcher icons..."
+
+          # After native setup, every launcher density must still exist.
+          for density in \
+            mdpi \
+            hdpi \
+            xhdpi \
+            xxhdpi \
+            xxxhdpi
+          do
+
+            ICON="android/app/src/main/res/mipmap-$density/ic_launcher.png"
+            ROUND="android/app/src/main/res/mipmap-$density/ic_launcher_round.png"
+
+            test -f "$ICON"
+            test -s "$ICON"
+
+            test -f "$ROUND"
+            test -s "$ROUND"
+
+          done
+
+
+          echo "Checking AndroidManifest launcher..."
+
+          test -f \
+            android/app/src/main/AndroidManifest.xml
+
+          grep -q \
+            'android:icon="@mipmap/ic_launcher"' \
+            android/app/src/main/AndroidManifest.xml
+
+          grep -q \
+            'android:roundIcon="@mipmap/ic_launcher_round"' \
+            android/app/src/main/AndroidManifest.xml
+
+
+          echo ""
+          echo "=========================================================="
+          echo " RKMS ORGANIZATION LOGO AUDIT: PASS"
+          echo " Original RKMS logo: PRESENT"
+          echo " All launcher densities: PRESENT"
+          echo " Generated Android logo icons: PRESENT"
+          echo " AndroidManifest logo reference: PRESENT"
+          echo "=========================================================="
 
 
       # ============================================================
-      # 22. X / TWITTER REMOVAL AUDIT
+      # 22. PROTECT RKMS LOGO
+      #
+      # Fail the build if the workflow/native setup removes the
+      # actual RKMS launcher logo PNGs.
+      #
+      # The intentionally removable foreground helper is NOT
+      # considered the organization logo source.
+      # ============================================================
+      - name: Verify RKMS logo was not removed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Source logo must still exist.
+          test -s \
+            assets/rkms-launcher-original-transparent.png
+
+          # Source launcher icons must still exist.
+          for density in \
+            mdpi \
+            hdpi \
+            xhdpi \
+            xxhdpi \
+            xxxhdpi
+          do
+
+            test -s \
+              "android_launcher_icons/mipmap-$density/ic_launcher.png"
+
+            test -s \
+              "android_launcher_icons/mipmap-$density/ic_launcher_round.png"
+
+          done
+
+          # Generated launcher icons must still exist.
+          for density in \
+            mdpi \
+            hdpi \
+            xhdpi \
+            xxhdpi \
+            xxxhdpi
+          do
+
+            test -s \
+              "android/app/src/main/res/mipmap-$density/ic_launcher.png"
+
+            test -s \
+              "android/app/src/main/res/mipmap-$density/ic_launcher_round.png"
+
+          done
+
+          echo "RKMS organization logo protection: PASS"
+
+
+      # ============================================================
+      # 23. NO X / TWITTER RUNTIME REFERENCES
       # ============================================================
       - name: Audit no X/Twitter runtime references
         shell: bash
@@ -688,7 +842,7 @@ jobs:
 
 
       # ============================================================
-      # 23. RELEASE SIGNING CHECK
+      # 24. RELEASE SIGNING CHECK
       # ============================================================
       - name: Check release signing configuration
         id: signing
@@ -696,22 +850,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -n "${RKMS_KEYSTORE_BASE64:-}" ] && \
-             [ -n "${RKMS_KEYSTORE_PASSWORD:-}" ] && \
-             [ -n "${RKMS_KEY_ALIAS:-}" ] && \
-             [ -n "${RKMS_KEY_PASSWORD:-}" ]
+          if [ -n "${RKMS_KEYSTORE_BASE64:-}" ] \
+            && [ -n "${RKMS_KEYSTORE_PASSWORD:-}" ] \
+            && [ -n "${RKMS_KEY_ALIAS:-}" ] \
+            && [ -n "${RKMS_KEY_PASSWORD:-}" ]
           then
+
             echo "enabled=true" >> "$GITHUB_OUTPUT"
+
             echo "Release signing: ENABLED"
+
           else
+
             echo "enabled=false" >> "$GITHUB_OUTPUT"
+
             echo "Release signing secrets not available."
             echo "Unsigned APK fallback will be used."
+
           fi
 
 
       # ============================================================
-      # 24. PREPARE KEYSTORE
+      # 25. PREPARE RELEASE KEYSTORE
       # ============================================================
       - name: Prepare release keystore
         if: steps.signing.outputs.enabled == 'true'
@@ -723,15 +883,17 @@ jobs:
             | base64 --decode \
             > android/app/release.keystore
 
-          chmod 600 android/app/release.keystore
+          chmod 600 \
+            android/app/release.keystore
 
-          test -s android/app/release.keystore
+          test -s \
+            android/app/release.keystore
 
           echo "Release keystore: PASS"
 
 
       # ============================================================
-      # 25. CONFIGURE RELEASE SIGNING
+      # 26. CONFIGURE RELEASE SIGNING
       # ============================================================
       - name: Configure release signing
         if: steps.signing.outputs.enabled == 'true'
@@ -739,13 +901,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          chmod +x scripts/configure-release-signing.sh
+          chmod +x \
+            scripts/configure-release-signing.sh
 
-          bash scripts/configure-release-signing.sh
+          bash \
+            scripts/configure-release-signing.sh
 
 
       # ============================================================
-      # 26. VERIFY GRADLE
+      # 27. VERIFY GRADLE
       # ============================================================
       - name: Verify Gradle
         working-directory: android
@@ -759,7 +923,7 @@ jobs:
 
 
       # ============================================================
-      # 27. CLEAN ANDROID BUILD
+      # 28. CLEAN ANDROID
       # ============================================================
       - name: Clean Android
         working-directory: android
@@ -767,11 +931,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          ./gradlew clean --no-daemon
+          ./gradlew clean \
+            --no-daemon
 
 
       # ============================================================
-      # 28. FINAL RELEASE APK
+      # 29. BUILD RELEASE APK ONLY
       # ============================================================
       - name: Build RELEASE APK ONLY
         working-directory: android
@@ -786,14 +951,15 @@ jobs:
 
 
       # ============================================================
-      # 29. VERIFY APK
+      # 30. VERIFY RELEASE APK
       # ============================================================
       - name: Verify Release APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="android/app/build/outputs/apk/release/app-release.apk"
+          APK=\
+          "android/app/build/outputs/apk/release/app-release.apk"
 
           test -f "$APK"
           test -s "$APK"
@@ -807,7 +973,7 @@ jobs:
 
 
       # ============================================================
-      # 30. VERIFY SIGNATURE
+      # 31. VERIFY SIGNED APK
       # ============================================================
       - name: Verify signed APK when signing is enabled
         if: steps.signing.outputs.enabled == 'true'
@@ -815,7 +981,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          APKSIGNER=\
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner"
 
           test -x "$APKSIGNER"
 
@@ -827,7 +994,7 @@ jobs:
 
 
       # ============================================================
-      # 31. UPLOAD APK
+      # 32. UPLOAD RELEASE APK
       # ============================================================
       - name: Upload Release APK
         uses: actions/upload-artifact@v6
@@ -839,7 +1006,7 @@ jobs:
 
 
       # ============================================================
-      # 32. FINAL SUMMARY
+      # 33. FINAL BUILD SUMMARY
       # ============================================================
       - name: Final APK build summary
         shell: bash
@@ -860,6 +1027,7 @@ jobs:
           echo "AGP           : 8.9.1"
           echo "Output        : app-release.apk"
           echo "AAB           : NOT BUILT"
+          echo "RKMS logo     : PROTECTED"
           echo ""
           echo "=========================================================="
           echo "             BUILD COMPLETED SUCCESSFULLY"
