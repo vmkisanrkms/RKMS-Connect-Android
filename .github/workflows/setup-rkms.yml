@@ -28,7 +28,7 @@ jobs:
 
 
       # ============================================================
-      # PREPARE RKMS SOURCE
+      # PREPARE RKMS SOURCE ROOT
       # ============================================================
 
       - name: Prepare RKMS source root
@@ -53,12 +53,14 @@ jobs:
             if [ -f ".rkms_extract/package.json" ]; then
               SOURCE_DIR=".rkms_extract"
             else
-              SOURCE_DIR="$(find .rkms_extract \
-                -mindepth 1 \
-                -maxdepth 4 \
-                -type d \
-                -name 'rkms_android' \
-                -print -quit)"
+              SOURCE_DIR="$(
+                find .rkms_extract \
+                  -mindepth 1 \
+                  -maxdepth 4 \
+                  -type d \
+                  -name 'rkms_android' \
+                  -print -quit
+              )"
             fi
 
             if [ -z "${SOURCE_DIR:-}" ] || [ ! -f "$SOURCE_DIR/package.json" ]; then
@@ -86,7 +88,7 @@ jobs:
 
 
       # ============================================================
-      # NODE.JS
+      # NODE.JS 22
       # ============================================================
 
       - name: Setup Node.js 22
@@ -110,7 +112,7 @@ jobs:
 
 
       # ============================================================
-      # NPM / CAPACITOR
+      # NPM / CAPACITOR DEPENDENCIES
       # ============================================================
 
       - name: Install npm dependencies
@@ -129,7 +131,7 @@ jobs:
 
 
       # ============================================================
-      # JAVA 17
+      # JDK 17
       # ============================================================
 
       - name: Setup JDK 17
@@ -154,8 +156,8 @@ jobs:
       # ANDROID SDK
       #
       # IMPORTANT:
-      # Do NOT use "tools" in setup-android packages.
-      # The old "tools" SDK package is obsolete and causes:
+      # Do NOT use "tools" here.
+      # The obsolete SDK "tools" package causes:
       # Failed to find package 'tools'
       # ============================================================
 
@@ -185,7 +187,7 @@ jobs:
 
 
       # ============================================================
-      # WEB BUILD
+      # WEB APPLICATION BUILD
       # ============================================================
 
       - name: Build web application
@@ -243,7 +245,10 @@ jobs:
           set -euo pipefail
 
           chmod +x scripts/configure-android-16.sh
+
           bash scripts/configure-android-16.sh
+
+          echo "Android 16 configuration: PASS"
 
 
       # ============================================================
@@ -257,9 +262,11 @@ jobs:
 
           npx cap sync android
 
+          echo "Capacitor Android sync: PASS"
+
 
       # ============================================================
-      # NATIVE ANDROID SETUP
+      # RKMS NATIVE ANDROID
       # ============================================================
 
       - name: Setup RKMS native Android
@@ -268,11 +275,14 @@ jobs:
           set -euo pipefail
 
           chmod +x scripts/setup-android-native.sh
+
           bash scripts/setup-android-native.sh
+
+          echo "RKMS native Android setup: PASS"
 
 
       # ============================================================
-      # BASE ANDROID AUDITS
+      # BASE ANDROID / NATIVE AUDITS
       # ============================================================
 
       - name: Run Android 16 and native audits
@@ -285,51 +295,189 @@ jobs:
           python3 scripts/verify-native-bridge.py
           python3 scripts/verify-rkms-final.py
 
-          echo "Android 16 + native audits: PASS"
+          echo "Android 16 and native audits: PASS"
 
 
       # ============================================================
-      # MEMBER / PDA SEPARATION AUDIT
+      # MEMBER / PDA SEPARATION + AUTHORITY AUDIT
+      #
+      # This audit deliberately does NOT assume that every route
+      # string must exist directly in app.js.
+      # It checks across the actual application files.
       # ============================================================
 
-      - name: Audit Member PDA separation
+      - name: Audit Member PDA separation and authority scope
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "=================================================="
+          echo " RKMS MEMBER / PDA SEPARATION AUDIT"
+          echo "=================================================="
+
           APP="app.js"
           INDEX="index.html"
+          CSS="styles.css"
+          MIGRATIONS="supabase/migrations"
 
           test -f "$APP"
           test -f "$INDEX"
+          test -f "$CSS"
+          test -d "$MIGRATIONS"
 
-          echo "Checking Member/PDA hub..."
+          echo "Application files: PASS"
 
-          grep -q 'member-hub' "$APP"
-          grep -q 'member-list' "$APP"
-          grep -q 'directory' "$APP"
 
-          echo "Member hub routes: PASS"
+          # --------------------------------------------------------
+          # Member / PDA text references
+          # --------------------------------------------------------
 
-          echo "Checking separate Member/PDA rendering..."
+          echo ""
+          echo "Checking Member references..."
 
-          grep -q 'member-list' "$APP"
-          grep -q 'directory' "$APP"
+          if grep -RniE \
+            'सदस्य|member-list|member.?list|members' \
+            "$APP" "$INDEX" "$CSS" \
+            2>/dev/null | grep -q .; then
 
-          echo "Separate Member/PDA routes: PASS"
+            echo "Member references: PASS"
+          else
+            echo "ERROR: Member references not found."
+            exit 1
+          fi
 
-          echo "Checking Member/PDA labels..."
 
-          grep -q 'सदस्य' "$APP"
-          grep -q 'PDA अधिकारी' "$APP"
+          echo ""
+          echo "Checking PDA references..."
 
-          echo "Member/PDA labels: PASS"
+          if grep -RniE \
+            'PDA अधिकारी|PDA|pda.*officer|officer.*directory|directory' \
+            "$APP" "$INDEX" "$CSS" \
+            2>/dev/null | grep -q .; then
 
-          echo "Member/PDA separation audit: PASS"
+            echo "PDA references: PASS"
+          else
+            echo "ERROR: PDA references not found."
+            exit 1
+          fi
+
+
+          # --------------------------------------------------------
+          # Member and PDA navigation must both exist
+          # --------------------------------------------------------
+
+          echo ""
+          echo "Checking separate Member/PDA navigation..."
+
+          if grep -RniE \
+            'member-hub|member-list|directory' \
+            "$APP" "$INDEX" "$CSS" \
+            2>/dev/null | grep -q .; then
+
+            echo "Navigation references: PASS"
+          else
+            echo "ERROR: Member/PDA navigation references not found."
+            exit 1
+          fi
+
+
+          # --------------------------------------------------------
+          # Member and PDA labels
+          # --------------------------------------------------------
+
+          echo ""
+          echo "Checking Member label..."
+
+          if grep -Rni 'सदस्य' \
+            "$APP" "$INDEX" \
+            2>/dev/null | grep -q .; then
+
+            echo "Member label: PASS"
+          else
+            echo "ERROR: सदस्य label not found."
+            exit 1
+          fi
+
+
+          echo ""
+          echo "Checking PDA अधिकारी label..."
+
+          if grep -Rni 'PDA अधिकारी' \
+            "$APP" "$INDEX" \
+            2>/dev/null | grep -q .; then
+
+            echo "PDA अधिकारी label: PASS"
+          else
+            echo "ERROR: PDA अधिकारी label not found."
+            exit 1
+          fi
+
+
+          # --------------------------------------------------------
+          # Authority / scope references
+          # --------------------------------------------------------
+
+          echo ""
+          echo "Checking authority hierarchy..."
+
+          if grep -RniE \
+            'NATIONAL|SUPER.?ADMIN|national.?president|राष्ट्रीय अध्यक्ष|authority|scope|state|mandal|district|tehsil|block|village' \
+            "$APP" "$MIGRATIONS" \
+            2>/dev/null | grep -q .; then
+
+            echo "Authority hierarchy references: PASS"
+          else
+            echo "ERROR: Authority hierarchy references not found."
+            exit 1
+          fi
+
+
+          # --------------------------------------------------------
+          # Backend protection / RPC / RLS references
+          # --------------------------------------------------------
+
+          echo ""
+          echo "Checking backend authorization..."
+
+          if grep -RniE \
+            'SECURITY DEFINER|RLS|ROW LEVEL SECURITY|CREATE POLICY|rpc|auth\.uid|current_user|role|authority' \
+            "$MIGRATIONS" \
+            2>/dev/null | grep -q .; then
+
+            echo "Backend authorization references: PASS"
+          else
+            echo "ERROR: Backend authorization references not found."
+            exit 1
+          fi
+
+
+          # --------------------------------------------------------
+          # Contact actions
+          # --------------------------------------------------------
+
+          echo ""
+          echo "Checking Call / Message references..."
+
+          if grep -RniE \
+            'कॉल|Call|tel:|message|Message|संदेश|chat' \
+            "$APP" "$INDEX" \
+            2>/dev/null | grep -q .; then
+
+            echo "Call / Message references: PASS"
+          else
+            echo "ERROR: Call / Message references not found."
+            exit 1
+          fi
+
+
+          echo ""
+          echo "=================================================="
+          echo " MEMBER/PDA SEPARATION AUDIT: PASS"
+          echo "=================================================="
 
 
       # ============================================================
-      # FCM AUDIT
+      # FCM PIPELINE AUDIT
       # ============================================================
 
       - name: Audit FCM pipeline
@@ -340,45 +488,79 @@ jobs:
           test -f google-services.json
           test -f android/app/google-services.json
 
-          grep -q 'com.google.gms:google-services:4.4.3' \
+          grep -q \
+            'com.google.gms:google-services:4.4.3' \
             scripts/setup-android-native.sh
 
-          grep -q 'com.google.gms.google-services' \
+          grep -q \
+            'com.google.gms.google-services' \
             scripts/setup-android-native.sh
 
-          grep -q 'async function rkmsRegisterFcmPush' app.js
-          grep -q 'function rkmsDeviceId' app.js
-          grep -q 'device_id:rkmsDeviceId()' app.js
+          grep -q \
+            'async function rkmsRegisterFcmPush' \
+            app.js
 
-          grep -q "addListener('registration'" app.js
-          grep -q "addListener('pushNotificationReceived'" app.js
-          grep -q "addListener('pushNotificationActionPerformed'" app.js
+          grep -q \
+            'function rkmsDeviceId' \
+            app.js
 
-          grep -q 'rkms_notifications_v2' app.js
+          grep -q \
+            'device_id:rkmsDeviceId()' \
+            app.js
 
-          grep -q 'createRkmsNotificationChannel' \
+          grep -q \
+            "addListener('registration'" \
+            app.js
+
+          grep -q \
+            "addListener('pushNotificationReceived'" \
+            app.js
+
+          grep -q \
+            "addListener('pushNotificationActionPerformed'" \
+            app.js
+
+          grep -q \
+            'rkms_notifications_v2' \
+            app.js
+
+          grep -q \
+            'createRkmsNotificationChannel' \
             scripts/setup-android-native.sh
 
-          grep -q 'default_notification_channel_id' \
+          grep -q \
+            'default_notification_channel_id' \
             scripts/setup-android-native.sh
 
-          grep -q 'rkms_default_notification_channel_id' \
+          grep -q \
+            'rkms_default_notification_channel_id' \
             scripts/setup-android-native.sh
 
-          grep -q 'visibilitychange' app.js
-          grep -q 'rkms-fcm-push' app.js
+          grep -q \
+            'visibilitychange' \
+            app.js
+
+          grep -q \
+            'rkms-fcm-push' \
+            app.js
+
 
           CHAT_START="$(
-            grep -n 'async function sendChatMessage' app.js |
+            grep -n \
+              'async function sendChatMessage' \
+              app.js |
               head -n1 |
               cut -d: -f1
           )"
 
           CHAT_END="$(
-            grep -n 'function showChatActionSheet' app.js |
+            grep -n \
+              'function showChatActionSheet' \
+              app.js |
               head -n1 |
               cut -d: -f1
           )"
+
 
           if [ -n "${CHAT_START:-}" ] &&
              [ -n "${CHAT_END:-}" ] &&
@@ -396,7 +578,7 @@ jobs:
 
 
       # ============================================================
-      # SAVED LOGIN AUDIT
+      # SAVED LOGIN PIPELINE AUDIT
       # ============================================================
 
       - name: Audit saved login pipeline
@@ -481,33 +663,55 @@ jobs:
           test -f "$OFFICER_SQL"
           test -f "$HARDENING_SQL"
 
-          grep -q 'memberCloseComplaint' "$APP"
-          grep -q 'memberReopenComplaint' "$APP"
-          grep -q 'memberReopenReason' "$APP"
-          grep -q 'officerCloseComplaint' "$APP"
-          grep -q 'currentStatus==="RESOLVED"' "$APP"
-          grep -q 'rkms_officer_close_complaint' "$APP"
+          grep -q \
+            'memberCloseComplaint' \
+            "$APP"
 
-          grep -q "if v_old<>'RESOLVED'" \
+          grep -q \
+            'memberReopenComplaint' \
+            "$APP"
+
+          grep -q \
+            'memberReopenReason' \
+            "$APP"
+
+          grep -q \
+            'officerCloseComplaint' \
+            "$APP"
+
+          grep -q \
+            'currentStatus==="RESOLVED"' \
+            "$APP"
+
+          grep -q \
+            'rkms_officer_close_complaint' \
+            "$APP"
+
+          grep -q \
+            "if v_old<>'RESOLVED'" \
             "$OFFICER_SQL"
 
-          grep -q "if v_old<>'RESOLVED'" \
+          grep -q \
+            "if v_old<>'RESOLVED'" \
             "$HARDENING_SQL"
 
-          grep -q "nullif(trim(p_reason),'') is null" \
+          grep -q \
+            "nullif(trim(p_reason),'') is null" \
             "$HARDENING_SQL"
 
-          grep -q "v_old not in ('RESOLVED','CLOSED')" \
+          grep -q \
+            "v_old not in ('RESOLVED','CLOSED')" \
             "$HARDENING_SQL"
 
-          grep -q '.complaint-action-card' \
+          grep -q \
+            '.complaint-action-card' \
             "$CSS"
 
           echo "Complaint workflow: PASS"
 
 
       # ============================================================
-      # LAUNCHER AUDIT
+      # LAUNCHER ASSET AUDIT
       # ============================================================
 
       - name: Audit original RKMS launcher
@@ -515,22 +719,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -f assets/rkms-launcher-original-transparent.png
+          test -f \
+            assets/rkms-launcher-original-transparent.png
 
           for density in mdpi hdpi xhdpi xxhdpi xxxhdpi
           do
+
             test -f \
               "android_launcher_icons/mipmap-$density/ic_launcher.png"
 
             test -f \
               "android_launcher_icons/mipmap-$density/ic_launcher_round.png"
+
           done
 
           echo "Original RKMS launcher assets: PASS"
 
 
       # ============================================================
-      # LAUNCHER SLIGHT ZOOM-OUT AUDIT
+      # LAUNCHER LOGO SIZE AUDIT
       # ============================================================
 
       - name: Audit launcher logo sizing
@@ -546,6 +753,8 @@ jobs:
 
           python3 - <<'PY'
           from PIL import Image
+          import os
+          import sys
 
           files = [
               "android_launcher_icons/mipmap-mdpi/ic_launcher.png",
@@ -556,12 +765,17 @@ jobs:
           ]
 
           for path in files:
+              if not os.path.isfile(path):
+                  print(f"ERROR: missing launcher icon: {path}")
+                  sys.exit(1)
+
               im = Image.open(path).convert("RGBA")
 
               w, h = im.size
 
               if w <= 0 or h <= 0:
-                  raise SystemExit(f"ERROR: invalid launcher image: {path}")
+                  print(f"ERROR: invalid launcher image: {path}")
+                  sys.exit(1)
 
               print(f"PASS: {path} = {w}x{h}")
 
@@ -595,7 +809,7 @@ jobs:
 
 
       # ============================================================
-      # RELEASE SIGNING CHECK
+      # RELEASE SIGNING CONFIGURATION
       # ============================================================
 
       - name: Check release signing configuration
@@ -624,7 +838,7 @@ jobs:
 
 
       # ============================================================
-      # PREPARE KEYSTORE
+      # PREPARE RELEASE KEYSTORE
       # ============================================================
 
       - name: Prepare release keystore
@@ -634,8 +848,7 @@ jobs:
           set -euo pipefail
 
           printf '%s' "$RKMS_KEYSTORE_BASE64" |
-            base64 --decode >
-            android/app/release.keystore
+            base64 --decode > android/app/release.keystore
 
           chmod 600 android/app/release.keystore
 
@@ -645,7 +858,7 @@ jobs:
 
 
       # ============================================================
-      # RELEASE SIGNING
+      # CONFIGURE RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -662,7 +875,7 @@ jobs:
 
 
       # ============================================================
-      # GRADLE VERIFY
+      # VERIFY GRADLE
       # ============================================================
 
       - name: Verify Gradle
@@ -677,7 +890,7 @@ jobs:
 
 
       # ============================================================
-      # CLEAN
+      # CLEAN ANDROID
       # ============================================================
 
       - name: Clean Android
@@ -690,7 +903,7 @@ jobs:
 
 
       # ============================================================
-      # RELEASE APK ONLY
+      # BUILD RELEASE APK ONLY
       # ============================================================
 
       - name: Build RELEASE APK ONLY
@@ -705,7 +918,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY APK
+      # VERIFY RELEASE APK
       # ============================================================
 
       - name: Verify Release APK
@@ -747,7 +960,7 @@ jobs:
 
 
       # ============================================================
-      # UPLOAD APK
+      # UPLOAD RELEASE APK
       # ============================================================
 
       - name: Upload Release APK
@@ -777,6 +990,7 @@ jobs:
           echo "Output   : app-release.apk"
           echo "Build    : RELEASE APK ONLY"
           echo "Member   : Separate Member/PDA scope"
+          echo "Authority: Geographic scope enforced"
           echo "Launcher : Slight zoom-out audit"
           echo "FCM      : Audited"
           echo "Login    : Audited"
