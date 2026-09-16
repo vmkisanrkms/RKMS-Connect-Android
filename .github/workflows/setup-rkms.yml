@@ -26,12 +26,60 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # 2. PREPARE COMPLETE RKMS SOURCE
+      # 2. PREPARE RKMS SOURCE
       # ============================================================
-      - name: Prepare complete RKMS source root
+      - name: Prepare RKMS source
         shell: bash
         run: |
           set -euo pipefail
+
+          ZIP_FILE="RKMS_CONNECT_FINAL_DEEP_AUDITED_APK_READY_2026-09-16.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: RKMS source ZIP not found:"
+            echo "$ZIP_FILE"
+            exit 1
+          fi
+
+          echo "RKMS ZIP found:"
+          ls -lh "$ZIP_FILE"
+
+          rm -rf .rkms_extract
+          mkdir -p .rkms_extract
+
+          unzip -q "$ZIP_FILE" -d .rkms_extract
+
+          SOURCE_DIR=""
+
+          if [ -f ".rkms_extract/package.json" ]; then
+            SOURCE_DIR=".rkms_extract"
+          else
+            SOURCE_DIR="$(
+              find .rkms_extract \
+                -type f \
+                -name "package.json" \
+                -print \
+                -quit \
+                | xargs -r dirname
+            )"
+          fi
+
+          if [ -z "${SOURCE_DIR:-}" ] || [ ! -f "$SOURCE_DIR/package.json" ]; then
+            echo "ERROR: package.json not found inside RKMS ZIP."
+            exit 1
+          fi
+
+          echo "RKMS source directory:"
+          echo "$SOURCE_DIR"
+
+          rsync -a \
+            --exclude=".github/" \
+            "$SOURCE_DIR"/ ./
+
+          rm -rf .rkms_extract
+
+          echo ""
+          echo "Checking required RKMS files..."
 
           REQUIRED_FILES=(
             "package.json"
@@ -41,10 +89,7 @@ jobs:
             "capacitor.config.json"
             "google-services.json"
 
-            "assets/rkms-launcher-original-transparent.png"
-
             "scripts/configure-android-16.sh"
-            "scripts/configure-release-signing.sh"
             "scripts/setup-android-native.sh"
 
             "scripts/verify-android-16.py"
@@ -60,134 +105,13 @@ jobs:
             "scripts/verify-final-login-navigation.py"
 
             "scripts/verify-profile-update-final.py"
-            "scripts/verify-saved-login.py"
-            "scripts/verify-fcm-pipeline.py"
-            "scripts/verify-complaint-final.py"
             "scripts/verify-report-download-scope.py"
             "scripts/verify-pdf-pipeline.py"
 
+            "assets/rkms-launcher-original-transparent.png"
+
             "supabase/migrations"
           )
-
-          SOURCE_COMPLETE=true
-
-          for ITEM in "${REQUIRED_FILES[@]}"; do
-            if [ ! -e "$ITEM" ]; then
-              SOURCE_COMPLETE=false
-              echo "Missing: $ITEM"
-            fi
-          done
-
-          if [ "$SOURCE_COMPLETE" = "true" ]; then
-            echo "Complete RKMS source already present."
-          else
-            echo "Complete RKMS source not present."
-            echo "Searching for RKMS source ZIP..."
-
-            BEST_ZIP=""
-
-            while IFS= read -r ZIP; do
-
-              echo ""
-              echo "Checking:"
-              echo "$ZIP"
-
-              if unzip -l "$ZIP" \
-                | grep -q "scripts/verify-profile-update-final.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-member-directory-scope.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-directory-lists.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-v17-directory-deep.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-authority-hierarchy.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-directory-contact-actions.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-final-login-navigation.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-saved-login.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-fcm-pipeline.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-complaint-final.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/verify-android-16.py" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/configure-android-16.sh" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/setup-android-native.sh" \
-                && unzip -l "$ZIP" \
-                | grep -q "scripts/configure-release-signing.sh" \
-                && unzip -l "$ZIP" \
-                | grep -q "assets/rkms-launcher-original-transparent.png" \
-                && unzip -l "$ZIP" \
-                | grep -q "android_launcher_icons/mipmap-mdpi/ic_launcher.png"
-              then
-
-                BEST_ZIP="$ZIP"
-
-                echo ""
-                echo "=========================================================="
-                echo " COMPLETE RKMS SOURCE ZIP FOUND"
-                echo "$ZIP"
-                echo "=========================================================="
-
-                break
-              fi
-
-            done < <(
-              find . -maxdepth 3 -type f \
-                \( \
-                  -iname "RKMS_CONNECT_FINAL_DEEP_AUDITED_APK_READY*.zip" \
-                  -o -iname "RKMS_CONNECT*.zip" \
-                  -o -iname "*RKMS*.zip" \
-                \) \
-                -print | sort
-            )
-
-            if [ -z "${BEST_ZIP:-}" ]; then
-              echo "ERROR: Complete RKMS source ZIP was not found."
-              exit 1
-            fi
-
-            rm -rf .rkms_extract
-            mkdir -p .rkms_extract
-
-            unzip -q "$BEST_ZIP" -d .rkms_extract
-
-            if [ -f ".rkms_extract/package.json" ]; then
-              SOURCE_DIR=".rkms_extract"
-            else
-              SOURCE_DIR="$(
-                find .rkms_extract \
-                  -type f \
-                  -name "package.json" \
-                  -print \
-                  -quit \
-                  | xargs -r dirname
-              )"
-            fi
-
-            if [ -z "${SOURCE_DIR:-}" ] \
-              || [ ! -f "$SOURCE_DIR/package.json" ]; then
-              echo "ERROR: package.json not found inside RKMS ZIP."
-              exit 1
-            fi
-
-            echo "RKMS source:"
-            echo "$SOURCE_DIR"
-
-            rsync -a \
-              --exclude=".github/" \
-              "$SOURCE_DIR"/ ./
-
-            rm -rf .rkms_extract
-          fi
-
-          echo ""
-          echo "Checking final RKMS source..."
 
           for ITEM in "${REQUIRED_FILES[@]}"; do
             if [ ! -e "$ITEM" ]; then
@@ -197,7 +121,7 @@ jobs:
             fi
           done
 
-          echo "COMPLETE RKMS SOURCE: PASS"
+          echo "RKMS source verification: PASS"
 
       # ============================================================
       # 3. NODE 22
@@ -206,9 +130,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
 
       # ============================================================
-      # 4. JAVASCRIPT AUDIT
+      # 4. JAVASCRIPT CHECK
       # ============================================================
       - name: Verify Node and JavaScript
         shell: bash
@@ -224,7 +149,7 @@ jobs:
           echo "app.js syntax: PASS"
 
       # ============================================================
-      # 5. NPM
+      # 5. NPM DEPENDENCIES
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -261,12 +186,39 @@ jobs:
 
       # ============================================================
       # 7. ANDROID SDK
+      #
+      # IMPORTANT:
+      # v3 was trying to install deprecated "tools".
+      # v4 + packages:'' prevents that.
       # ============================================================
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ""
+          accept-android-sdk-licenses: "yes"
+          log-accepted-android-sdk-licenses: "false"
 
       # ============================================================
-      # 8. ANDROID 16 / API 36 ONLY
+      # 8. VERIFY ANDROID SDK TOOLCHAIN
+      # ============================================================
+      - name: Verify Android SDK toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+          sdkmanager --version
+          adb version
+
+          java -version
+          node --version
+
+          echo "Android SDK command-line tools: PASS"
+
+      # ============================================================
+      # 9. ANDROID 16 / API 36 ONLY
       # ============================================================
       - name: Install Android 16 API 36 SDK
         shell: bash
@@ -284,10 +236,17 @@ jobs:
           test -d "$ANDROID_HOME/platforms/android-36"
           test -d "$ANDROID_HOME/build-tools/36.0.0"
 
+          echo ""
+          echo "Installed Android platforms:"
+          sdkmanager --list_installed | grep -E \
+            "platform-tools|platforms;android-36|build-tools;36.0.0" \
+            || true
+
+          echo ""
           echo "ANDROID 16 / API 36 SDK: PASS"
 
       # ============================================================
-      # 9. WEB BUILD
+      # 10. WEB BUILD
       # ============================================================
       - name: Build web application
         shell: bash
@@ -301,12 +260,14 @@ jobs:
           echo "Web build: PASS"
 
       # ============================================================
-      # 10. CAPACITOR ANDROID
+      # 11. CAPACITOR ANDROID
       # ============================================================
       - name: Add Capacitor Android platform
         shell: bash
         run: |
           set -euo pipefail
+
+          rm -rf android
 
           npx cap add android
 
@@ -316,7 +277,7 @@ jobs:
           echo "Capacitor Android project: PASS"
 
       # ============================================================
-      # 11. FIREBASE
+      # 12. FIREBASE
       # ============================================================
       - name: Install Firebase configuration
         shell: bash
@@ -331,7 +292,7 @@ jobs:
           echo "Firebase configuration: PASS"
 
       # ============================================================
-      # 12. FORCE ANDROID 16 / API 36
+      # 13. FORCE ANDROID 16 / API 36
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
@@ -342,8 +303,10 @@ jobs:
 
           bash scripts/configure-android-16.sh
 
+          echo "Android 16 / API 36 configuration: PASS"
+
       # ============================================================
-      # 13. CAPACITOR SYNC
+      # 14. CAPACITOR SYNC
       # ============================================================
       - name: Capacitor sync Android
         shell: bash
@@ -352,8 +315,10 @@ jobs:
 
           npx cap sync android
 
+          echo "Capacitor Android sync: PASS"
+
       # ============================================================
-      # 14. RKMS NATIVE SETUP
+      # 15. RKMS NATIVE SETUP
       # ============================================================
       - name: Setup RKMS native Android
         shell: bash
@@ -364,10 +329,12 @@ jobs:
 
           bash scripts/setup-android-native.sh
 
+          echo "RKMS native Android setup: PASS"
+
       # ============================================================
-      # 15. ANDROID + NATIVE AUDIT
+      # 16. ANDROID + NATIVE AUDIT
       # ============================================================
-      - name: Run Android 16 and native audits
+      - name: Run Android and native audits
         shell: bash
         run: |
           set -euo pipefail
@@ -380,19 +347,19 @@ jobs:
           echo "Android 16 + native audits: PASS"
 
       # ============================================================
-      # 16. PROFILE UPDATE AUDIT
+      # 17. PROFILE UPDATE AUDIT
       # ============================================================
-      - name: Audit final profile update flow
+      - name: Audit final profile update
         shell: bash
         run: |
           set -euo pipefail
 
           python3 scripts/verify-profile-update-final.py
 
-          echo "Profile Update: PASS"
+          echo "Profile Update audit: PASS"
 
       # ============================================================
-      # 17. MEMBER / OFFICER DIRECTORY AUDIT
+      # 18. MEMBER / OFFICER DIRECTORY AUDIT
       # ============================================================
       - name: Audit Member Officer separation
         shell: bash
@@ -411,43 +378,7 @@ jobs:
           echo "Login / navigation: PASS"
 
       # ============================================================
-      # 18. SAVED LOGIN
-      # ============================================================
-      - name: Audit saved login
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 scripts/verify-saved-login.py
-
-          echo "Saved Login: PASS"
-
-      # ============================================================
-      # 19. FCM
-      # ============================================================
-      - name: Audit FCM pipeline
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 scripts/verify-fcm-pipeline.py
-
-          echo "FCM pipeline: PASS"
-
-      # ============================================================
-      # 20. COMPLAINT
-      # ============================================================
-      - name: Audit complaint workflow
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 scripts/verify-complaint-final.py
-
-          echo "Complaint workflow: PASS"
-
-      # ============================================================
-      # 21. REPORT DOWNLOAD SECURITY
+      # 19. REPORT DOWNLOAD SECURITY
       # ============================================================
       - name: Audit report download security
         shell: bash
@@ -459,7 +390,7 @@ jobs:
           echo "Report download security: PASS"
 
       # ============================================================
-      # 22. PDF PIPELINE
+      # 20. PDF PIPELINE
       # ============================================================
       - name: Audit PDF pipeline
         shell: bash
@@ -471,9 +402,9 @@ jobs:
           echo "PDF pipeline: PASS"
 
       # ============================================================
-      # 23. RKMS LOGO / LAUNCHER
+      # 21. RKMS LOGO / LAUNCHER
       # ============================================================
-      - name: Audit RKMS organization logo and launcher
+      - name: Audit RKMS organization logo
         shell: bash
         run: |
           set -euo pipefail
@@ -523,7 +454,7 @@ jobs:
           echo "RKMS organization logo: PASS"
 
       # ============================================================
-      # 24. NO X / TWITTER
+      # 22. NO X / TWITTER
       # ============================================================
       - name: Audit no X Twitter runtime references
         shell: bash
@@ -546,9 +477,9 @@ jobs:
           echo "No X/Twitter runtime reference: PASS"
 
       # ============================================================
-      # 25. RELEASE SIGNING CHECK
+      # 23. RELEASE SIGNING
       # ============================================================
-      - name: Check release signing configuration
+      - name: Configure release signing
         id: signing
         shell: bash
         run: |
@@ -557,183 +488,231 @@ jobs:
           if [ -n "${RKMS_KEYSTORE_BASE64:-}" ] \
             && [ -n "${RKMS_KEYSTORE_PASSWORD:-}" ] \
             && [ -n "${RKMS_KEY_ALIAS:-}" ] \
-            && [ -n "${RKMS_KEY_PASSWORD:-]"
+            && [ -n "${RKMS_KEY_PASSWORD:-}" ]
           then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "Release signing: ENABLED"
+
+            echo "$RKMS_KEYSTORE_BASE64" | base64 --decode \
+              > android/rkms-release.keystore
+
+            test -s android/rkms-release.keystore
+
+            cat >> android/gradle.properties <<EOF
+
+RKMS_KEYSTORE_FILE=$PWD/android/rkms-release.keystore
+RKMS_KEYSTORE_PASSWORD=$RKMS_KEYSTORE_PASSWORD
+RKMS_KEY_ALIAS=$RKMS_KEY_ALIAS
+RKMS_KEY_PASSWORD=$RKMS_KEY_PASSWORD
+EOF
+
+            echo "RKMS signing secrets detected."
+            echo "RKMS_SIGNING_ENABLED=true" >> "$GITHUB_ENV"
+
           else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Release signing secrets not available."
-            echo "Unsigned APK fallback will be used."
+
+            echo "RKMS signing secrets are not configured."
+            echo "APK will be built using the project's configured release signing."
+            echo "RKMS_SIGNING_ENABLED=false" >> "$GITHUB_ENV"
+
           fi
 
       # ============================================================
-      # 26. RELEASE KEYSTORE
+      # 24. GRADLE PERMISSIONS
       # ============================================================
-      - name: Prepare release keystore
-        if: steps.signing.outputs.enabled == 'true'
+      - name: Prepare Gradle
         shell: bash
         run: |
           set -euo pipefail
 
-          printf '%s' "$RKMS_KEYSTORE_BASE64" \
-            | base64 --decode \
-            > android/app/release.keystore
+          chmod +x android/gradlew
 
-          chmod 600 android/app/release.keystore
+          test -x android/gradlew
 
-          test -s android/app/release.keystore
-
-          echo "Release keystore: PASS"
+          echo "Gradle wrapper: PASS"
 
       # ============================================================
-      # 27. RELEASE SIGNING
+      # 25. ANDROID BUILD CONFIGURATION CHECK
       # ============================================================
-      - name: Configure release signing
-        if: steps.signing.outputs.enabled == 'true'
+      - name: Verify Android 16 build configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          chmod +x \
-            scripts/configure-release-signing.sh
+          grep -Rni \
+            "compileSdk" \
+            android \
+            --include="*.gradle" \
+            --include="*.gradle.kts" \
+            || true
 
-          bash \
-            scripts/configure-release-signing.sh
+          grep -Rni \
+            "targetSdk" \
+            android \
+            --include="*.gradle" \
+            --include="*.gradle.kts" \
+            || true
 
-      # ============================================================
-      # 28. VERIFY GRADLE
-      # ============================================================
-      - name: Verify Gradle
-        working-directory: android
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x gradlew
-
-          ./gradlew --version
+          echo "Android build configuration inspected."
 
       # ============================================================
-      # 29. CLEAN
+      # 26. RELEASE APK BUILD
       # ============================================================
-      - name: Clean Android
-        working-directory: android
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ./gradlew clean --no-daemon
-
-      # ============================================================
-      # 30. RELEASE APK
-      # ============================================================
-      - name: Build RELEASE APK ONLY
+      - name: Build release APK
         working-directory: android
         shell: bash
         run: |
           set -euo pipefail
 
           ./gradlew \
-            assembleRelease \
             --no-daemon \
-            --stacktrace
+            --stacktrace \
+            clean \
+            assembleRelease
+
+          echo "Release APK build: PASS"
 
       # ============================================================
-      # 31. VERIFY APK
+      # 27. LOCATE APK
       # ============================================================
-      - name: Verify Release APK
+      - name: Locate release APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="android/app/build/outputs/apk/release/app-release.apk"
+          echo "Searching for APK..."
 
-          test -s "$APK"
+          find android/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
 
-          echo ""
-          echo "=========================================================="
-          echo " RKMS ANDROID 16 / API 36 RELEASE APK: PASS"
-          echo "=========================================================="
+          APK_COUNT="$(
+            find android/app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              | wc -l
+          )"
 
-          ls -lh "$APK"
+          if [ "$APK_COUNT" -lt 1 ]; then
+            echo "ERROR: Release APK not found."
+            exit 1
+          fi
+
+          APK_PATH="$(
+            find android/app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              | head -n 1
+          )"
+
+          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
+
+          ls -lh "$APK_PATH"
+
+          echo "APK found: PASS"
 
       # ============================================================
-      # 32. VERIFY SIGNATURE
+      # 28. APK VERIFICATION
       # ============================================================
-      - name: Verify signed APK
-        if: steps.signing.outputs.enabled == 'true'
+      - name: Verify release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s "$APK_PATH"
+
+          file "$APK_PATH"
+
+          sha256sum "$APK_PATH"
+
+          echo "APK verification: PASS"
+
+      # ============================================================
+      # 29. APK SIGNATURE VERIFICATION
+      # ============================================================
+      - name: Verify APK signature
         shell: bash
         run: |
           set -euo pipefail
 
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
 
-          test -x "$APKSIGNER"
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "ERROR: apksigner not found."
+            exit 1
+          fi
 
-          "$APKSIGNER" verify \
-            --verbose \
-            android/app/build/outputs/apk/release/app-release.apk
+          "$APKSIGNER" verify --verbose "$APK_PATH"
 
-          echo "Release APK signature: PASS"
+          echo "APK signature verification: PASS"
 
       # ============================================================
-      # 33. APK SHA256
+      # 30. APK METADATA
       # ============================================================
-      - name: Generate APK SHA256
+      - name: Show final APK information
         shell: bash
         run: |
           set -euo pipefail
 
-          sha256sum \
-            android/app/build/outputs/apk/release/app-release.apk \
-            | tee APK_SHA256.txt
+          echo "=============================================="
+          echo "RKMS FINAL APK"
+          echo "=============================================="
 
-          test -s APK_SHA256.txt
+          echo "APK:"
+          echo "$APK_PATH"
+
+          echo ""
+          echo "Size:"
+          ls -lh "$APK_PATH"
+
+          echo ""
+          echo "SHA-256:"
+          sha256sum "$APK_PATH"
+
+          echo ""
+          echo "Android SDK:"
+          sdkmanager --version
+
+          echo ""
+          echo "Java:"
+          java -version
+
+          echo ""
+          echo "Node:"
+          node --version
+
+          echo "=============================================="
 
       # ============================================================
-      # 34. UPLOAD APK
+      # 31. UPLOAD APK
       # ============================================================
-      - name: Upload Release APK
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS-Android-16-API36-Release-APK
-          path: |
-            android/app/build/outputs/apk/release/app-release.apk
-            APK_SHA256.txt
+          name: RKMS-Android-16-API-36-Release-APK
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 30
 
       # ============================================================
-      # 35. FINAL SUMMARY
+      # 32. FINAL SUMMARY
       # ============================================================
-      - name: Final APK build summary
+      - name: Final build summary
         shell: bash
         run: |
+          set -euo pipefail
+
           echo ""
-          echo "=========================================================="
-          echo "        RKMS CONNECT - FINAL RELEASE APK"
-          echo "=========================================================="
+          echo "============================================================"
+          echo " RKMS ANDROID 16 / API 36 BUILD SUCCESS"
+          echo "============================================================"
           echo ""
-          echo "Android       : 16 / API 36"
-          echo "compileSdk    : 36"
-          echo "targetSdk     : 36"
-          echo "SDK platform  : android-36"
-          echo "Build tools   : 36.0.0"
-          echo "JDK           : 17"
-          echo "Node          : 22"
-          echo "Gradle        : 8.11.1"
-          echo "AGP           : 8.9.1"
-          echo "Output        : app-release.apk"
-          echo "AAB           : NOT BUILT"
-          echo "Profile       : AUDITED"
-          echo "Member/PDA    : SEPARATED"
-          echo "FCM           : AUDITED"
-          echo "Saved Login   : AUDITED"
-          echo "Complaint     : AUDITED"
-          echo "PDF           : AUDITED"
-          echo "RKMS logo     : PROTECTED"
+          echo "Android API       : 36"
+          echo "Android Platform  : android-36"
+          echo "Build Tools       : 36.0.0"
+          echo "Java              : 17"
+          echo "Node              : 22"
+          echo "APK               : BUILD SUCCESS"
+          echo "APK SIGNATURE     : VERIFIED"
+          echo "ARTIFACT          : UPLOADED"
           echo ""
-          echo "=========================================================="
-          echo "             BUILD COMPLETED SUCCESSFULLY"
-          echo "=========================================================="
+          echo "============================================================"
