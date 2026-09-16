@@ -16,14 +16,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Verify source files
+      # =========================================================
+      # 1. EXTRACT FINAL SOURCE ZIP
+      # =========================================================
+      - name: Prepare RKMS source
         run: |
           set -e
+
+          SOURCE_ZIP="RKMS_CONNECT_CONTENT_SCOPE_FINAL_AUDITED_2026-09-16.zip"
+
+          if [ ! -f "$SOURCE_ZIP" ]; then
+            echo "ERROR: Source ZIP not found: $SOURCE_ZIP"
+            ls -lah
+            exit 1
+          fi
+
+          echo "Source ZIP found:"
+          ls -lh "$SOURCE_ZIP"
+
+          unzip -q -o "$SOURCE_ZIP" -d .
+
+          echo "Source extracted successfully."
+
           test -f package.json
           test -f app.js
           test -f index.html
@@ -31,183 +45,338 @@ jobs:
           test -f capacitor.config.json
           test -f google-services.json
           test -d scripts
+
+          echo "RKMS source preparation PASS"
+
+      # =========================================================
+      # 2. NODE 22
+      # =========================================================
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # =========================================================
+      # 3. VERIFY SOURCE
+      # =========================================================
+      - name: Verify source files
+        run: |
+          set -e
+
+          test -f package.json
+          test -f app.js
+          test -f index.html
+          test -f styles.css
+          test -f capacitor.config.json
+          test -f google-services.json
+          test -d scripts
+
           echo "Source files OK"
 
+      # =========================================================
+      # 4. JAVASCRIPT CHECK
+      # =========================================================
       - name: Check JavaScript syntax
         run: |
           set -e
+
           node --check app.js
+
           echo "JavaScript syntax PASS"
 
+      # =========================================================
+      # 5. NPM
+      # =========================================================
       - name: Install npm dependencies
         run: |
           set -e
+
           npm install --no-audit --no-fund
 
+      # =========================================================
+      # 6. JDK 17
+      # =========================================================
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+      # =========================================================
+      # 7. ANDROID SDK
+      # =========================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: ""
 
+      # =========================================================
+      # 8. ANDROID 16 / API 36
+      # =========================================================
       - name: Install Android 16 API 36
         run: |
           set -e
+
           yes | sdkmanager --licenses >/dev/null || true
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
+
           yes | sdkmanager --licenses >/dev/null || true
 
+      # =========================================================
+      # 9. VERIFY ANDROID SDK
+      # =========================================================
       - name: Verify Android SDK
         run: |
           set -e
+
           test -d "$ANDROID_SDK_ROOT/platforms/android-36"
           test -d "$ANDROID_SDK_ROOT/build-tools/36.0.0"
+
           echo "Android API 36 PASS"
 
+      # =========================================================
+      # 10. BUILD WEB
+      # =========================================================
       - name: Build web application
         run: |
           set -e
+
           npm run build
 
+      # =========================================================
+      # 11. VERIFY CAPACITOR
+      # =========================================================
       - name: Verify Capacitor
         run: |
           set -e
+
           npx cap --version
 
+      # =========================================================
+      # 12. GENERATE ANDROID
+      # =========================================================
       - name: Generate Android project
         run: |
           set -e
+
           rm -rf android
+
           npx cap add android
 
+      # =========================================================
+      # 13. FIREBASE
+      # =========================================================
       - name: Configure Firebase
         run: |
           set -e
+
           test -f google-services.json
+
           mkdir -p android/app
+
           cp google-services.json android/app/google-services.json
+
           echo "Firebase configuration copied"
 
+      # =========================================================
+      # 14. ANDROID 16 CONFIGURATION
+      # =========================================================
       - name: Configure Android 16
         run: |
           set -e
+
           chmod +x scripts/configure-android-16.sh
+
           ./scripts/configure-android-16.sh
 
+      # =========================================================
+      # 15. CAPACITOR SYNC
+      # =========================================================
       - name: Capacitor sync
         run: |
           set -e
+
           npx cap sync android
 
+      # =========================================================
+      # 16. NATIVE CONFIGURATION
+      # =========================================================
       - name: Setup Android native configuration
         run: |
           set -e
+
           chmod +x scripts/setup-android-native.sh
+
           ./scripts/setup-android-native.sh
 
+      # =========================================================
+      # 17. ANDROID 16 AUDIT
+      # =========================================================
       - name: Verify Android 16
         run: |
           set -e
+
           python3 scripts/verify-android-16.py
 
+      # =========================================================
+      # 18. ANDROID PDF AUDIT
+      # =========================================================
       - name: Verify Android PDF pipeline
         run: |
           set -e
+
           python3 scripts/verify-android-pdf.py
 
+      # =========================================================
+      # 19. NATIVE BRIDGE
+      # =========================================================
       - name: Verify native bridge
         run: |
           set -e
+
           python3 scripts/verify-native-bridge.py
 
+      # =========================================================
+      # 20. RKMS FINAL AUDIT
+      # =========================================================
       - name: Verify RKMS final
         run: |
           set -e
+
           python3 scripts/verify-rkms-final.py
 
+      # =========================================================
+      # 21. MEMBER DIRECTORY
+      # =========================================================
       - name: Verify member directory scope
         run: |
           set -e
+
           python3 scripts/verify-member-directory-scope.py
 
+      # =========================================================
+      # 22. DIRECTORY LISTS
+      # =========================================================
       - name: Verify directory lists
         run: |
           set -e
+
           python3 scripts/verify-directory-lists.py
 
+      # =========================================================
+      # 23. DEEP DIRECTORY AUDIT
+      # =========================================================
       - name: Verify directory deep audit
         run: |
           set -e
+
           python3 scripts/verify-v17-directory-deep.py
 
+      # =========================================================
+      # 24. AUTHORITY HIERARCHY
+      # =========================================================
       - name: Verify authority hierarchy
         run: |
           set -e
+
           python3 scripts/verify-authority-hierarchy.py
 
+      # =========================================================
+      # 25. DIRECTORY CONTACT
+      # =========================================================
       - name: Verify directory contact actions
         run: |
           set -e
+
           python3 scripts/verify-directory-contact-actions.py
 
+      # =========================================================
+      # 26. LOGIN NAVIGATION
+      # =========================================================
       - name: Verify final login navigation
         run: |
           set -e
+
           python3 scripts/verify-final-login-navigation.py
 
+      # =========================================================
+      # 27. PROFILE UPDATE
+      # =========================================================
       - name: Verify profile update
         run: |
           set -e
+
           python3 scripts/verify-profile-update-final.py
 
+      # =========================================================
+      # 28. REPORT DOWNLOAD
+      # =========================================================
       - name: Verify report download scope
         run: |
           set -e
+
           python3 scripts/verify-report-download-scope.py
 
+      # =========================================================
+      # 29. PDF PIPELINE
+      # =========================================================
       - name: Verify PDF pipeline
         run: |
           set -e
+
           python3 scripts/verify-pdf-pipeline.py
 
+      # =========================================================
+      # 30. LOGO PROTECTION
+      # =========================================================
       - name: Verify launcher logo protection
         run: |
           set -e
+
           python3 - <<'PY'
           import hashlib
           from pathlib import Path
 
           p = Path("assets/rkms-launcher-original-transparent.png")
+
           if not p.exists():
               raise SystemExit("Original RKMS launcher logo missing")
 
           h = hashlib.sha256(p.read_bytes()).hexdigest()
+
           print("RKMS launcher original SHA256:", h)
           print("Launcher logo protection PASS")
           PY
 
+      # =========================================================
+      # 31. NO X / TWITTER
+      # =========================================================
       - name: Verify no X Twitter assets
         run: |
           set -e
+
           if grep -RniE 'twitter|x\.com|twitter\.com' \
             app.js index.html styles.css 2>/dev/null; then
+
             echo "Forbidden X/Twitter reference found"
             exit 1
           fi
+
           echo "No X/Twitter reference PASS"
 
+      # =========================================================
+      # 32. GRADLE
+      # =========================================================
       - name: Verify Gradle configuration
         run: |
           set -e
+
           test -f android/gradlew
+
           chmod +x android/gradlew
 
           grep -R 'compileSdk.*36' android \
@@ -217,6 +386,9 @@ jobs:
 
           echo "Gradle configuration checked"
 
+      # =========================================================
+      # 33. RELEASE SIGNING
+      # =========================================================
       - name: Configure release signing
         env:
           RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
@@ -231,7 +403,9 @@ jobs:
             && [ -n "${RKMS_KEY_ALIAS:-}" ] \
             && [ -n "${RKMS_KEY_PASSWORD:-}" ]
           then
-            echo "$RKMS_KEYSTORE_BASE64" | base64 --decode > android/app/rkms-release.keystore
+
+            echo "$RKMS_KEYSTORE_BASE64" | base64 --decode \
+              > android/app/rkms-release.keystore
 
             printf '%s\n' \
               "RKMS_KEYSTORE_FILE=../app/rkms-release.keystore" \
@@ -241,31 +415,58 @@ jobs:
               >> android/gradle.properties
 
             echo "Release signing configured"
+
           else
+
             echo "Signing secrets not configured."
             echo "APK will be built unsigned/unconfigured for release signing."
+
           fi
 
+      # =========================================================
+      # 34. GRADLE EXECUTABLE
+      # =========================================================
       - name: Make Gradle executable
         run: |
           chmod +x android/gradlew
 
+      # =========================================================
+      # 35. BUILD RELEASE APK
+      # =========================================================
       - name: Build release APK
         working-directory: android
         run: |
           set -e
-          ./gradlew clean
-          ./gradlew assembleRelease --no-daemon --stacktrace
 
+          ./gradlew clean
+
+          ./gradlew assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+      # =========================================================
+      # 36. LOCATE APK
+      # =========================================================
       - name: Locate APK
         run: |
           set -e
-          find android/app/build/outputs/apk -type f -name "*.apk" -print
 
+          find android/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
+
+      # =========================================================
+      # 37. VERIFY APK
+      # =========================================================
       - name: Verify APK exists
         run: |
           set -e
-          APK=$(find android/app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+
+          APK=$(find android/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "APK not found"
@@ -274,31 +475,50 @@ jobs:
 
           echo "APK found: $APK"
 
+      # =========================================================
+      # 38. VERIFY SIGNATURE
+      # =========================================================
       - name: Verify APK signature
         run: |
           set -e
 
-          APK=$(find android/app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          APK=$(find android/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
 
           if command -v apksigner >/dev/null 2>&1; then
             apksigner verify --verbose "$APK" || true
           else
-            echo "apksigner not directly available; APK existence already verified."
+            echo "apksigner not directly available."
+            echo "APK existence already verified."
           fi
 
+      # =========================================================
+      # 39. PREPARE FINAL APK
+      # =========================================================
       - name: Prepare final APK
         run: |
           set -e
 
           mkdir -p release
 
-          APK=$(find android/app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          APK=$(find android/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
 
-          cp "$APK" release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
+          cp "$APK" \
+            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
 
-          sha256sum release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk \
-            | tee release/RKMS_CONNECT_ANDROID16_API36_RELEASE.sha256
+          sha256sum \
+            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk \
+            | tee \
+            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.sha256
 
+      # =========================================================
+      # 40. UPLOAD APK
+      # =========================================================
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -308,6 +528,9 @@ jobs:
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.sha256
           if-no-files-found: error
 
+      # =========================================================
+      # 41. FINAL SUMMARY
+      # =========================================================
       - name: Final build summary
         run: |
           echo "========================================"
