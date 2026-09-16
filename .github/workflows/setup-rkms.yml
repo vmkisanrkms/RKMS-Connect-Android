@@ -184,6 +184,8 @@ jobs:
 
       # ============================================================
       # 7. ANDROID SDK
+      # IMPORTANT:
+      # Do NOT add accept-android-sdk-licenses here.
       # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
@@ -444,44 +446,36 @@ jobs:
           echo "No X/Twitter runtime reference: PASS"
 
       # ============================================================
-      # 23. RELEASE SIGNING
+      # 23. RELEASE SIGNING PREPARATION
       # ============================================================
       - name: Configure release signing
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -n "${RKMS_KEYSTORE_BASE64:-}" ] \
-            && [ -n "${RKMS_KEYSTORE_PASSWORD:-}" ] \
-            && [ -n "${RKMS_KEY_ALIAS:-}" ] \
-            && [ -n "${RKMS_KEY_PASSWORD:-}" ]
-          then
+          if [ -z "${RKMS_KEYSTORE_BASE64:-}" ] \
+            || [ -z "${RKMS_KEYSTORE_PASSWORD:-}" ] \
+            || [ -z "${RKMS_KEY_ALIAS:-}" ] \
+            || [ -z "${RKMS_KEY_PASSWORD:-}" ]; then
 
-            echo "$RKMS_KEYSTORE_BASE64" | base64 --decode \
-              > android/rkms-release.keystore
-
-            test -s android/rkms-release.keystore
-
-            printf '%s\n' \
-              '' \
-              'RKMS_KEYSTORE_FILE='"$PWD/android/rkms-release.keystore" \
-              'RKMS_KEYSTORE_PASSWORD='"$RKMS_KEYSTORE_PASSWORD" \
-              'RKMS_KEY_ALIAS='"$RKMS_KEY_ALIAS" \
-              'RKMS_KEY_PASSWORD='"$RKMS_KEY_PASSWORD" \
-              >> android/gradle.properties
-
-            echo "RKMS_SIGNING_ENABLED=true" >> "$GITHUB_ENV"
-
-            echo "RKMS release signing configured."
-
-          else
-
-            echo "RKMS signing secrets not configured."
-            echo "Using project's existing release signing configuration."
-
-            echo "RKMS_SIGNING_ENABLED=false" >> "$GITHUB_ENV"
-
+            echo "ERROR: RKMS release signing secrets are required."
+            echo ""
+            echo "Required GitHub Secrets:"
+            echo "RKMS_KEYSTORE_BASE64"
+            echo "RKMS_KEYSTORE_PASSWORD"
+            echo "RKMS_KEY_ALIAS"
+            echo "RKMS_KEY_PASSWORD"
+            exit 1
           fi
+
+          echo "$RKMS_KEYSTORE_BASE64" | base64 --decode \
+            > android/rkms-release.keystore
+
+          test -s android/rkms-release.keystore
+
+          echo "RKMS_SIGNING_ENABLED=true" >> "$GITHUB_ENV"
+
+          echo "Release keystore prepared successfully."
 
       # ============================================================
       # 24. GRADLE
@@ -505,34 +499,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking Android API 36 configuration..."
+          echo "Checking Android build configuration..."
 
-          if grep -Rni \
-            'compileSdk[[:space:]]*36' \
+          grep -Rni \
+            'compileSdk' \
             android \
             --include="*.gradle" \
-            --include="*.gradle.kts"
-          then
-            echo "compileSdk 36: FOUND"
-          else
-            echo "WARNING: compileSdk 36 not directly matched."
-          fi
+            --include="*.gradle.kts" \
+            || true
 
-          if grep -Rni \
-            'targetSdk[[:space:]]*36' \
+          grep -Rni \
+            'targetSdk' \
             android \
             --include="*.gradle" \
-            --include="*.gradle.kts"
-          then
-            echo "targetSdk 36: FOUND"
-          else
-            echo "WARNING: targetSdk 36 not directly matched."
-          fi
+            --include="*.gradle.kts" \
+            || true
 
           echo "Android build configuration check: PASS"
 
       # ============================================================
-      # 26. RELEASE APK BUILD
+      # 26. BUILD RELEASE APK
       # ============================================================
       - name: Build release APK
         working-directory: android
@@ -549,47 +535,94 @@ jobs:
           echo "Release APK build: PASS"
 
       # ============================================================
-      # 27. LOCATE RELEASE APK
+      # 27. LOCATE GENERATED APK
       # ============================================================
       - name: Locate release APK
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching for APK..."
+          echo "Searching for generated APK..."
 
           find android/app/build/outputs/apk \
             -type f \
             -name "*.apk" \
             -print
 
-          APK_COUNT="$(
-            find android/app/build/outputs/apk \
-              -type f \
-              -name "*.apk" \
-              | wc -l
-          )"
-
-          if [ "$APK_COUNT" -lt 1 ]; then
-            echo "ERROR: No APK found."
-            exit 1
-          fi
-
           APK_PATH="$(
             find android/app/build/outputs/apk \
               -type f \
-              -name "*.apk" \
+              -name "*-unsigned.apk" \
               -print \
               | head -n 1
           )"
 
-          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
+          if [ -z "${APK_PATH:-}" ]; then
+            APK_PATH="$(
+              find android/app/build/outputs/apk \
+                -type f \
+                -name "*.apk" \
+                -print \
+                | head -n 1
+            )"
+          fi
 
-          echo "APK found:"
+          if [ -z "${APK_PATH:-}" ]; then
+            echo "ERROR: No release APK found."
+            exit 1
+          fi
+
+          test -s "$APK_PATH"
+
+          echo "UNSIGNED_APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
+
+          echo "Generated APK:"
           ls -lh "$APK_PATH"
 
       # ============================================================
-      # 28. APK VERIFICATION
+      # 28. SIGN APK
+      # ============================================================
+      - name: Sign release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "ERROR: apksigner not found:"
+            echo "$APKSIGNER"
+            exit 1
+          fi
+
+          if [ ! -s "android/rkms-release.keystore" ]; then
+            echo "ERROR: RKMS release keystore not found."
+            exit 1
+          fi
+
+          SIGNED_APK="android/app/build/outputs/apk/release/app-release.apk"
+
+          rm -f "$SIGNED_APK"
+
+          echo "Signing APK..."
+
+          "$APKSIGNER" sign \
+            --ks "android/rkms-release.keystore" \
+            --ks-pass "pass:${RKMS_KEYSTORE_PASSWORD}" \
+            --ks-key-alias "${RKMS_KEY_ALIAS}" \
+            --key-pass "pass:${RKMS_KEY_PASSWORD}" \
+            --out "$SIGNED_APK" \
+            "$UNSIGNED_APK_PATH"
+
+          test -s "$SIGNED_APK"
+
+          echo "APK_PATH=$SIGNED_APK" >> "$GITHUB_ENV"
+
+          echo "Signed APK created:"
+          ls -lh "$SIGNED_APK"
+
+      # ============================================================
+      # 29. VERIFY SIGNED APK
       # ============================================================
       - name: Verify release APK
         shell: bash
@@ -614,15 +647,15 @@ jobs:
             exit 1
           fi
 
-          "$AAPT" dump badging "$APK_PATH" >/tmp/rkms-apk-badging.txt
+          "$AAPT" dump badging "$APK_PATH" \
+            > /tmp/rkms-apk-badging.txt
 
           grep -q '^package:' /tmp/rkms-apk-badging.txt
 
           echo "APK package metadata: PASS"
-          echo "Release APK verification: PASS"
 
       # ============================================================
-      # 29. APK SIGNATURE VERIFICATION
+      # 30. VERIFY APK SIGNATURE
       # ============================================================
       - name: Verify APK signature
         shell: bash
@@ -636,28 +669,29 @@ jobs:
             exit 1
           fi
 
-          if [ "${RKMS_SIGNING_ENABLED:-false}" = "true" ]; then
-            "$APKSIGNER" verify --verbose "$APK_PATH"
-            echo "Signed APK verification: PASS"
-          else
-            echo "RKMS signing secrets were not supplied."
-            echo "Skipping mandatory signature verification."
-          fi
+          echo "Verifying signed APK..."
+
+          "$APKSIGNER" verify \
+            --verbose \
+            "$APK_PATH"
+
+          echo "Signed APK verification: PASS"
 
       # ============================================================
-      # 30. SHA256
+      # 31. SHA256
       # ============================================================
       - name: Generate APK SHA256
         shell: bash
         run: |
           set -euo pipefail
 
-          sha256sum "$APK_PATH" | tee rkms-release-apk.sha256
+          sha256sum "$APK_PATH" \
+            | tee rkms-release-apk.sha256
 
           echo "APK SHA256 generated."
 
       # ============================================================
-      # 31. UPLOAD APK ARTIFACT
+      # 32. UPLOAD APK ARTIFACT
       # ============================================================
       - name: Upload release APK
         uses: actions/upload-artifact@v4
@@ -670,7 +704,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 32. FINAL SUMMARY
+      # 33. FINAL SUMMARY
       # ============================================================
       - name: Final build summary
         shell: bash
@@ -687,16 +721,8 @@ jobs:
           echo "SHA256:"
           cat rkms-release-apk.sha256
           echo ""
-          echo "Android API:"
-          echo "36"
-          echo ""
-          echo "Build Tools:"
-          echo "36.0.0"
-          echo ""
-          echo "Node:"
-          node --version
-          echo ""
-          echo "Java:"
-          java -version 2>&1 | head -n 1
+          echo "Android API: 36"
+          echo "Build Tools: 36.0.0"
+          echo "Node: $(node --version)"
           echo ""
           echo "============================================================"
