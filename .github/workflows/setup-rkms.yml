@@ -1,4 +1,4 @@
-name: RKMS Android 16 API 36 - Release APK
+name: RKMS Android 16 / API 36 - Release APK
 
 on:
   workflow_dispatch:
@@ -11,12 +11,6 @@ jobs:
     name: RKMS Android 16 / API 36 - Release APK
     runs-on: ubuntu-latest
 
-    env:
-      RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
-      RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
-      RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
-      RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
-
     steps:
       # ------------------------------------------------------------
       # 1. Checkout latest source
@@ -27,16 +21,15 @@ jobs:
           fetch-depth: 1
 
       # ------------------------------------------------------------
-      # 2. Node.js
+      # 2. Node.js 22
       # ------------------------------------------------------------
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       # ------------------------------------------------------------
-      # 3. Java 17
+      # 3. JDK 17
       # ------------------------------------------------------------
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -45,7 +38,7 @@ jobs:
           java-version: 17
 
       # ------------------------------------------------------------
-      # 4. Android SDK API 36
+      # 4. Android SDK
       # ------------------------------------------------------------
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -70,11 +63,13 @@ jobs:
           python3 -m py_compile scripts/*.py
 
       # ------------------------------------------------------------
-      # 6. Install dependencies
+      # 6. Install npm dependencies
+      # IMPORTANT:
+      # package-lock.json is not required
       # ------------------------------------------------------------
       - name: Install npm dependencies
         run: |
-          npm ci
+          npm install --no-audit --no-fund
 
       # ------------------------------------------------------------
       # 7. Configure Android 16
@@ -85,14 +80,14 @@ jobs:
           ./scripts/configure-android-16.sh
 
       # ------------------------------------------------------------
-      # 8. Add Android platform
+      # 8. Add Capacitor Android
       # ------------------------------------------------------------
       - name: Add Capacitor Android
         run: |
           npx cap add android
 
       # ------------------------------------------------------------
-      # 9. Sync web assets
+      # 9. Sync Capacitor
       # ------------------------------------------------------------
       - name: Capacitor sync
         run: |
@@ -116,44 +111,34 @@ jobs:
                   "compileSdkVersion = 34": "compileSdkVersion = 36",
                   "targetSdkVersion = 35": "targetSdkVersion = 36",
                   "targetSdkVersion = 34": "targetSdkVersion = 36",
-                  "minSdkVersion = 22": "minSdkVersion = 23",
               }
 
               for old, new in replacements.items():
                   text = text.replace(old, new)
 
               p.write_text(text)
+
+          print("Android 16 / API 36 configuration checked.")
           PY
 
-          grep -R "compileSdk\|targetSdk" android/variables.gradle || true
+          echo "Android variables:"
+          cat android/variables.gradle || true
 
       # ------------------------------------------------------------
-      # 11. Google services file check
+      # 11. Configure Gradle 8.11.1
       # ------------------------------------------------------------
-      - name: Verify Firebase configuration
-        run: |
-          if [ -f "google-services.json" ]; then
-            echo "google-services.json found"
-          else
-            echo "google-services.json not found at root"
-          fi
-
-      # ------------------------------------------------------------
-      # 12. Build tools / Gradle
-      # ------------------------------------------------------------
-      - name: Configure Gradle
+      - name: Configure Gradle 8.11.1
         run: |
           cd android
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path("gradle/wrapper/gradle-wrapper.properties")
 
           if p.exists():
               text = p.read_text()
-
-              import re
 
               text = re.sub(
                   r"distributionUrl=.*",
@@ -162,10 +147,12 @@ jobs:
               )
 
               p.write_text(text)
+
+          print("Gradle wrapper configured.")
           PY
 
       # ------------------------------------------------------------
-      # 13. Build release APK
+      # 12. Build Release APK
       # ------------------------------------------------------------
       - name: Build Release APK
         run: |
@@ -174,29 +161,36 @@ jobs:
           ./gradlew clean assembleRelease --no-daemon --stacktrace
 
       # ------------------------------------------------------------
-      # 14. Locate APK
+      # 13. Locate APK
       # ------------------------------------------------------------
       - name: Locate APK
         run: |
-          find android/app/build/outputs/apk/release -type f -name "*.apk" -print
+          echo "Release APK files:"
+          find android/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            -print
 
       # ------------------------------------------------------------
-      # 15. SHA256
+      # 14. Generate SHA256
       # ------------------------------------------------------------
       - name: Generate SHA256
         run: |
           APK=$(find android/app/build/outputs/apk/release \
-            -type f -name "*.apk" | head -n 1)
+            -type f \
+            -name "*.apk" | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Release APK not found"
+            echo "ERROR: Release APK not found."
             exit 1
           fi
+
+          echo "APK: $APK"
 
           sha256sum "$APK" | tee RKMS_ANDROID16_API36_SHA256.txt
 
       # ------------------------------------------------------------
-      # 16. Upload APK artifact
+      # 15. Upload APK artifact
       # ------------------------------------------------------------
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
