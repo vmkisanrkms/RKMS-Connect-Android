@@ -11,17 +11,12 @@ jobs:
     name: RKMS Android 16 / API 36 - Release APK
     runs-on: ubuntu-latest
 
-    env:
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.*/x64
-
     steps:
 
       # ============================================================
       # 1. CHECKOUT
       # ============================================================
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -44,358 +39,54 @@ jobs:
           java-version: 17
 
       # ============================================================
-      # 4. ANDROID SDK ENVIRONMENT
+      # 4. ANDROID SDK
       # Do NOT use android-actions/setup-android@v3
       # ============================================================
       - name: Configure Android SDK
         shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
 
-          if [ ! -d "$ANDROID_SDK_ROOT" ]; then
-            echo "ERROR: Android SDK directory not found:"
-            echo "$ANDROID_SDK_ROOT"
-            exit 1
-          fi
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
 
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-          if [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            echo "sdkmanager found:"
-            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --version
+          echo "Android SDK:"
+          ls -la "$ANDROID_HOME" || true
+
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "Using latest sdkmanager"
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --version
           elif command -v sdkmanager >/dev/null 2>&1; then
-            echo "Using preinstalled sdkmanager:"
+            echo "Using preinstalled sdkmanager"
             sdkmanager --version
           else
-            echo "ERROR: sdkmanager not found."
+            echo "ERROR: sdkmanager not found"
             exit 1
           fi
 
       # ============================================================
-      # 5. ACCEPT ANDROID LICENSES
+      # 5. ANDROID LICENSES
       # ============================================================
       - name: Accept Android SDK licenses
         shell: bash
         run: |
           SDKMANAGER=""
 
-          if [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           elif command -v sdkmanager >/dev/null 2>&1; then
             SDKMANAGER="$(command -v sdkmanager)"
           else
-            echo "ERROR: sdkmanager not found."
+            echo "ERROR: sdkmanager not found"
             exit 1
           fi
 
           yes | "$SDKMANAGER" \
-            --sdk_root="$ANDROID_SDK_ROOT" \
-            --licenses >/dev/null || true
+            --sdk_root="$ANDROID_HOME" \
+            --licenses >/dev/null 2>&1 || true
 
-          echo "Android SDK licenses accepted."
-
-      # ============================================================
-      # 6. INSTALL ONLY REQUIRED API 36 PACKAGES
-      # IMPORTANT:
-      # Do NOT install package 'tools'
-      # ============================================================
-      - name: Install Android 16 / API 36
-        shell: bash
-        run: |
-          SDKMANAGER=""
-
-          if [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          elif command -v sdkmanager >/dev/null 2>&1; then
-            SDKMANAGER="$(command -v sdkmanager)"
-          else
-            echo "ERROR: sdkmanager not found."
-            exit 1
-          fi
-
-          echo "Installing required Android packages..."
-
-          "$SDKMANAGER" \
-            --sdk_root="$ANDROID_SDK_ROOT" \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
-
-          echo "Installed Android packages:"
-          "$SDKMANAGER" \
-            --sdk_root="$ANDROID_SDK_ROOT" \
-            --list_installed | grep -E \
-            "platform-tools|platforms;android-36|build-tools;36.0.0" || true
-
-      # ============================================================
-      # 7. VERIFY JAVA / NODE / ANDROID
-      # ============================================================
-      - name: Verify build environment
-        shell: bash
-        run: |
-          echo "===== NODE ====="
-          node --version
-          npm --version
-
-          echo "===== JAVA ====="
-          java -version
-
-          echo "===== ANDROID SDK ====="
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
-          echo "===== API 36 ====="
-          if [ -d "$ANDROID_SDK_ROOT/platforms/android-36" ]; then
-            echo "Android API 36: OK"
-          else
-            echo "ERROR: Android API 36 not installed."
-            exit 1
-          fi
-
-          echo "===== BUILD TOOLS 36.0.0 ====="
-          if [ -d "$ANDROID_SDK_ROOT/build-tools/36.0.0" ]; then
-            echo "Build Tools 36.0.0: OK"
-          else
-            echo "ERROR: Build Tools 36.0.0 not installed."
-            exit 1
-          fi
-
-      # ============================================================
-      # 8. VERIFY APP.JS
-      # ============================================================
-      - name: Verify app.js
-        shell: bash
-        run: |
-          node --check app.js
-
-      # ============================================================
-      # 9. VERIFY PYTHON SCRIPTS
-      # ============================================================
-      - name: Verify Python scripts
-        shell: bash
-        run: |
-          python3 -m py_compile scripts/*.py
-
-      # ============================================================
-      # 10. INSTALL NPM DEPENDENCIES
-      # package-lock.json is NOT required
-      # ============================================================
-      - name: Install npm dependencies
-        shell: bash
-        run: |
-          npm install --no-audit --no-fund
-
-      # ============================================================
-      # 11. CONFIGURE RKMS ANDROID 16
-      # ============================================================
-      - name: Configure RKMS Android 16
-        shell: bash
-        run: |
-          if [ ! -f "scripts/configure-android-16.sh" ]; then
-            echo "ERROR: scripts/configure-android-16.sh not found."
-            exit 1
-          fi
-
-          chmod +x scripts/configure-android-16.sh
-          ./scripts/configure-android-16.sh
-
-      # ============================================================
-      # 12. ADD CAPACITOR ANDROID
-      # ============================================================
-      - name: Add Capacitor Android
-        shell: bash
-        run: |
-          if [ -d "android" ]; then
-            echo "Android directory already exists."
-          else
-            npx cap add android
-          fi
-
-      # ============================================================
-      # 13. CAPACITOR SYNC
-      # ============================================================
-      - name: Capacitor sync
-        shell: bash
-        run: |
-          npx cap sync android
-
-      # ============================================================
-      # 14. FORCE API 36
-      # ============================================================
-      - name: Enforce Android API 36
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          files = [
-              Path("android/variables.gradle"),
-              Path("android/app/build.gradle"),
-          ]
-
-          for p in files:
-              if not p.exists():
-                  continue
-
-              text = p.read_text()
-
-              text = re.sub(
-                  r'compileSdkVersion\s*=?\s*\d+',
-                  'compileSdkVersion = 36',
-                  text
-              )
-
-              text = re.sub(
-                  r'targetSdkVersion\s*=?\s*\d+',
-                  'targetSdkVersion = 36',
-                  text
-              )
-
-              text = text.replace(
-                  'compileSdk 35',
-                  'compileSdk 36'
-              )
-
-              text = text.replace(
-                  'compileSdk 34',
-                  'compileSdk 36'
-              )
-
-              text = text.replace(
-                  'targetSdk 35',
-                  'targetSdk 36'
-              )
-
-              text = text.replace(
-                  'targetSdk 34',
-                  'targetSdk 36'
-              )
-
-              p.write_text(text)
-
-          print("Android API 36 enforcement completed.")
-          PY
-
-      # ============================================================
-      # 15. SET GRADLE 8.11.1
-      # ============================================================
-      - name: Configure Gradle 8.11.1
-        shell: bash
-        run: |
-          cd android
-
-          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "ERROR: Gradle wrapper properties not found."
-            exit 1
-          fi
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path("gradle/wrapper/gradle-wrapper.properties")
-          text = p.read_text()
-
-          text = re.sub(
-              r'^distributionUrl=.*$',
-              'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-bin.zip',
-              text,
-              flags=re.MULTILINE
-          )
-
-          p.write_text(text)
-
-          print("Gradle 8.11.1 configured.")
-          PY
-
-      # ============================================================
-      # 16. VERIFY CAPACITOR ANDROID PROJECT
-      # ============================================================
-      - name: Verify Android project
-        shell: bash
-        run: |
-          if [ ! -f "android/gradlew" ]; then
-            echo "ERROR: android/gradlew not found."
-            exit 1
-          fi
-
-          if [ ! -d "android/app" ]; then
-            echo "ERROR: android/app not found."
-            exit 1
-          fi
-
-          echo "Android project verification: PASS"
-
-      # ============================================================
-      # 17. BUILD RELEASE APK
-      # ============================================================
-      - name: Build Release APK
-        shell: bash
-        run: |
-          cd android
-
-          chmod +x gradlew
-
-          ./gradlew clean assembleRelease \
-            --no-daemon \
-            --stacktrace
-
-      # ============================================================
-      # 18. FIND APK
-      # ============================================================
-      - name: Locate Release APK
-        shell: bash
-        run: |
-          echo "Release APK files:"
-
-          find android/app/build/outputs/apk/release \
-            -type f \
-            -name "*.apk" \
-            -print
-
-          APK_COUNT=$(find android/app/build/outputs/apk/release \
-            -type f \
-            -name "*.apk" | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: No release APK generated."
-            exit 1
-          fi
-
-      # ============================================================
-      # 19. SHA256
-      # ============================================================
-      - name: Generate SHA256
-        shell: bash
-        run: |
-          APK=$(find android/app/build/outputs/apk/release \
-            -type f \
-            -name "*.apk" | head -n 1)
-
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK not found."
-            exit 1
-          fi
-
-          echo "APK:"
-          echo "$APK"
-
-          sha256sum "$APK" \
-            | tee RKMS_ANDROID16_API36_SHA256.txt
-
-      # ============================================================
-      # 20. UPLOAD APK
-      # ============================================================
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: RKMS_CONNECT_ANDROID16_API36_RELEASE
-          path: |
-            android/app/build/outputs/apk/release/*.apk
-            RKMS_ANDROID16_API36_SHA256.txt
-          if-no-files-found: error
-          retention-days: 90
+          echo "Android
