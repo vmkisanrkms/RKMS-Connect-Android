@@ -1,4 +1,4 @@
-name: RKMS Android 16 / API 36 - Release APK
+name: RKMS Android 16 / API 36 - Final Signed APK
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   android-apk:
-    name: RKMS Android 16 / API 36 - Release APK
+    name: RKMS Final Android 16 API 36
     runs-on: ubuntu-latest
 
     steps:
@@ -50,20 +50,17 @@ jobs:
           echo "/usr/local/lib/android/sdk/platform-tools" >> "$GITHUB_PATH"
           echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-          if [ ! -d "/usr/local/lib/android/sdk" ]; then
-            echo "ERROR: Android SDK not found."
-            exit 1
-          fi
+          test -d "/usr/local/lib/android/sdk"
 
-          if [ ! -x "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager" ]; then
-            echo "ERROR: sdkmanager not found."
-            exit 1
-          fi
+          test -x \
+            "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
 
           /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --version
 
+          echo "Android SDK: PASS"
+
       # ============================================================
-      # 5. ANDROID LICENSES
+      # 5. ACCEPT LICENSES
       # ============================================================
       - name: Accept Android SDK licenses
         shell: bash
@@ -72,10 +69,12 @@ jobs:
             --sdk_root=/usr/local/lib/android/sdk \
             --licenses || true
 
+          echo "Android SDK licenses: PASS"
+
       # ============================================================
       # 6. INSTALL ANDROID 16 / API 36
       # ============================================================
-      - name: Install Android 16 / API 36
+      - name: Install Android 16 API 36
         shell: bash
         run: |
           /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
@@ -84,45 +83,47 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0"
 
-      # ============================================================
-      # 7. VERIFY BUILD ENVIRONMENT
-      # ============================================================
-      - name: Verify build environment
-        shell: bash
-        run: |
-          echo "===== NODE ====="
-          node --version
-          npm --version
-
-          echo "===== JAVA ====="
-          java -version
-
-          echo "===== ANDROID API 36 ====="
-
           test -d "$ANDROID_HOME/platforms/android-36"
-          echo "Android API 36: PASS"
-
           test -d "$ANDROID_HOME/build-tools/36.0.0"
+
+          echo "Android API 36: PASS"
           echo "Build Tools 36.0.0: PASS"
 
       # ============================================================
-      # 8. EXTRACT FINAL RKMS SOURCE ZIP
+      # 7. FIND FINAL SOURCE ZIP
       # ============================================================
-      - name: Extract RKMS source ZIP
+      - name: Find final RKMS source ZIP
         shell: bash
         run: |
-          ZIP="RKMS_CONNECT_FINAL_RULES_FIXED_2026-09-17.zip"
+          ZIP="RKMS_CONNECT_FINAL_AUDITED_SIGNED_LOGO_FIXED_2026-09-17_ROOT.zip"
 
           if [ ! -f "$ZIP" ]; then
-            echo "ERROR: Final source ZIP not found."
+            ZIP="RKMS_CONNECT_FINAL_RULES_FIXED_2026-09-17.zip"
+          fi
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: Final RKMS source ZIP not found."
+            echo
+            echo "Repository files:"
             ls -lah
             exit 1
           fi
 
+          echo "RKMS_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+          echo "Using:"
+          echo "$ZIP"
+
+      # ============================================================
+      # 8. EXTRACT SOURCE
+      # ============================================================
+      - name: Extract RKMS source
+        shell: bash
+        run: |
           rm -rf rkms-source
           mkdir -p rkms-source
 
-          unzip -q "$ZIP" -d rkms-source
+          unzip -q "$RKMS_ZIP" -d rkms-source
 
           APP_FILE=$(find rkms-source \
             -type f \
@@ -130,7 +131,7 @@ jobs:
             | head -n 1)
 
           if [ -z "$APP_FILE" ]; then
-            echo "ERROR: app.js not found inside source ZIP."
+            echo "ERROR: app.js not found inside ZIP."
             exit 1
           fi
 
@@ -138,11 +139,11 @@ jobs:
 
           echo "RKMS_SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
-          echo "RKMS source directory:"
+          echo "Source directory:"
           echo "$SOURCE_DIR"
 
       # ============================================================
-      # 9. VERIFY SOURCE
+      # 9. VERIFY SOURCE FILES
       # ============================================================
       - name: Verify RKMS source
         shell: bash
@@ -151,11 +152,12 @@ jobs:
 
           test -f app.js
           test -f index.html
+          test -f styles.css
           test -f package.json
           test -f capacitor.config.json
           test -f scripts/configure-android-16.sh
 
-          echo "RKMS source verification: PASS"
+          echo "Required source files: PASS"
 
       # ============================================================
       # 10. VERIFY APP.JS
@@ -170,7 +172,7 @@ jobs:
           echo "app.js syntax: PASS"
 
       # ============================================================
-      # 11. VERIFY PYTHON SCRIPTS
+      # 11. VERIFY PYTHON
       # ============================================================
       - name: Verify Python scripts
         shell: bash
@@ -181,10 +183,10 @@ jobs:
             python3 -m py_compile scripts/*.py
           fi
 
-          echo "Python verification: PASS"
+          echo "Python scripts: PASS"
 
       # ============================================================
-      # 12. INSTALL NPM DEPENDENCIES
+      # 12. INSTALL NPM
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -196,66 +198,47 @@ jobs:
           echo "npm install: PASS"
 
       # ============================================================
-      # 13. PREPARE WEB ASSETS / DIST
-      # IMPORTANT:
-      # Capacitor webDir = dist
+      # 13. BUILD WEB DIST
       # ============================================================
-      - name: Prepare web assets
+      - name: Build RKMS web assets
         shell: bash
         run: |
           cd "$RKMS_SOURCE_DIR"
 
-          echo "Preparing web assets..."
+          npm run build
 
-          # First try the project's own build command if available.
-          if node -e '
-            const p=require("./package.json");
-            process.exit(p.scripts && p.scripts.build ? 0 : 1);
-          '; then
-
-            echo "Build script found. Running npm run build..."
-            npm run build
-
-          else
-
-            echo "No npm build script found."
-            echo "Creating dist from the static RKMS web application..."
-
-            rm -rf dist
-            mkdir -p dist
-
-            # Main web application files
-            cp index.html dist/
-            cp app.js dist/
-            cp styles.css dist/ 2>/dev/null || true
-
-            # Copy common web asset directories when present.
-            for DIR in assets images img icons fonts public; do
-              if [ -d "$DIR" ]; then
-                cp -R "$DIR" "dist/$DIR"
-              fi
-            done
-
-          fi
-
-          # Final safety check.
           if [ ! -f "dist/index.html" ]; then
-            echo "ERROR: dist/index.html was not created."
-            echo
-            echo "Current directory:"
-            pwd
-            echo
-            echo "Files:"
-            find . -maxdepth 2 -type f | head -n 100
+            echo "ERROR: dist/index.html missing."
             exit 1
           fi
 
-          echo "Web assets ready."
-          echo "dist contents:"
-          find dist -maxdepth 2 -type f -print
+          echo "dist/index.html: PASS"
 
       # ============================================================
-      # 14. ADD CAPACITOR ANDROID
+      # 14. VERIFY ORIGINAL RKMS LOGO
+      # ============================================================
+      - name: Verify original RKMS launcher logo
+        shell: bash
+        run: |
+          cd "$RKMS_SOURCE_DIR"
+
+          test -f \
+            "assets/rkms-launcher-original-transparent.png"
+
+          test -d "android_launcher_icons"
+
+          for D in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            test -f \
+              "android_launcher_icons/mipmap-$D/ic_launcher.png"
+
+            test -f \
+              "android_launcher_icons/mipmap-$D/ic_launcher_round.png"
+          done
+
+          echo "Original RKMS launcher icon source: PASS"
+
+      # ============================================================
+      # 15. ADD CAPACITOR ANDROID
       # ============================================================
       - name: Add Capacitor Android
         shell: bash
@@ -264,8 +247,6 @@ jobs:
 
           if [ ! -d "android" ]; then
             npx cap add android
-          else
-            echo "Android project already exists."
           fi
 
           test -d android
@@ -273,24 +254,21 @@ jobs:
           echo "Capacitor Android project: PASS"
 
       # ============================================================
-      # 15. CAPACITOR SYNC
+      # 16. CAPACITOR SYNC
       # ============================================================
       - name: Capacitor sync
         shell: bash
         run: |
           cd "$RKMS_SOURCE_DIR"
 
-          if [ ! -f "dist/index.html" ]; then
-            echo "ERROR: dist/index.html missing before Capacitor sync."
-            exit 1
-          fi
+          test -f dist/index.html
 
           npx cap sync android
 
           echo "Capacitor sync: PASS"
 
       # ============================================================
-      # 16. CONFIGURE RKMS ANDROID 16
+      # 17. CONFIGURE ANDROID 16
       # ============================================================
       - name: Configure RKMS Android 16
         shell: bash
@@ -300,46 +278,101 @@ jobs:
           test -f android/variables.gradle
 
           chmod +x scripts/configure-android-16.sh
+
           ./scripts/configure-android-16.sh
 
           echo "RKMS Android 16 configuration: PASS"
 
       # ============================================================
-      # 17. ENFORCE ANDROID API 36
+      # 18. FORCE API 36
       # ============================================================
-      - name: Enforce Android API 36
+      - name: Verify Android API 36 configuration
         shell: bash
         run: |
           cd "$RKMS_SOURCE_DIR"
 
-          if [ -f "android/variables.gradle" ]; then
+          grep -E \
+            "compileSdkVersion|targetSdkVersion" \
+            android/variables.gradle || true
 
-            sed -i \
-              -E 's/compileSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/compileSdkVersion = 36/g' \
-              android/variables.gradle
+          grep -E \
+            "com.android.tools.build:gradle" \
+            android/build.gradle || true
 
-            sed -i \
-              -E 's/targetSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/targetSdkVersion = 36/g' \
-              android/variables.gradle
-
-          fi
-
-          if [ -f "android/app/build.gradle" ]; then
-
-            sed -i \
-              -E 's/compileSdk[[:space:]]+[0-9]+/compileSdk 36/g' \
-              android/app/build.gradle
-
-            sed -i \
-              -E 's/targetSdk[[:space:]]+[0-9]+/targetSdk 36/g' \
-              android/app/build.gradle
-
-          fi
-
-          echo "Android API 36 enforced."
+          grep -E \
+            "distributionUrl" \
+            android/gradle/wrapper/gradle-wrapper.properties || true
 
       # ============================================================
-      # 18. CONFIGURE GRADLE 8.11.1
+      # 19. INSTALL ORIGINAL RKMS LAUNCHER ICONS
+      # ============================================================
+      - name: Install original RKMS launcher icons
+        shell: bash
+        run: |
+          cd "$RKMS_SOURCE_DIR"
+
+          RES="android/app/src/main/res"
+
+          mkdir -p "$RES"
+
+          # Remove Capacitor generated adaptive launcher icons.
+          rm -rf "$RES/mipmap-anydpi-v26"
+          rm -rf "$RES/mipmap-anydpi"
+
+          # Remove generated launcher raster folders.
+          rm -rf "$RES"/mipmap-mdpi
+          rm -rf "$RES"/mipmap-hdpi
+          rm -rf "$RES"/mipmap-xhdpi
+          rm -rf "$RES"/mipmap-xxhdpi
+          rm -rf "$RES"/mipmap-xxxhdpi
+
+          # Copy the ORIGINAL RKMS icons exactly.
+          cp -R android_launcher_icons/mipmap-mdpi \
+            "$RES/"
+
+          cp -R android_launcher_icons/mipmap-hdpi \
+            "$RES/"
+
+          cp -R android_launcher_icons/mipmap-xhdpi \
+            "$RES/"
+
+          cp -R android_launcher_icons/mipmap-xxhdpi \
+            "$RES/"
+
+          cp -R android_launcher_icons/mipmap-xxxhdpi \
+            "$RES/"
+
+          echo "Original RKMS launcher icons installed."
+
+      # ============================================================
+      # 20. VERIFY ICONS AFTER COPY
+      # ============================================================
+      - name: Verify launcher icons
+        shell: bash
+        run: |
+          cd "$RKMS_SOURCE_DIR"
+
+          for D in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+
+            cmp \
+              "android_launcher_icons/mipmap-$D/ic_launcher.png" \
+              "android/app/src/main/res/mipmap-$D/ic_launcher.png"
+
+            cmp \
+              "android_launcher_icons/mipmap-$D/ic_launcher_round.png" \
+              "android/app/src/main/res/mipmap-$D/ic_launcher_round.png"
+
+          done
+
+          if [ -d "android/app/src/main/res/mipmap-anydpi-v26" ]; then
+            echo "ERROR: Adaptive launcher icons still exist."
+            exit 1
+          fi
+
+          echo "Launcher icon byte-for-byte verification: PASS"
+
+      # ============================================================
+      # 21. CONFIGURE GRADLE
       # ============================================================
       - name: Configure Gradle 8.11.1
         shell: bash
@@ -348,31 +381,63 @@ jobs:
 
           test -f gradle/wrapper/gradle-wrapper.properties
 
-          sed -i \
-            's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-bin.zip#' \
+          grep -q \
+            "gradle-8.11.1-bin.zip" \
             gradle/wrapper/gradle-wrapper.properties
 
-          echo "Gradle 8.11.1 configured."
+          echo "Gradle 8.11.1: PASS"
 
       # ============================================================
-      # 19. FINAL ANDROID PROJECT CHECK
+      # 22. VERIFY SIGNING SECRETS
       # ============================================================
-      - name: Verify Android project
+      - name: Verify release signing secrets
         shell: bash
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
         run: |
-          cd "$RKMS_SOURCE_DIR"
+          if [ -z "$RKMS_KEYSTORE_BASE64" ]; then
+            echo "ERROR: RKMS_KEYSTORE_BASE64 secret is missing."
+            exit 1
+          fi
 
-          test -f android/gradlew
-          test -d android/app
-          test -f android/variables.gradle
-          test -f dist/index.html
+          if [ -z "$RKMS_KEYSTORE_PASSWORD" ]; then
+            echo "ERROR: RKMS_KEYSTORE_PASSWORD secret is missing."
+            exit 1
+          fi
 
-          echo "Final Android project verification: PASS"
+          if [ -z "$RKMS_KEY_ALIAS" ]; then
+            echo "ERROR: RKMS_KEY_ALIAS secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$RKMS_KEY_PASSWORD" ]; then
+            echo "ERROR: RKMS_KEY_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          echo "Release signing secrets: PASS"
 
       # ============================================================
-      # 20. BUILD RELEASE APK
+      # 23. DECODE KEYSTORE
       # ============================================================
-      - name: Build Release APK
+      - name: Prepare signing keystore
+        shell: bash
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+        run: |
+          echo "$RKMS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/rkms-release.keystore"
+
+          test -s "$RUNNER_TEMP/rkms-release.keystore"
+
+          echo "Signing keystore prepared."
+
+      # ============================================================
+      # 24. BUILD UNSIGNED APK
+      # ============================================================
+      - name: Build Android Release
         shell: bash
         run: |
           cd "$RKMS_SOURCE_DIR/android"
@@ -384,36 +449,9 @@ jobs:
             --stacktrace
 
       # ============================================================
-      # 21. LOCATE APK
+      # 25. FIND UNSIGNED APK
       # ============================================================
-      - name: Locate Release APK
-        shell: bash
-        run: |
-          cd "$RKMS_SOURCE_DIR"
-
-          APK_DIR="android/app/build/outputs/apk/release"
-
-          find "$APK_DIR" \
-            -type f \
-            -name "*.apk" \
-            -print
-
-          APK_COUNT=$(find "$APK_DIR" \
-            -type f \
-            -name "*.apk" \
-            | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: No APK generated."
-            exit 1
-          fi
-
-          echo "APK generated: PASS"
-
-      # ============================================================
-      # 22. SHA256
-      # ============================================================
-      - name: Generate SHA256
+      - name: Locate built APK
         shell: bash
         run: |
           cd "$RKMS_SOURCE_DIR"
@@ -424,41 +462,134 @@ jobs:
             | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK not found."
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          sha256sum "$APK" \
-            | tee "$GITHUB_WORKSPACE/RKMS_ANDROID16_API36_SHA256.txt"
+          echo "UNSIGNED_APK=$APK" >> "$GITHUB_ENV"
+
+          echo "Built APK:"
+          echo "$APK"
 
       # ============================================================
-      # 23. PREPARE RELEASE
+      # 26. ZIPALIGN
       # ============================================================
-      - name: Prepare release files
+      - name: Zipalign APK
         shell: bash
         run: |
           mkdir -p "$GITHUB_WORKSPACE/release"
 
-          APK=$(find "$RKMS_SOURCE_DIR/android/app/build/outputs/apk/release" \
-            -type f \
-            -name "*.apk" \
-            | head -n 1)
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" \
+            -p \
+            -f \
+            4 \
+            "$RKMS_SOURCE_DIR/$UNSIGNED_APK" \
+            "$GITHUB_WORKSPACE/release/RKMS-aligned.apk"
 
-          cp "$APK" \
+          test -f "$GITHUB_WORKSPACE/release/RKMS-aligned.apk"
+
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" \
+            -c \
+            -P 4 \
+            -v 4 \
+            "$GITHUB_WORKSPACE/release/RKMS-aligned.apk"
+
+      # ============================================================
+      # 27. SIGN APK
+      # ============================================================
+      - name: Sign Release APK
+        shell: bash
+        env:
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+            --ks "$RUNNER_TEMP/rkms-release.keystore" \
+            --ks-pass env:RKMS_KEYSTORE_PASSWORD \
+            --ks-key-alias "$RKMS_KEY_ALIAS" \
+            --key-pass env:RKMS_KEY_PASSWORD \
+            --out "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk" \
+            "$GITHUB_WORKSPACE/release/RKMS-aligned.apk"
+
+          test -f \
             "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
 
-          cp "$GITHUB_WORKSPACE/RKMS_ANDROID16_API36_SHA256.txt" \
-            "$GITHUB_WORKSPACE/release/"
-
-          ls -lah "$GITHUB_WORKSPACE/release"
+          echo "APK signing: PASS"
 
       # ============================================================
-      # 24. UPLOAD APK
+      # 28. VERIFY SIGNATURE
       # ============================================================
-      - name: Upload Release APK
+      - name: Verify signed APK
+        shell: bash
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
+            --verbose \
+            --print-certs \
+            "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
+          echo "Signed APK verification: PASS"
+
+      # ============================================================
+      # 29. VERIFY APK IS NOT UNSIGNED
+      # ============================================================
+      - name: Verify final APK package
+        shell: bash
+        run: |
+          FINAL_APK="$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
+          if [[ "$FINAL_APK" == *"unsigned"* ]]; then
+            echo "ERROR: Unsigned APK detected."
+            exit 1
+          fi
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
+            "$FINAL_APK"
+
+          echo "Final APK signature: PASS"
+
+      # ============================================================
+      # 30. GENERATE SHA256
+      # ============================================================
+      - name: Generate SHA256
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE/release"
+
+          sha256sum \
+            RKMS_CONNECT_ANDROID16_API36_RELEASE.apk \
+            | tee RKMS_ANDROID16_API36_SHA256.txt
+
+      # ============================================================
+      # 31. FINAL RELEASE CHECK
+      # ============================================================
+      - name: Final release verification
+        shell: bash
+        run: |
+          APK="$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
+          test -f "$APK"
+          test -s "$APK"
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"
+
+          echo
+          echo "=============================================="
+          echo " RKMS FINAL APK VERIFICATION: PASS"
+          echo "=============================================="
+          echo
+          ls -lh "$APK"
+          echo
+
+      # ============================================================
+      # 32. UPLOAD ONLY FINAL SIGNED APK
+      # ============================================================
+      - name: Upload final signed APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS_CONNECT_ANDROID16_API36_RELEASE
-          path: release/*
+          path: |
+            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
+            release/RKMS_ANDROID16_API36_SHA256.txt
           if-no-files-found: error
           retention-days: 90
