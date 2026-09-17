@@ -39,7 +39,7 @@ jobs:
           java-version: 17
 
       # ============================================================
-      # 4. ANDROID SDK PATH
+      # 4. ANDROID SDK
       # ============================================================
       - name: Configure Android SDK
         shell: bash
@@ -50,18 +50,22 @@ jobs:
           echo "/usr/local/lib/android/sdk/platform-tools" >> "$GITHUB_PATH"
           echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-          echo "Android SDK path configured."
+          echo "Android SDK configured."
 
-          if [ -x "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager" ]; then
-            echo "sdkmanager found."
-            /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --version
-          else
+          if [ ! -d "/usr/local/lib/android/sdk" ]; then
+            echo "ERROR: Android SDK not found."
+            exit 1
+          fi
+
+          if [ ! -x "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager" ]; then
             echo "ERROR: sdkmanager not found."
             exit 1
           fi
 
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --version
+
       # ============================================================
-      # 5. ACCEPT ANDROID LICENSES
+      # 5. ANDROID LICENSES
       # ============================================================
       - name: Accept Android SDK licenses
         shell: bash
@@ -70,7 +74,7 @@ jobs:
             --sdk_root=/usr/local/lib/android/sdk \
             --licenses || true
 
-          echo "Android SDK licenses step completed."
+          echo "Android licenses completed."
 
       # ============================================================
       # 6. INSTALL ANDROID 16 / API 36
@@ -84,10 +88,10 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0"
 
-          echo "Android 16 / API 36 packages installed."
+          echo "Android 16 / API 36 installed."
 
       # ============================================================
-      # 7. VERIFY BUILD ENVIRONMENT
+      # 7. VERIFY ENVIRONMENT
       # ============================================================
       - name: Verify build environment
         shell: bash
@@ -99,20 +103,26 @@ jobs:
           echo "===== JAVA ====="
           java -version
 
-          echo "===== ANDROID SDK ====="
-          echo "$ANDROID_HOME"
-          echo "$ANDROID_SDK_ROOT"
+          echo "===== ANDROID API 36 ====="
 
-          echo "===== API 36 ====="
-          test -d "$ANDROID_HOME/platforms/android-36"
+          if [ ! -d "$ANDROID_HOME/platforms/android-36" ]; then
+            echo "ERROR: Android API 36 missing."
+            exit 1
+          fi
+
           echo "Android API 36: PASS"
 
-          echo "===== BUILD TOOLS ====="
-          test -d "$ANDROID_HOME/build-tools/36.0.0"
+          echo "===== BUILD TOOLS 36.0.0 ====="
+
+          if [ ! -d "$ANDROID_HOME/build-tools/36.0.0" ]; then
+            echo "ERROR: Build Tools 36.0.0 missing."
+            exit 1
+          fi
+
           echo "Build Tools 36.0.0: PASS"
 
       # ============================================================
-      # 8. FIND AND EXTRACT FINAL RKMS SOURCE ZIP
+      # 8. EXTRACT FINAL RKMS SOURCE ZIP
       # ============================================================
       - name: Extract RKMS source ZIP
         shell: bash
@@ -120,10 +130,9 @@ jobs:
           ZIP="RKMS_CONNECT_FINAL_RULES_FIXED_2026-09-17.zip"
 
           if [ ! -f "$ZIP" ]; then
-            echo "ERROR: Final source ZIP not found:"
-            echo "$ZIP"
+            echo "ERROR: Final RKMS source ZIP not found."
             echo
-            echo "Repository files:"
+            echo "Repository contents:"
             ls -lah
             exit 1
           fi
@@ -135,11 +144,13 @@ jobs:
 
           echo "Source ZIP extracted."
 
-          APP_FILE=$(find rkms-source -type f -name "app.js" | head -n 1)
+          APP_FILE=$(find rkms-source \
+            -type f \
+            -name "app.js" \
+            | head -n 1)
 
           if [ -z "$APP_FILE" ]; then
-            echo "ERROR: app.js was not found inside source ZIP."
-            find rkms-source -maxdepth 4 -type f | head -n 100
+            echo "ERROR: app.js not found inside ZIP."
             exit 1
           fi
 
@@ -147,11 +158,11 @@ jobs:
 
           echo "RKMS_SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
-          echo "RKMS source directory:"
+          echo "RKMS source:"
           echo "$SOURCE_DIR"
 
       # ============================================================
-      # 9. VERIFY REQUIRED FILES
+      # 9. VERIFY SOURCE
       # ============================================================
       - name: Verify RKMS source
         shell: bash
@@ -164,7 +175,7 @@ jobs:
           test -f capacitor.config.json
           test -f scripts/configure-android-16.sh
 
-          echo "Required source files: PASS"
+          echo "RKMS source verification: PASS"
 
       # ============================================================
       # 10. VERIFY APP.JS
@@ -179,7 +190,7 @@ jobs:
           echo "app.js syntax: PASS"
 
       # ============================================================
-      # 11. VERIFY PYTHON SCRIPTS
+      # 11. VERIFY PYTHON
       # ============================================================
       - name: Verify Python scripts
         shell: bash
@@ -190,11 +201,10 @@ jobs:
             python3 -m py_compile scripts/*.py
           fi
 
-          echo "Python scripts: PASS"
+          echo "Python verification: PASS"
 
       # ============================================================
       # 12. INSTALL NPM DEPENDENCIES
-      # package-lock.json NOT REQUIRED
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -206,34 +216,30 @@ jobs:
           echo "npm install: PASS"
 
       # ============================================================
-      # 13. CONFIGURE RKMS ANDROID 16
-      # ============================================================
-      - name: Configure RKMS Android 16
-        shell: bash
-        run: |
-          cd "$RKMS_SOURCE_DIR"
-
-          chmod +x scripts/configure-android-16.sh
-          ./scripts/configure-android-16.sh
-
-          echo "RKMS Android 16 configuration: PASS"
-
-      # ============================================================
-      # 14. ADD CAPACITOR ANDROID
+      # 13. ADD CAPACITOR ANDROID
+      # IMPORTANT:
+      # This MUST happen before configure-android-16.sh
       # ============================================================
       - name: Add Capacitor Android
         shell: bash
         run: |
           cd "$RKMS_SOURCE_DIR"
 
-          if [ ! -d "android" ]; then
-            npx cap add android
-          else
+          if [ -d "android" ]; then
             echo "Android project already exists."
+          else
+            npx cap add android
           fi
 
+          if [ ! -d "android" ]; then
+            echo "ERROR: Android project was not created."
+            exit 1
+          fi
+
+          echo "Capacitor Android project: PASS"
+
       # ============================================================
-      # 15. CAPACITOR SYNC
+      # 14. CAPACITOR SYNC
       # ============================================================
       - name: Capacitor sync
         shell: bash
@@ -245,6 +251,26 @@ jobs:
           echo "Capacitor sync: PASS"
 
       # ============================================================
+      # 15. CONFIGURE RKMS ANDROID 16
+      # NOW android/variables.gradle EXISTS
+      # ============================================================
+      - name: Configure RKMS Android 16
+        shell: bash
+        run: |
+          cd "$RKMS_SOURCE_DIR"
+
+          if [ ! -f "android/variables.gradle" ]; then
+            echo "ERROR: android/variables.gradle missing after Capacitor generation."
+            exit 1
+          fi
+
+          chmod +x scripts/configure-android-16.sh
+
+          ./scripts/configure-android-16.sh
+
+          echo "RKMS Android 16 configuration: PASS"
+
+      # ============================================================
       # 16. ENFORCE API 36
       # ============================================================
       - name: Enforce Android API 36
@@ -253,6 +279,7 @@ jobs:
           cd "$RKMS_SOURCE_DIR"
 
           if [ -f "android/variables.gradle" ]; then
+
             sed -i \
               -E 's/compileSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/compileSdkVersion = 36/g' \
               android/variables.gradle
@@ -260,9 +287,19 @@ jobs:
             sed -i \
               -E 's/targetSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/targetSdkVersion = 36/g' \
               android/variables.gradle
+
+            sed -i \
+              -E 's/compileSdkVersion[[:space:]]+[0-9]+/compileSdkVersion 36/g' \
+              android/variables.gradle
+
+            sed -i \
+              -E 's/targetSdkVersion[[:space:]]+[0-9]+/targetSdkVersion 36/g' \
+              android/variables.gradle
+
           fi
 
           if [ -f "android/app/build.gradle" ]; then
+
             sed -i \
               -E 's/compileSdk[[:space:]]+[0-9]+/compileSdk 36/g' \
               android/app/build.gradle
@@ -270,6 +307,7 @@ jobs:
             sed -i \
               -E 's/targetSdk[[:space:]]+[0-9]+/targetSdk 36/g' \
               android/app/build.gradle
+
           fi
 
           echo "Android API 36 enforced."
@@ -294,7 +332,7 @@ jobs:
           echo "Gradle 8.11.1 configured."
 
       # ============================================================
-      # 18. VERIFY ANDROID PROJECT
+      # 18. FINAL ANDROID PROJECT CHECK
       # ============================================================
       - name: Verify Android project
         shell: bash
@@ -303,8 +341,9 @@ jobs:
 
           test -f android/gradlew
           test -d android/app
+          test -f android/variables.gradle
 
-          echo "Android project: PASS"
+          echo "Android project verification: PASS"
 
       # ============================================================
       # 19. BUILD RELEASE APK
@@ -337,17 +376,18 @@ jobs:
 
           APK_COUNT=$(find "$APK_DIR" \
             -type f \
-            -name "*.apk" | wc -l)
+            -name "*.apk" \
+            | wc -l)
 
           if [ "$APK_COUNT" -eq 0 ]; then
             echo "ERROR: No APK generated."
             exit 1
           fi
 
-          echo "APK generated successfully."
+          echo "APK generated: PASS"
 
       # ============================================================
-      # 21. GENERATE SHA256
+      # 21. SHA256
       # ============================================================
       - name: Generate SHA256
         shell: bash
@@ -356,7 +396,13 @@ jobs:
 
           APK=$(find android/app/build/outputs/apk/release \
             -type f \
-            -name "*.apk" | head -n 1)
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
 
           sha256sum "$APK" \
             | tee "$GITHUB_WORKSPACE/RKMS_ANDROID16_API36_SHA256.txt"
@@ -371,7 +417,8 @@ jobs:
 
           APK=$(find "$RKMS_SOURCE_DIR/android/app/build/outputs/apk/release" \
             -type f \
-            -name "*.apk" | head -n 1)
+            -name "*.apk" \
+            | head -n 1)
 
           cp "$APK" \
             "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
@@ -379,7 +426,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/RKMS_ANDROID16_API36_SHA256.txt" \
             "$GITHUB_WORKSPACE/release/"
 
-          echo "Release files:"
+          echo "Release prepared:"
           ls -lah "$GITHUB_WORKSPACE/release"
 
       # ============================================================
