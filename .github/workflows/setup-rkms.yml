@@ -69,7 +69,6 @@ jobs:
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: RKMS source ZIP not found."
             echo ""
-            echo "Available ZIP files:"
             find . \
               -maxdepth 1 \
               -type f \
@@ -104,7 +103,6 @@ jobs:
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
-          echo ""
           echo "SOURCE_DIR=$SOURCE_DIR"
           echo "RKMS source extraction: PASS"
 
@@ -348,8 +346,6 @@ jobs:
 
           if [ -z "$BRIDGE_FILE" ]; then
             echo "ERROR: RKMSNativeBridge.java not found."
-            echo ""
-            echo "Available Java files:"
             find android/app/src/main/java \
               -type f \
               -name '*.java' \
@@ -368,12 +364,8 @@ jobs:
           path = Path(sys.argv[1])
           s = path.read_text()
 
-          # Repair ONLY literal \n sequences which occur immediately
-          # before @JavascriptInterface.
-          #
-          # This deliberately does not replace every \n in the file,
-          # because valid Java string escape sequences must remain intact.
-
+          # केवल broken literal \n जो @JavascriptInterface
+          # से पहले declaration को तोड़ रहा है उसे repair करें.
           pattern = r'\\n(?=\s*@JavascriptInterface\b)'
 
           matches = list(re.finditer(pattern, s))
@@ -392,9 +384,6 @@ jobs:
                   "before @JavascriptInterface."
               )
           PY
-
-          echo ""
-          echo "Checking bridge for remaining broken declarations..."
 
           if grep -Fq '\n @JavascriptInterface' "$BRIDGE_FILE"; then
             echo "ERROR: Literal \\n remains before @JavascriptInterface."
@@ -415,9 +404,7 @@ jobs:
           sed -n '1,180p' "$BRIDGE_FILE"
 
           echo ""
-          echo "============================================================"
-          echo "RKMS NATIVE BRIDGE REPAIR: PASS"
-          echo "============================================================"
+          echo "RKMS native bridge repair: PASS"
 
 
       # ============================================================
@@ -431,27 +418,12 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          echo "============================================================"
-          echo "ANDROID MIN SDK 23"
-          echo "============================================================"
-
-          test -d android
-          test -f android/app/build.gradle
-
           VARIABLES_FILE="android/variables.gradle"
 
           if [ ! -f "$VARIABLES_FILE" ]; then
             echo "ERROR: android/variables.gradle not found."
-            find android -maxdepth 3 -type f | sort
             exit 1
           fi
-
-          echo ""
-          echo "Current minSdk configuration:"
-          grep -n -E \
-            'minSdkVersion|minSdk' \
-            "$VARIABLES_FILE" \
-            || true
 
           python3 - <<'PY'
           from pathlib import Path
@@ -462,52 +434,27 @@ jobs:
 
           pattern = r'(\bminSdkVersion\s*=\s*)\d+'
 
-          if re.search(pattern, s):
-              s = re.sub(
-                  pattern,
-                  r'\g<1>23',
-                  s
-              )
-          else:
+          if not re.search(pattern, s):
               raise SystemExit(
-                  "ERROR: minSdkVersion declaration "
-                  "not found in android/variables.gradle."
+                  "ERROR: minSdkVersion declaration not found."
               )
+
+          s = re.sub(
+              pattern,
+              r'\g<1>23',
+              s
+          )
 
           path.write_text(s)
 
-          print(
-              "android/variables.gradle "
-              "minSdkVersion changed/confirmed as 23."
-          )
+          print("minSdkVersion confirmed as 23.")
           PY
 
-          echo ""
-          echo "Final variables.gradle:"
-          grep -n -E \
-            'minSdkVersion|minSdk' \
+          grep -Eq \
+            'minSdkVersion[[:space:]]*=[[:space:]]*23' \
             android/variables.gradle
 
-          if grep -Eq \
-            'minSdkVersion[[:space:]]*=[[:space:]]*23' \
-            android/variables.gradle; then
-
-            echo ""
-            echo "Android minSdk 23: PASS"
-
-          else
-
-            echo ""
-            echo "ERROR: minSdkVersion 23 was not applied."
-            cat android/variables.gradle
-            exit 1
-
-          fi
-
-          echo ""
-          echo "============================================================"
-          echo "ANDROID MIN SDK 23: PASS"
-          echo "============================================================"
+          echo "Android minSdk 23: PASS"
 
 
       # ============================================================
@@ -521,10 +468,6 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          echo "============================================================"
-          echo "FIREBASE CONFIGURATION FILE"
-          echo "============================================================"
-
           if [ ! -f google-services.json ]; then
             echo "ERROR: Root google-services.json missing."
             exit 1
@@ -532,9 +475,10 @@ jobs:
 
           mkdir -p android/app
 
-          cp -f google-services.json android/app/google-services.json
+          cp -f \
+            google-services.json \
+            android/app/google-services.json
 
-          test -f android/app/google-services.json
           test -s android/app/google-services.json
 
           echo "Root google-services.json: PRESENT"
@@ -543,7 +487,7 @@ jobs:
 
 
       # ============================================================
-      # 17. FIREBASE SDK DEPENDENCY
+      # 17. FIREBASE SDK
       # ============================================================
 
       - name: Force add Firebase SDK
@@ -611,10 +555,12 @@ jobs:
 
 
       # ============================================================
-      # 18. FORCE FIREBASE INITIALIZATION
+      # 18. VERIFY FIREBASE MAIN ACTIVITY
+      # IMPORTANT:
+      # DO NOT CREATE ANOTHER onCreate()
       # ============================================================
 
-      - name: Force Firebase initialization into MainActivity
+      - name: Verify Firebase MainActivity
         shell: bash
         run: |
           set -e
@@ -622,7 +568,7 @@ jobs:
           cd "$SOURCE_DIR"
 
           echo "============================================================"
-          echo "FORCE FIREBASE INITIALIZATION"
+          echo "VERIFY FIREBASE MAIN ACTIVITY"
           echo "============================================================"
 
           MAIN_ACTIVITY="$(find android/app/src/main/java \
@@ -639,313 +585,81 @@ jobs:
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             echo "ERROR: MainActivity.java/MainActivity.kt not found."
-            echo ""
-            echo "Available Activity files:"
-            find android/app/src/main/java \
-              -type f \
-              \( -name '*.java' -o -name '*.kt' \) \
-              | sort
             exit 1
           fi
 
           echo "MainActivity:"
           echo "$MAIN_ACTIVITY"
 
-          python3 - "$MAIN_ACTIVITY" <<'PY'
-          from pathlib import Path
-          import sys
-          import re
-
-          path = Path(sys.argv[1])
-          s = path.read_text()
-
-          # ========================================================
-          # JAVA
-          # ========================================================
-
-          if path.suffix == ".java":
-
-              # ----------------------------------------------------
-              # Firebase import
-              # ----------------------------------------------------
-
-              if "import com.google.firebase.FirebaseApp;" not in s:
-
-                  package_match = re.search(
-                      r'^(package\s+[^;]+;)',
-                      s,
-                      flags=re.MULTILINE
-                  )
-
-                  if not package_match:
-                      raise SystemExit(
-                          "ERROR: Java package declaration not found."
-                      )
-
-                  pos = package_match.end()
-
-                  s = (
-                      s[:pos]
-                      + "\n\nimport com.google.firebase.FirebaseApp;"
-                      + s[pos:]
-                  )
-
-              # ----------------------------------------------------
-              # Firebase initialization
-              # ----------------------------------------------------
-
-              if "FirebaseApp.initializeApp(this)" in s:
-
-                  print(
-                      "FirebaseApp.initializeApp(this) "
-                      "already present."
-                  )
-
-              else:
-
-                  # IMPORTANT:
-                  # Detect ANY existing Java onCreate(Bundle).
-                  # This includes public/protected/private and
-                  # package-private declarations.
-                  oncreate = re.search(
-                      r'(?m)^[ \t]*(?:(?:public|protected|private)\s+)?'
-                      r'(?:static\s+)?(?:final\s+)?void\s+onCreate\s*'
-                      r'\(\s*Bundle\s+\w+\s*\)\s*\{',
-                      s
-                  )
-
-                  if oncreate:
-
-                      insert_at = oncreate.end()
-
-                      s = (
-                          s[:insert_at]
-                          + "\n        FirebaseApp.initializeApp(this);"
-                          + s[insert_at:]
-                      )
-
-                      print(
-                          "FirebaseApp.initializeApp(this) "
-                          "inserted into EXISTING onCreate()."
-                      )
-
-                  else:
-
-                      # ------------------------------------------------
-                      # No existing onCreate -> create exactly ONE.
-                      # ------------------------------------------------
-
-                      if "import android.os.Bundle;" not in s:
-
-                          package_match = re.search(
-                              r'^(package\s+[^;]+;)',
-                              s,
-                              flags=re.MULTILINE
-                          )
-
-                          if not package_match:
-                              raise SystemExit(
-                                  "ERROR: Java package declaration "
-                                  "not found."
-                              )
-
-                          pos = package_match.end()
-
-                          s = (
-                              s[:pos]
-                              + "\n\nimport android.os.Bundle;"
-                              + s[pos:]
-                          )
-
-                      method = """
-              @Override
-              public void onCreate(Bundle savedInstanceState) {
-                  FirebaseApp.initializeApp(this);
-                  super.onCreate(savedInstanceState);
-              }
-
-          """
-
-                      last = s.rfind("}")
-
-                      if last == -1:
-                          raise SystemExit(
-                              "ERROR: Java class closing brace not found."
-                          )
-
-                      s = s[:last] + method + s[last:]
-
-                      print(
-                          "No existing onCreate() found."
-                      )
-
-                      print(
-                          "Created ONE new onCreate() with "
-                          "Firebase initialization."
-                      )
-
-              path.write_text(s)
-
-          # ========================================================
-          # KOTLIN
-          # ========================================================
-
-          else:
-
-              # ----------------------------------------------------
-              # Firebase import
-              # ----------------------------------------------------
-
-              if "import com.google.firebase.FirebaseApp" not in s:
-
-                  package_match = re.search(
-                      r'^(package\s+[^\n]+)',
-                      s,
-                      flags=re.MULTILINE
-                  )
-
-                  if not package_match:
-                      raise SystemExit(
-                          "ERROR: Kotlin package declaration not found."
-                      )
-
-                  pos = package_match.end()
-
-                  s = (
-                      s[:pos]
-                      + "\nimport com.google.firebase.FirebaseApp"
-                      + s[pos:]
-                  )
-
-              # ----------------------------------------------------
-              # Firebase initialization
-              # ----------------------------------------------------
-
-              if "FirebaseApp.initializeApp(this)" in s:
-
-                  print(
-                      "FirebaseApp.initializeApp(this) "
-                      "already present."
-                  )
-
-              else:
-
-                  # Detect existing Kotlin onCreate().
-                  oncreate = re.search(
-                      r'(?m)^[ \t]*(?:override\s+)?fun\s+onCreate\s*'
-                      r'\(\s*\w+\s*:\s*Bundle\s*\?\s*\)\s*\{',
-                      s
-                  )
-
-                  if oncreate:
-
-                      insert_at = oncreate.end()
-
-                      s = (
-                          s[:insert_at]
-                          + "\n        FirebaseApp.initializeApp(this)"
-                          + s[insert_at:]
-                      )
-
-                      print(
-                          "FirebaseApp.initializeApp(this) "
-                          "inserted into EXISTING Kotlin onCreate()."
-                      )
-
-                  else:
-
-                      if "import android.os.Bundle" not in s:
-
-                          package_match = re.search(
-                              r'^(package\s+[^\n]+)',
-                              s,
-                              flags=re.MULTILINE
-                          )
-
-                          if not package_match:
-                              raise SystemExit(
-                                  "ERROR: Kotlin package declaration "
-                                  "not found."
-                              )
-
-                          pos = package_match.end()
-
-                          s = (
-                              s[:pos]
-                              + "\nimport android.os.Bundle"
-                              + s[pos:]
-                          )
-
-                      method = """
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  FirebaseApp.initializeApp(this)
-                  super.onCreate(savedInstanceState)
-              }
-
-          """
-
-                      last = s.rfind("}")
-
-                      if last == -1:
-                          raise SystemExit(
-                              "ERROR: Kotlin class closing brace not found."
-                          )
-
-                      s = s[:last] + method + s[last:]
-
-                      print(
-                          "No existing Kotlin onCreate() found."
-                      )
-
-                      print(
-                          "Created ONE new onCreate() with "
-                          "Firebase initialization."
-                      )
-
-              path.write_text(s)
-
-          print("Firebase MainActivity patch: PASS")
-          PY
-
-          echo ""
-          echo "============================================================"
-          echo "VERIFY FIREBASE INITIALIZATION"
-          echo "============================================================"
-
-          grep -n -F \
+          # --------------------------------------------------------
+          # Firebase initialization MUST already be supplied by
+          # setup-android-native.sh.
+          #
+          # We intentionally DO NOT inject another onCreate().
+          # --------------------------------------------------------
+
+          if ! grep -Fq \
             'FirebaseApp.initializeApp(this)' \
-            "$MAIN_ACTIVITY"
+            "$MAIN_ACTIVITY"; then
+
+            echo ""
+            echo "ERROR: FirebaseApp.initializeApp(this) missing."
+            echo ""
+            echo "MainActivity content:"
+            sed -n '1,180p' "$MAIN_ACTIVITY"
+            exit 1
+          fi
+
+          echo "FirebaseApp.initializeApp(this): PRESENT"
 
           # --------------------------------------------------------
-          # HARD CHECK:
-          # MainActivity must not contain duplicate Java
-          # onCreate(Bundle) declarations.
+          # Java duplicate onCreate check
           # --------------------------------------------------------
 
-          ONCREATE_COUNT="$(grep -E \
-            -c '^[[:space:]]*(public|protected|private)?[[:space:]]*(static[[:space:]]+)?(final[[:space:]]+)?void[[:space:]]+onCreate[[:space:]]*\([[:space:]]*Bundle[[:space:]]+' \
+          if [[ "$MAIN_ACTIVITY" == *.java ]]; then
+
+            ONCREATE_COUNT="$(grep -E \
+              -c '^[[:space:]]*(public|protected|private)?[[:space:]]*(static[[:space:]]+)?(final[[:space:]]+)?void[[:space:]]+onCreate[[:space:]]*\([[:space:]]*Bundle[[:space:]]+' \
+              "$MAIN_ACTIVITY" || true)"
+
+            echo "Java onCreate(Bundle) count: $ONCREATE_COUNT"
+
+            if [ "$ONCREATE_COUNT" -ne 1 ]; then
+              echo ""
+              echo "ERROR: MainActivity must contain exactly ONE onCreate(Bundle)."
+              echo ""
+              grep -n \
+                -E 'onCreate[[:space:]]*\([[:space:]]*Bundle' \
+                "$MAIN_ACTIVITY" \
+                || true
+              exit 1
+            fi
+
+          fi
+
+          # --------------------------------------------------------
+          # Exactly one Firebase initialization call
+          # --------------------------------------------------------
+
+          FIREBASE_INIT_COUNT="$(grep -F \
+            -c 'FirebaseApp.initializeApp(this)' \
             "$MAIN_ACTIVITY" || true)"
 
-          echo "Java onCreate(Bundle) count: $ONCREATE_COUNT"
+          echo "Firebase initialization count: $FIREBASE_INIT_COUNT"
 
-          if [ "$ONCREATE_COUNT" -gt 1 ]; then
+          if [ "$FIREBASE_INIT_COUNT" -ne 1 ]; then
             echo ""
-            echo "ERROR: Duplicate onCreate(Bundle) methods detected."
-            echo ""
-            grep -n -E \
-              'onCreate[[:space:]]*\([[:space:]]*Bundle' \
-              "$MAIN_ACTIVITY" \
-              || true
+            echo "ERROR: Firebase initialization must occur exactly once."
             exit 1
           fi
 
           echo ""
-          echo "Single onCreate(Bundle): PASS"
-          echo "Firebase initialization: PASS"
+          echo "MainActivity duplicate onCreate check: PASS"
+          echo "Firebase initialization check: PASS"
 
           echo ""
           echo "============================================================"
-          echo "FORCE FIREBASE INITIALIZATION: PASS"
+          echo "VERIFY FIREBASE MAIN ACTIVITY: PASS"
           echo "============================================================"
 
 
@@ -965,10 +679,7 @@ jobs:
           echo "============================================================"
 
           test -f google-services.json
-          echo "Root google-services.json: PRESENT"
-
           test -f android/app/google-services.json
-          echo "Android google-services.json: PRESENT"
 
           python3 - <<'PY'
           import json
@@ -1024,39 +735,32 @@ jobs:
               | head -1)"
           fi
 
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity not found."
-            exit 1
-          fi
+          test -n "$MAIN_ACTIVITY"
 
           grep -Fq \
             'FirebaseApp.initializeApp(this)' \
             "$MAIN_ACTIVITY"
 
-          echo "FirebaseApp.initializeApp(this): PASS"
-
           grep -Fq \
             'com.google.firebase:firebase-bom:34.19.0' \
             android/app/build.gradle
-
-          echo "Firebase BOM: PASS"
 
           grep -Fq \
             'com.google.firebase:firebase-messaging' \
             android/app/build.gradle
 
-          echo "Firebase Messaging: PASS"
-
           grep -R -Fq \
             'com.google.gms.google-services' \
             android
 
+          echo "Firebase JSON: PASS"
+          echo "Firebase initialization: PASS"
+          echo "Firebase BOM: PASS"
+          echo "Firebase Messaging: PASS"
           echo "Google Services plugin: PASS"
 
           echo ""
-          echo "============================================================"
           echo "FIREBASE CONFIGURATION: PASS"
-          echo "============================================================"
 
 
       # ============================================================
@@ -1611,11 +1315,39 @@ jobs:
             'com.google.gms.google-services' \
             android
 
+          # Java MainActivity duplicate protection
+          if [[ "$MAIN_ACTIVITY" == *.java ]]; then
+
+            ONCREATE_COUNT="$(grep -E \
+              -c '^[[:space:]]*(public|protected|private)?[[:space:]]*(static[[:space:]]+)?(final[[:space:]]+)?void[[:space:]]+onCreate[[:space:]]*\([[:space:]]*Bundle[[:space:]]+' \
+              "$MAIN_ACTIVITY" || true)"
+
+            echo "Final Java onCreate(Bundle) count: $ONCREATE_COUNT"
+
+            if [ "$ONCREATE_COUNT" -ne 1 ]; then
+              echo "ERROR: Duplicate/missing onCreate(Bundle)."
+              exit 1
+            fi
+
+          fi
+
+          FIREBASE_COUNT="$(grep -F \
+            -c 'FirebaseApp.initializeApp(this)' \
+            "$MAIN_ACTIVITY" || true)"
+
+          echo "Final Firebase initialization count: $FIREBASE_COUNT"
+
+          if [ "$FIREBASE_COUNT" -ne 1 ]; then
+            echo "ERROR: Firebase initialization count must be 1."
+            exit 1
+          fi
+
           echo "Firebase JSON: PASS"
           echo "Firebase initialization: PASS"
           echo "Firebase BOM: PASS"
           echo "Firebase Messaging: PASS"
           echo "Google Services plugin: PASS"
+          echo "MainActivity duplicate check: PASS"
 
           echo ""
           echo "FINAL FIREBASE PRE-BUILD CHECK: PASS"
@@ -1647,13 +1379,11 @@ jobs:
 
           if grep -Fq '\n @JavascriptInterface' "$BRIDGE_FILE"; then
             echo "ERROR: literal \\n remains before @JavascriptInterface."
-            grep -n -F '\n @JavascriptInterface' "$BRIDGE_FILE" || true
             exit 1
           fi
 
           if grep -Fq '\n@JavascriptInterface' "$BRIDGE_FILE"; then
             echo "ERROR: literal \\n remains before @JavascriptInterface."
-            grep -n -F '\n@JavascriptInterface' "$BRIDGE_FILE" || true
             exit 1
           fi
 
@@ -1700,9 +1430,6 @@ jobs:
 
           echo "Package org.rkms.connect: PASS"
 
-          echo ""
-          echo "Checking minSdk source..."
-
           if grep -Eq \
             'minSdkVersion[[:space:]]*=[[:space:]]*23' \
             android/variables.gradle; then
@@ -1712,20 +1439,17 @@ jobs:
           else
 
             echo "ERROR: Android minSdk 23 not found."
-            echo ""
             cat android/variables.gradle
             exit 1
 
           fi
 
           echo ""
-          echo "============================================================"
           echo "FINAL ANDROID CONFIGURATION: PASS"
-          echo "============================================================"
 
 
       # ============================================================
-      # 42. BUILD RELEASE AAB
+      # 42. BUILD SIGNED RELEASE AAB
       # ============================================================
 
       - name: Build signed Release AAB
