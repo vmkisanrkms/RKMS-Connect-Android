@@ -30,7 +30,7 @@ jobs:
 
 
       # ============================================================
-      # 2. LOCATE RKMS SOURCE ZIP
+      # 2. EXTRACT AND LOCATE RKMS SOURCE
       # ============================================================
 
       - name: Extract and locate RKMS source
@@ -49,19 +49,32 @@ jobs:
           fi
 
           if [ -z "$ZIP_FILE" ]; then
-            ZIP_FILE="$(find . -maxdepth 1 -type f \
-              -name '*FCM_CRASH_FIXED*.zip' | sort | tail -1)"
+            ZIP_FILE="$(find . \
+              -maxdepth 1 \
+              -type f \
+              -name '*FCM_CRASH_FIXED*.zip' \
+              | sort \
+              | tail -1)"
           fi
 
           if [ -z "$ZIP_FILE" ]; then
-            ZIP_FILE="$(find . -maxdepth 1 -type f \
-              -name 'RKMS_CONNECT_*.zip' | sort | tail -1)"
+            ZIP_FILE="$(find . \
+              -maxdepth 1 \
+              -type f \
+              -name 'RKMS_CONNECT_*.zip' \
+              | sort \
+              | tail -1)"
           fi
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: RKMS source ZIP not found."
             echo ""
-            find . -maxdepth 1 -type f -name '*.zip' -print
+            echo "Available ZIP files:"
+            find . \
+              -maxdepth 1 \
+              -type f \
+              -name '*.zip' \
+              -print
             exit 1
           fi
 
@@ -74,10 +87,12 @@ jobs:
           unzip -q "$ZIP_FILE" -d .rkms_build_src
 
           PACKAGE_JSON="$(find .rkms_build_src \
-            -type f -name 'package.json' | head -1)"
+            -type f \
+            -name 'package.json' \
+            | head -1)"
 
           if [ -z "$PACKAGE_JSON" ]; then
-            echo "ERROR: package.json not found."
+            echo "ERROR: package.json not found after extraction."
             exit 1
           fi
 
@@ -89,6 +104,7 @@ jobs:
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
+          echo ""
           echo "SOURCE_DIR=$SOURCE_DIR"
           echo "RKMS source extraction: PASS"
 
@@ -204,6 +220,10 @@ jobs:
         run: |
           set -e
 
+          echo "============================================================"
+          echo "ANDROID SDK SETUP"
+          echo "============================================================"
+
           SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -x "$SDKMANAGER" ]; then
@@ -239,6 +259,7 @@ jobs:
 
           echo "Android platform 36: PASS"
           echo "Android build-tools 36.0.0: PASS"
+          echo "Android API 36 verification: PASS"
 
 
       # ============================================================
@@ -262,7 +283,7 @@ jobs:
 
 
       # ============================================================
-      # 12. ANDROID 16 CONFIGURATION
+      # 12. ANDROID 16 / API 36
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -277,7 +298,7 @@ jobs:
             ./scripts/configure-android-16.sh
           else
             echo "WARNING: configure-android-16.sh missing."
-            echo "Applying API 36 configuration directly."
+            echo "Continuing with existing Android configuration."
           fi
 
           echo "Android 16 / API 36 configuration completed."
@@ -299,13 +320,14 @@ jobs:
             ./scripts/setup-android-native.sh
           else
             echo "WARNING: setup-android-native.sh missing."
+            echo "Continuing with existing native Android source."
           fi
 
           echo "RKMS native Android setup completed."
 
 
       # ============================================================
-      # 14. MIN SDK 23
+      # 14. FORCE MIN SDK 23
       # ============================================================
 
       - name: Force Android minSdk 23
@@ -326,8 +348,8 @@ jobs:
           from pathlib import Path
           import re
 
-          p = Path("android/variables.gradle")
-          s = p.read_text()
+          path = Path("android/variables.gradle")
+          s = path.read_text()
 
           pattern = r'(\bminSdkVersion\s*=\s*)\d+'
 
@@ -336,8 +358,13 @@ jobs:
                   "ERROR: minSdkVersion declaration not found."
               )
 
-          s = re.sub(pattern, r'\g<1>23', s)
-          p.write_text(s)
+          s = re.sub(
+              pattern,
+              r'\g<1>23',
+              s
+          )
+
+          path.write_text(s)
 
           print("minSdkVersion = 23")
           PY
@@ -361,7 +388,7 @@ jobs:
           cd "$SOURCE_DIR"
 
           if [ ! -f google-services.json ]; then
-            echo "ERROR: google-services.json missing."
+            echo "ERROR: Root google-services.json missing."
             exit 1
           fi
 
@@ -373,11 +400,13 @@ jobs:
 
           test -s android/app/google-services.json
 
-          echo "Firebase google-services.json: PASS"
+          echo "Root google-services.json: PRESENT"
+          echo "Android app google-services.json: PRESENT"
+          echo "Firebase configuration: PASS"
 
 
       # ============================================================
-      # 16. FIREBASE CONFIGURATION + PACKAGE CHECK
+      # 16. VALIDATE FIREBASE PACKAGE
       # ============================================================
 
       - name: Validate Firebase package
@@ -397,34 +426,51 @@ jobs:
               Path("google-services.json"),
               Path("android/app/google-services.json")
           ]:
+
               data = json.loads(path.read_text())
 
               packages = []
 
               for client in data.get("client", []):
-                  info = client.get("client_info", {})
-                  android = info.get("android_client_info", {})
-                  package_name = android.get("package_name")
+
+                  info = client.get(
+                      "client_info",
+                      {}
+                  )
+
+                  android_info = info.get(
+                      "android_client_info",
+                      {}
+                  )
+
+                  package_name = android_info.get(
+                      "package_name"
+                  )
 
                   if package_name:
                       packages.append(package_name)
 
-              print(f"{path}: {packages}")
+              print(
+                  f"{path}: packages={packages}"
+              )
 
               if expected not in packages:
                   raise SystemExit(
-                      f"ERROR: {expected} missing from {path}"
+                      f"ERROR: {expected} missing from {path}. "
+                      f"Found: {packages}"
                   )
 
-          print("Firebase package org.rkms.connect: PASS")
+          print(
+              "Firebase package org.rkms.connect: PASS"
+          )
           PY
 
 
       # ============================================================
-      # 17. FIREBASE SDK + GOOGLE SERVICES PLUGIN
+      # 17. FIREBASE SDK
       # ============================================================
 
-      - name: Configure Firebase SDK and Google Services
+      - name: Configure Firebase SDK
         shell: bash
         run: |
           set -e
@@ -435,18 +481,18 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          app = Path("android/app/build.gradle")
-          s = app.read_text()
+          p = Path("android/app/build.gradle")
+          s = p.read_text()
 
           # --------------------------------------------------------
-          # Firebase Google Services plugin
+          # Google Services plugin
           # --------------------------------------------------------
 
           if "com.google.gms.google-services" not in s:
 
               if "apply plugin: 'com.android.application'" in s:
+
                   s = s.replace(
                       "apply plugin: 'com.android.application'",
                       "apply plugin: 'com.android.application'\n"
@@ -455,6 +501,7 @@ jobs:
                   )
 
               elif "plugins {" in s:
+
                   s = s.replace(
                       "plugins {",
                       "plugins {\n"
@@ -463,16 +510,26 @@ jobs:
                   )
 
               else:
-                  s = "apply plugin: 'com.google.gms.google-services'\n" + s
+
+                  s = (
+                      "apply plugin: "
+                      "'com.google.gms.google-services'\n"
+                      + s
+                  )
 
           # --------------------------------------------------------
-          # Firebase dependencies
+          # Dependencies block
           # --------------------------------------------------------
 
           if "dependencies {" not in s:
               s += "\n\ndependencies {\n}\n"
 
+          # --------------------------------------------------------
+          # Firebase BOM
+          # --------------------------------------------------------
+
           if "com.google.firebase:firebase-bom:" not in s:
+
               s = s.replace(
                   "dependencies {",
                   "dependencies {\n"
@@ -481,7 +538,12 @@ jobs:
                   1
               )
 
+          # --------------------------------------------------------
+          # Firebase Messaging
+          # --------------------------------------------------------
+
           if "com.google.firebase:firebase-messaging" not in s:
+
               s = s.replace(
                   "dependencies {",
                   "dependencies {\n"
@@ -490,43 +552,11 @@ jobs:
                   1
               )
 
-          app.write_text(s)
+          p.write_text(s)
 
-          # --------------------------------------------------------
-          # Root Gradle Google Services classpath
-          # --------------------------------------------------------
-
-          root_candidates = [
-              Path("android/build.gradle"),
-              Path("android/build.gradle.kts")
-          ]
-
-          root = None
-
-          for candidate in root_candidates:
-              if candidate.exists():
-                  root = candidate
-                  break
-
-          if root:
-              rs = root.read_text()
-
-              if (
-                  "com.google.gms:google-services" not in rs
-                  and root.suffix == ".gradle"
-              ):
-                  if "dependencies {" in rs:
-                      rs = rs.replace(
-                          "dependencies {",
-                          "dependencies {\n"
-                          "        classpath "
-                          "'com.google.gms:google-services:4.4.4'",
-                          1
-                      )
-
-                  root.write_text(rs)
-
-          print("Firebase SDK/plugin configuration prepared.")
+          print(
+              "Firebase SDK configuration prepared."
+          )
           PY
 
           grep -Fq \
@@ -547,15 +577,19 @@ jobs:
 
 
       # ============================================================
-      # 18. FIX MAIN ACTIVITY FIREBASE INITIALIZATION
+      # 18. REPAIR FIREBASE MAIN ACTIVITY
       #
       # IMPORTANT:
-      # This step REPAIRS the file.
-      # It does not merely verify it.
-      # It NEVER creates a second onCreate().
+      # This is the actual repair.
+      #
+      # It does NOT blindly create another onCreate().
+      # If onCreate exists, Firebase initialization is inserted
+      # into the existing method.
+      #
+      # If onCreate does not exist, exactly one is created.
       # ============================================================
 
-      - name: Fix Firebase MainActivity
+      - name: Repair Firebase MainActivity
         shell: bash
         run: |
           set -e
@@ -563,25 +597,29 @@ jobs:
           cd "$SOURCE_DIR"
 
           echo "============================================================"
-          echo "FIX FIREBASE MAIN ACTIVITY"
+          echo "REPAIR FIREBASE MAIN ACTIVITY"
           echo "============================================================"
 
           MAIN_ACTIVITY="$(find android/app/src/main/java \
             -type f \
-            -name 'MainActivity.java' | head -1)"
+            -name 'MainActivity.java' \
+            | head -1)"
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             MAIN_ACTIVITY="$(find android/app/src/main/java \
               -type f \
-              -name 'MainActivity.kt' | head -1)"
+              -name 'MainActivity.kt' \
+              | head -1)"
           fi
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             echo "ERROR: MainActivity.java/MainActivity.kt not found."
+
             find android/app/src/main/java \
               -type f \
               \( -name '*.java' -o -name '*.kt' \) \
               | sort
+
             exit 1
           fi
 
@@ -596,8 +634,20 @@ jobs:
           path = Path(sys.argv[1])
           s = path.read_text()
 
-          print("Original MainActivity:")
-          print(s)
+          # ========================================================
+          # Remove broken literal newline strings from bridge-related
+          # Java source if they exist.
+          # ========================================================
+
+          s = s.replace(
+              r'\n@JavascriptInterface',
+              '\n@JavascriptInterface'
+          )
+
+          s = s.replace(
+              r'\n @JavascriptInterface',
+              '\n @JavascriptInterface'
+          )
 
           # ========================================================
           # JAVA
@@ -605,39 +655,36 @@ jobs:
 
           if path.suffix == ".java":
 
-              # Remove accidental literal \n before annotations.
-              s = s.replace(
-                  r'\n@JavascriptInterface',
-                  '\n@JavascriptInterface'
-              )
-
-              s = s.replace(
-                  r'\n @JavascriptInterface',
-                  '\n @JavascriptInterface'
-              )
-
               # ----------------------------------------------------
               # Import FirebaseApp
               # ----------------------------------------------------
 
-              if "import com.google.firebase.FirebaseApp;" not in s:
+              if (
+                  "import com.google.firebase.FirebaseApp;"
+                  not in s
+              ):
 
-                  imports = list(
+                  import_matches = list(
                       re.finditer(
-                          r'^import\s+[^;]+;\s*$',
+                          r'^import\s+[^;]+;',
                           s,
                           re.MULTILINE
                       )
                   )
 
-                  if imports:
-                      pos = imports[-1].end()
+                  if import_matches:
+
+                      pos = import_matches[-1].end()
+
                       s = (
                           s[:pos]
-                          + "\nimport com.google.firebase.FirebaseApp;"
+                          + "\nimport "
+                            "com.google.firebase.FirebaseApp;"
                           + s[pos:]
                       )
+
                   else:
+
                       package_match = re.search(
                           r'^package\s+[^;]+;',
                           s,
@@ -659,30 +706,49 @@ jobs:
                       )
 
               # ----------------------------------------------------
-              # Find onCreate(Bundle)
+              # Existing onCreate(Bundle)
+              #
+              # Supports:
+              # protected void onCreate(Bundle ...)
+              # public void onCreate(Bundle ...)
+              # etc.
               # ----------------------------------------------------
 
-              oncreate = re.search(
+              oncreate_pattern = (
                   r'((?:public|protected|private)\s+)?'
-                  r'void\s+onCreate\s*\(\s*Bundle\s+'
-                  r'\w+\s*\)\s*\{',
+                  r'(?:final\s+)?'
+                  r'void\s+onCreate\s*'
+                  r'\(\s*'
+                  r'(?:@[\w.()]+\s*)?'
+                  r'Bundle\s+\w+'
+                  r'\s*\)\s*\{'
+              )
+
+              oncreate = re.search(
+                  oncreate_pattern,
                   s
               )
 
               if oncreate:
 
-                  body_start = oncreate.end()
+                  # ------------------------------------------------
+                  # Do not add Firebase a second time.
+                  # ------------------------------------------------
 
-                  # If Firebase init is absent, put it at the
-                  # beginning of the existing onCreate body.
-                  if "FirebaseApp.initializeApp(this)" not in s:
+                  if (
+                      "FirebaseApp.initializeApp(this)"
+                      not in s
+                  ):
+
+                      body_start = oncreate.end()
 
                       injection = (
-                          '\n        '
-                          'if (FirebaseApp.getApps(this).isEmpty()) {'
-                          '\n            '
-                          'FirebaseApp.initializeApp(this);'
-                          '\n        }\n'
+                          "\n"
+                          "        if (FirebaseApp.getApps(this).isEmpty()) {"
+                          "\n"
+                          "            FirebaseApp.initializeApp(this);"
+                          "\n"
+                          "        }\n"
                       )
 
                       s = (
@@ -691,10 +757,24 @@ jobs:
                           + s[body_start:]
                       )
 
+                      print(
+                          "Firebase initialization inserted "
+                          "into existing onCreate()."
+                      )
+
+                  else:
+
+                      print(
+                          "Firebase initialization already present."
+                      )
+
               else:
 
+                  # ------------------------------------------------
                   # No onCreate exists.
-                  # Add exactly one before final class brace.
+                  # Create exactly ONE.
+                  # ------------------------------------------------
+
                   last_brace = s.rfind("}")
 
                   if last_brace == -1:
@@ -720,13 +800,24 @@ jobs:
                       + s[last_brace:]
                   )
 
+                  print(
+                      "Created exactly one onCreate()."
+                  )
+
           # ========================================================
           # KOTLIN
           # ========================================================
 
           elif path.suffix == ".kt":
 
-              if "import com.google.firebase.FirebaseApp" not in s:
+              # ----------------------------------------------------
+              # Import FirebaseApp
+              # ----------------------------------------------------
+
+              if (
+                  "import com.google.firebase.FirebaseApp"
+                  not in s
+              ):
 
                   imports = list(
                       re.finditer(
@@ -737,14 +828,18 @@ jobs:
                   )
 
                   if imports:
+
                       pos = imports[-1].end()
+
                       s = (
                           s[:pos]
                           + "\nimport "
                             "com.google.firebase.FirebaseApp"
                           + s[pos:]
                       )
+
                   else:
+
                       package_match = re.search(
                           r'^package\s+.+$',
                           s,
@@ -752,7 +847,9 @@ jobs:
                       )
 
                       if package_match:
+
                           pos = package_match.end()
+
                           s = (
                               s[:pos]
                               + "\n\nimport "
@@ -760,28 +857,56 @@ jobs:
                               + s[pos:]
                           )
 
+              # ----------------------------------------------------
+              # Existing Kotlin onCreate
+              # ----------------------------------------------------
+
+              oncreate_pattern = (
+                  r'override\s+fun\s+onCreate\s*'
+                  r'\(\s*'
+                  r'savedInstanceState\s*:\s*'
+                  r'Bundle\?\s*'
+                  r'\)\s*\{'
+              )
+
               oncreate = re.search(
-                  r'override\s+fun\s+onCreate\s*\(\s*'
-                  r'savedInstanceState\s*:\s*Bundle\?\s*\)\s*\{',
+                  oncreate_pattern,
                   s
               )
 
               if oncreate:
 
-                  if "FirebaseApp.initializeApp(this)" not in s:
+                  if (
+                      "FirebaseApp.initializeApp(this)"
+                      not in s
+                  ):
 
                       body_start = oncreate.end()
 
                       injection = (
-                          '\n        if (FirebaseApp.getApps(this).isEmpty()) {'
-                          '\n            FirebaseApp.initializeApp(this)'
-                          '\n        }\n'
+                          "\n"
+                          "        if (FirebaseApp.getApps(this).isEmpty()) {"
+                          "\n"
+                          "            FirebaseApp.initializeApp(this)"
+                          "\n"
+                          "        }\n"
                       )
 
                       s = (
                           s[:body_start]
                           + injection
                           + s[body_start:]
+                      )
+
+                      print(
+                          "Firebase initialization inserted "
+                          "into existing Kotlin onCreate()."
+                      )
+
+                  else:
+
+                      print(
+                          "Firebase initialization already present."
                       )
 
               else:
@@ -810,15 +935,20 @@ jobs:
                       + s[last_brace:]
                   )
 
+                  print(
+                      "Created exactly one Kotlin onCreate()."
+                  )
+
           else:
+
               raise SystemExit(
-                  f"ERROR: Unsupported MainActivity extension: {path.suffix}"
+                  f"ERROR: Unsupported MainActivity: {path}"
               )
 
           path.write_text(s)
 
           print("")
-          print("Firebase MainActivity repair completed.")
+          print("Firebase MainActivity repair: PASS")
           PY
 
           echo ""
@@ -826,14 +956,11 @@ jobs:
           echo "MAIN ACTIVITY AFTER REPAIR"
           echo "============================================================"
 
-          sed -n '1,220p' "$MAIN_ACTIVITY"
-
-          echo ""
-          echo "Firebase MainActivity repair: PASS"
+          sed -n '1,240p' "$MAIN_ACTIVITY"
 
 
       # ============================================================
-      # 19. VERIFY MAIN ACTIVITY
+      # 19. VERIFY FIREBASE MAIN ACTIVITY
       # ============================================================
 
       - name: Verify Firebase MainActivity
@@ -843,39 +970,53 @@ jobs:
 
           cd "$SOURCE_DIR"
 
+          echo "============================================================"
+          echo "VERIFY FIREBASE MAIN ACTIVITY"
+          echo "============================================================"
+
           MAIN_ACTIVITY="$(find android/app/src/main/java \
             -type f \
-            -name 'MainActivity.java' | head -1)"
+            -name 'MainActivity.java' \
+            | head -1)"
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             MAIN_ACTIVITY="$(find android/app/src/main/java \
               -type f \
-              -name 'MainActivity.kt' | head -1)"
+              -name 'MainActivity.kt' \
+              | head -1)"
           fi
 
           test -n "$MAIN_ACTIVITY"
 
-          echo "MainActivity: $MAIN_ACTIVITY"
+          echo "MainActivity:"
+          echo "$MAIN_ACTIVITY"
 
-          # Firebase initialization must exist.
           grep -Fq \
             'FirebaseApp.initializeApp(this)' \
             "$MAIN_ACTIVITY"
 
-          # Java duplicate protection.
+          echo "FirebaseApp.initializeApp(this): PRESENT"
+
+          # --------------------------------------------------------
+          # Java checks
+          # --------------------------------------------------------
+
           if [[ "$MAIN_ACTIVITY" == *.java ]]; then
 
             ONCREATE_COUNT="$(grep -E \
-              -c '^[[:space:]]*(public|protected|private)?[[:space:]]*void[[:space:]]+onCreate[[:space:]]*\([[:space:]]*Bundle[[:space:]]+' \
+              -c '^[[:space:]]*(public|protected|private)?[[:space:]]*(final[[:space:]]+)?void[[:space:]]+onCreate[[:space:]]*\(' \
               "$MAIN_ACTIVITY" || true)"
 
-            echo "Java onCreate(Bundle) count: $ONCREATE_COUNT"
+            echo "Java onCreate count: $ONCREATE_COUNT"
 
             if [ "$ONCREATE_COUNT" -ne 1 ]; then
-              echo "ERROR: MainActivity must contain exactly one onCreate(Bundle)."
+              echo ""
+              echo "ERROR: MainActivity must contain exactly ONE onCreate()."
+              echo ""
               grep -n \
                 'onCreate[[:space:]]*(' \
-                "$MAIN_ACTIVITY" || true
+                "$MAIN_ACTIVITY" \
+                || true
               exit 1
             fi
 
@@ -886,17 +1027,21 @@ jobs:
             echo "Firebase initialization count: $FIREBASE_COUNT"
 
             if [ "$FIREBASE_COUNT" -ne 1 ]; then
+              echo ""
               echo "ERROR: Firebase initialization must occur exactly once."
               exit 1
             fi
+
           fi
 
-          echo "Firebase initialization: PASS"
-          echo "MainActivity duplicate check: PASS"
+          echo ""
+          echo "MainActivity duplicate onCreate check: PASS"
+          echo "Firebase initialization check: PASS"
+          echo "VERIFY FIREBASE MAIN ACTIVITY: PASS"
 
 
       # ============================================================
-      # 20. REPAIR / VERIFY RKMS NATIVE BRIDGE
+      # 20. REPAIR RKMS NATIVE BRIDGE
       # ============================================================
 
       - name: Repair RKMS native bridge
@@ -906,14 +1051,28 @@ jobs:
 
           cd "$SOURCE_DIR"
 
+          echo "============================================================"
+          echo "RKMS NATIVE BRIDGE"
+          echo "============================================================"
+
           BRIDGE_FILE="$(find android/app/src/main/java \
             -type f \
-            -name 'RKMSNativeBridge.java' | head -1)"
+            -name 'RKMSNativeBridge.java' \
+            | head -1)"
 
           if [ -z "$BRIDGE_FILE" ]; then
             echo "ERROR: RKMSNativeBridge.java not found."
+
+            find android/app/src/main/java \
+              -type f \
+              -name '*.java' \
+              | sort
+
             exit 1
           fi
+
+          echo "Bridge:"
+          echo "$BRIDGE_FILE"
 
           python3 - "$BRIDGE_FILE" <<'PY'
           from pathlib import Path
@@ -934,22 +1093,25 @@ jobs:
 
           p.write_text(s)
 
-          print("Native bridge newline repair completed.")
+          print("Broken literal newline sequences repaired.")
           PY
 
           if grep -Fq '\n@JavascriptInterface' "$BRIDGE_FILE"; then
-            echo "ERROR: literal \\n remains."
+            echo "ERROR: literal \\n remains before @JavascriptInterface."
             exit 1
           fi
 
           if grep -Fq '\n @JavascriptInterface' "$BRIDGE_FILE"; then
-            echo "ERROR: literal \\n remains."
+            echo "ERROR: literal \\n remains before @JavascriptInterface."
             exit 1
           fi
 
-          grep -Fq 'RKMSNativeBridge' "$BRIDGE_FILE"
+          grep -Fq \
+            'RKMSNativeBridge' \
+            "$BRIDGE_FILE"
 
-          echo "RKMSNativeBridge: PASS"
+          echo "RKMSNativeBridge: PRESENT"
+          echo "Native bridge syntax preparation: PASS"
 
 
       # ============================================================
@@ -969,6 +1131,8 @@ jobs:
             echo "Saved login verifier not present; continuing."
           fi
 
+          echo "Saved login verification completed."
+
 
       # ============================================================
       # 22. FCM PIPELINE
@@ -986,6 +1150,8 @@ jobs:
           else
             echo "FCM verifier not present; continuing."
           fi
+
+          echo "FCM pipeline verification completed."
 
 
       # ============================================================
@@ -1005,9 +1171,11 @@ jobs:
             echo "Login verifier not present; continuing."
           fi
 
+          echo "Final login verification completed."
+
 
       # ============================================================
-      # 24. AUTHORITY
+      # 24. AUTHORITY HIERARCHY
       # ============================================================
 
       - name: Verify authority hierarchy
@@ -1022,6 +1190,8 @@ jobs:
           else
             echo "Authority verifier not present; continuing."
           fi
+
+          echo "Authority hierarchy verification completed."
 
 
       # ============================================================
@@ -1069,7 +1239,7 @@ jobs:
 
 
       # ============================================================
-      # 27. PROFILE
+      # 27. PROFILE UPDATE
       # ============================================================
 
       - name: Verify profile update
@@ -1087,7 +1257,7 @@ jobs:
 
 
       # ============================================================
-      # 28. PDF
+      # 28. PDF PIPELINE
       # ============================================================
 
       - name: Verify PDF pipeline
@@ -1119,11 +1289,11 @@ jobs:
             python3 scripts/verify-report-download-scope.py
           fi
 
-          echo "Report download verification completed."
+          echo "Report download scope verification completed."
 
 
       # ============================================================
-      # 30. COMPLAINT
+      # 30. COMPLAINT FLOW
       # ============================================================
 
       - name: Verify complaint flow
@@ -1134,10 +1304,12 @@ jobs:
           cd "$SOURCE_DIR"
 
           if [ -f scripts/verify-complaint-final.py ]; then
+
             python3 scripts/verify-complaint-final.py || {
               echo "Complaint verifier returned non-zero."
               echo "Continuing because source-only verification may require APK context."
             }
+
           fi
 
           echo "Complaint verification completed."
@@ -1172,17 +1344,23 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          if grep -R -Fq 'resolveOfficerSignature' .; then
+          if grep -R -Fq \
+            'resolveOfficerSignature' \
+            .; then
             echo "resolveOfficerSignature: PRESENT"
           else
             echo "WARNING: resolveOfficerSignature not found."
           fi
 
-          if grep -R -Fq 'signature_url' .; then
+          if grep -R -Fq \
+            'signature_url' \
+            .; then
             echo "signature_url: PRESENT"
           else
             echo "WARNING: signature_url not found."
           fi
+
+          echo "Document signer verification completed."
 
 
       # ============================================================
@@ -1196,12 +1374,16 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          if [ -f index.html ] && grep -q 'rkmsBottomNav' index.html; then
-            echo "rkmsBottomNav: PRESENT"
+          if [ -f index.html ]; then
+            if grep -q 'rkmsBottomNav' index.html; then
+              echo "rkmsBottomNav: PRESENT"
+            fi
           fi
 
-          if [ -f styles.css ] && grep -q 'guest-nav' styles.css; then
-            echo "guest-nav CSS: PRESENT"
+          if [ -f styles.css ]; then
+            if grep -q 'guest-nav' styles.css; then
+              echo "guest-nav CSS: PRESENT"
+            fi
           fi
 
           echo "Guest navigation check completed."
@@ -1227,9 +1409,14 @@ jobs:
           if grep -q \
             'android.permission.POST_NOTIFICATIONS' \
             "$MANIFEST"; then
+
             echo "POST_NOTIFICATIONS: PRESENT"
+
           else
+
             echo "POST_NOTIFICATIONS not explicitly present."
+            echo "Informational only."
+
           fi
 
 
@@ -1250,7 +1437,7 @@ jobs:
 
 
       # ============================================================
-      # 36. RELEASE SIGNING
+      # 36. RELEASE SIGNING PREPARATION
       # ============================================================
 
       - name: Prepare release signing
@@ -1260,10 +1447,25 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          test -n "${RKMS_KEYSTORE_BASE64:-}"
-          test -n "${RKMS_KEYSTORE_PASSWORD:-}"
-          test -n "${RKMS_KEY_ALIAS:-}"
-          test -n "${RKMS_KEY_PASSWORD:-}"
+          if [ -z "${RKMS_KEYSTORE_BASE64:-}" ]; then
+            echo "ERROR: RKMS_KEYSTORE_BASE64 secret missing."
+            exit 1
+          fi
+
+          if [ -z "${RKMS_KEYSTORE_PASSWORD:-}" ]; then
+            echo "ERROR: RKMS_KEYSTORE_PASSWORD secret missing."
+            exit 1
+          fi
+
+          if [ -z "${RKMS_KEY_ALIAS:-}" ]; then
+            echo "ERROR: RKMS_KEY_ALIAS secret missing."
+            exit 1
+          fi
+
+          if [ -z "${RKMS_KEY_PASSWORD:-}" ]; then
+            echo "ERROR: RKMS_KEY_PASSWORD secret missing."
+            exit 1
+          fi
 
           echo "$RKMS_KEYSTORE_BASE64" \
             | base64 --decode \
@@ -1271,7 +1473,7 @@ jobs:
 
           test -s rkms-release.keystore
 
-          echo "Release keystore: PASS"
+          echo "Release keystore prepared: PASS"
 
 
       # ============================================================
@@ -1318,9 +1520,9 @@ jobs:
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          # --------------------------------------------------------
+          # ========================================================
           # Ensure signingConfigs exists
-          # --------------------------------------------------------
+          # ========================================================
 
           if "signingConfigs {" not in s:
 
@@ -1346,52 +1548,62 @@ jobs:
                   1
               )
 
-          # --------------------------------------------------------
-          # Ensure keystore configuration exists
-          # --------------------------------------------------------
+          # ========================================================
+          # Existing signingConfigs but missing RKMS keystore
+          # ========================================================
 
           elif "rkms-release.keystore" not in s:
 
-              block = """
+              signing_release = """
                   release {
                       storeFile file("../../rkms-release.keystore")
                       storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
                       keyAlias System.getenv("RKMS_KEY_ALIAS")
                       keyPassword System.getenv("RKMS_KEY_PASSWORD")
                   }
-          """
+              """
 
               s = s.replace(
                   "signingConfigs {",
-                  "signingConfigs {" + block,
+                  "signingConfigs {\n" + signing_release,
                   1
               )
 
-          # --------------------------------------------------------
-          # Ensure release build type
-          # --------------------------------------------------------
+          # ========================================================
+          # Ensure release buildType points to signing config
+          # ========================================================
 
           if "signingConfig signingConfigs.release" not in s:
 
-              if "buildTypes {" in s:
+              buildtypes_match = re.search(
+                  r'buildTypes\s*\{',
+                  s
+              )
 
-                  # Only add signingConfig inside release block
-                  match = re.search(
+              if buildtypes_match:
+
+                  release_match = re.search(
                       r'release\s*\{',
-                      s
+                      s[buildtypes_match.end():]
                   )
 
-                  if match:
-                      pos = match.end()
+                  if release_match:
+
+                      absolute_pos = (
+                          buildtypes_match.end()
+                          + release_match.end()
+                      )
 
                       s = (
-                          s[:pos]
+                          s[:absolute_pos]
                           + "\n"
                             "            signingConfig "
                             "signingConfigs.release\n"
-                          + s[pos:]
+                          + s[absolute_pos:]
                       )
+
                   else:
+
                       raise SystemExit(
                           "ERROR: release buildType not found."
                       )
@@ -1399,6 +1611,7 @@ jobs:
               else:
 
                   s += """
+          
           android {
               buildTypes {
                   release {
@@ -1410,17 +1623,20 @@ jobs:
 
           p.write_text(s)
 
-          print("Release signing configuration prepared.")
+          print(
+              "Release signing configuration prepared."
+          )
           PY
 
-          grep -Fq "rkms-release.keystore" \
+          grep -Fq \
+            "rkms-release.keystore" \
             android/app/build.gradle
 
           echo "Release signing configuration: PASS"
 
 
       # ============================================================
-      # 39. FINAL FIREBASE CHECK
+      # 39. FINAL FIREBASE PRE-BUILD CHECK
       # ============================================================
 
       - name: Final Firebase pre-build check
@@ -1430,16 +1646,24 @@ jobs:
 
           cd "$SOURCE_DIR"
 
+          echo "============================================================"
+          echo "FINAL FIREBASE PRE-BUILD CHECK"
+          echo "============================================================"
+
           test -f google-services.json
           test -f android/app/google-services.json
           test -f android/app/build.gradle
 
           MAIN_ACTIVITY="$(find android/app/src/main/java \
-            -type f -name 'MainActivity.java' | head -1)"
+            -type f \
+            -name 'MainActivity.java' \
+            | head -1)"
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             MAIN_ACTIVITY="$(find android/app/src/main/java \
-              -type f -name 'MainActivity.kt' | head -1)"
+              -type f \
+              -name 'MainActivity.kt' \
+              | head -1)"
           fi
 
           test -n "$MAIN_ACTIVITY"
@@ -1463,28 +1687,39 @@ jobs:
           if [[ "$MAIN_ACTIVITY" == *.java ]]; then
 
             ONCREATE_COUNT="$(grep -E \
-              -c '^[[:space:]]*(public|protected|private)?[[:space:]]*void[[:space:]]+onCreate[[:space:]]*\([[:space:]]*Bundle[[:space:]]+' \
-              "$MAIN_ACTIVITY" || true)"
+              -c '^[[:space:]]*(public|protected|private)?[[:space:]]*(final[[:space:]]+)?void[[:space:]]+onCreate[[:space:]]*\(' \
+              "$MAIN_ACTIVITY" \
+              || true)"
+
+            echo "Final onCreate count: $ONCREATE_COUNT"
 
             if [ "$ONCREATE_COUNT" -ne 1 ]; then
-              echo "ERROR: MainActivity onCreate count = $ONCREATE_COUNT"
+              echo "ERROR: MainActivity onCreate count is not 1."
               exit 1
             fi
 
             FIREBASE_COUNT="$(grep -F \
               -c 'FirebaseApp.initializeApp(this)' \
-              "$MAIN_ACTIVITY" || true)"
+              "$MAIN_ACTIVITY" \
+              || true)"
+
+            echo "Final Firebase initialization count: $FIREBASE_COUNT"
 
             if [ "$FIREBASE_COUNT" -ne 1 ]; then
-              echo "ERROR: Firebase initialization count = $FIREBASE_COUNT"
+              echo "ERROR: Firebase initialization count is not 1."
               exit 1
             fi
+
           fi
 
           echo "Firebase JSON: PASS"
           echo "Firebase SDK: PASS"
+          echo "Firebase Messaging: PASS"
           echo "Google Services plugin: PASS"
           echo "Firebase MainActivity: PASS"
+
+          echo ""
+          echo "FINAL FIREBASE PRE-BUILD CHECK: PASS"
 
 
       # ============================================================
@@ -1499,23 +1734,38 @@ jobs:
           cd "$SOURCE_DIR"
 
           BRIDGE_FILE="$(find android/app/src/main/java \
-            -type f -name 'RKMSNativeBridge.java' | head -1)"
+            -type f \
+            -name 'RKMSNativeBridge.java' \
+            | head -1)"
 
-          test -n "$BRIDGE_FILE"
+          if [ -z "$BRIDGE_FILE" ]; then
+            echo "ERROR: RKMSNativeBridge.java not found."
+            exit 1
+          fi
+
+          echo "Bridge file:"
+          echo "$BRIDGE_FILE"
 
           if grep -Fq '\n@JavascriptInterface' "$BRIDGE_FILE"; then
-            echo "ERROR: literal \\n remains."
+            echo "ERROR: literal \\n remains before @JavascriptInterface."
             exit 1
           fi
 
           if grep -Fq '\n @JavascriptInterface' "$BRIDGE_FILE"; then
-            echo "ERROR: literal \\n remains."
+            echo "ERROR: literal \\n remains before @JavascriptInterface."
             exit 1
           fi
 
-          grep -Fq 'isFirebaseReady' "$BRIDGE_FILE"
-          grep -Fq 'saveSession' "$BRIDGE_FILE"
+          grep -Fq \
+            'isFirebaseReady' \
+            "$BRIDGE_FILE"
 
+          grep -Fq \
+            'saveSession' \
+            "$BRIDGE_FILE"
+
+          echo "isFirebaseReady: PASS"
+          echo "saveSession: PASS"
           echo "Native bridge: PASS"
 
 
@@ -1537,17 +1787,28 @@ jobs:
           test -d "${ANDROID_HOME}/platforms/android-36"
           test -d "${ANDROID_HOME}/build-tools/36.0.0"
 
-          grep -R -Fq 'org.rkms.connect' android/app
+          grep -R -Fq \
+            'org.rkms.connect' \
+            android/app
 
           grep -Eq \
             'minSdkVersion[[:space:]]*=[[:space:]]*23' \
             android/variables.gradle
 
-          echo "Android configuration: PASS"
+          echo "android/app/build.gradle: PASS"
+          echo "AndroidManifest.xml: PASS"
+          echo "variables.gradle: PASS"
+          echo "Android platform 36: PASS"
+          echo "Android build-tools 36.0.0: PASS"
+          echo "Package org.rkms.connect: PASS"
+          echo "Android minSdk 23: PASS"
+
+          echo ""
+          echo "FINAL ANDROID CONFIGURATION: PASS"
 
 
       # ============================================================
-      # 42. GRADLE BUILD
+      # 42. BUILD SIGNED RELEASE AAB
       # ============================================================
 
       - name: Build signed Release AAB
@@ -1569,6 +1830,11 @@ jobs:
             clean \
             bundleRelease
 
+          echo ""
+          echo "============================================================"
+          echo "GRADLE BUILD: PASS"
+          echo "============================================================"
+
 
       # ============================================================
       # 43. LOCATE AAB
@@ -1581,8 +1847,11 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          AAB="$(find android/app/build/outputs/bundle/release \
-            -type f -name '*.aab' | head -1)"
+          AAB="$(find \
+            android/app/build/outputs/bundle/release \
+            -type f \
+            -name '*.aab' \
+            | head -1)"
 
           if [ -z "$AAB" ]; then
             echo "ERROR: Release AAB not found."
@@ -1591,6 +1860,7 @@ jobs:
 
           echo "AAB=$AAB" >> "$GITHUB_ENV"
 
+          echo ""
           echo "Release AAB:"
           echo "$AAB"
 
