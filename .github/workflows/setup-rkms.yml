@@ -1,4 +1,4 @@
-name: RKMS Android 16 / API 36 - Play Store AAB
+name: RKMS Android 16 API 36 - APK + Play Store AAB
 
 on:
   workflow_dispatch:
@@ -7,8 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  android-aab:
-    name: RKMS Final Android 16 API 36 AAB
+  android-release:
+    name: RKMS Final Android 16 API 36 - APK + AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -62,11 +62,13 @@ jobs:
           echo "Android SDK: PASS"
 
       # ============================================================
-      # 5. ACCEPT LICENSES
+      # 5. ACCEPT ANDROID LICENSES
       # ============================================================
       - name: Accept Android SDK licenses
         shell: bash
         run: |
+          set -e
+
           yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
             --sdk_root=/usr/local/lib/android/sdk \
             --licenses || true
@@ -94,33 +96,36 @@ jobs:
           echo "Build Tools 36.0.0: PASS"
 
       # ============================================================
-      # 7. FIND FINAL SOURCE ZIP
+      # 7. FIND FINAL FCM-FIXED RKMS SOURCE ZIP
       # ============================================================
       - name: Find final RKMS source ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP="RKMS_CONNECT_FINAL_RULES_FIXED_2026-09-17.zip"
+          ZIP="RKMS_CONNECT_FINAL_AUDITED_SIGNED_LOGO_FIXED_2026-09-18_FCM_CRASH_FIXED.zip"
 
           if [ ! -f "$ZIP" ]; then
-            ZIP=$(find . -maxdepth 2 -type f -iname "*.zip" \
+            ZIP=$(find . -maxdepth 3 -type f -iname "*.zip" \
               | grep -E \
-              'RKMS_CONNECT_(FINAL|CONTENT_SCOPE).*\.zip$' \
+              'RKMS_CONNECT_FINAL_AUDITED_SIGNED_LOGO_FIXED_2026-09-18_FCM_CRASH_FIXED\.zip$' \
               | head -n 1 || true)
           fi
 
           if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
-            echo "ERROR: Final RKMS source ZIP not found."
+            echo "ERROR: FCM-fixed RKMS source ZIP not found."
+            echo
+            echo "Expected:"
+            echo "$ZIP"
             echo
             echo "Repository files:"
-            find . -maxdepth 2 -type f -print
+            find . -maxdepth 3 -type f -print
             exit 1
           fi
 
           echo "RKMS_ZIP=$ZIP" >> "$GITHUB_ENV"
 
-          echo "Using source:"
+          echo "Using RKMS source:"
           echo "$ZIP"
 
       # ============================================================
@@ -142,7 +147,7 @@ jobs:
             | head -n 1)
 
           if [ -z "$APP_FILE" ]; then
-            echo "ERROR: app.js not found inside ZIP."
+            echo "ERROR: app.js not found inside source ZIP."
             exit 1
           fi
 
@@ -154,7 +159,7 @@ jobs:
           echo "$SOURCE_DIR"
 
       # ============================================================
-      # 9. VERIFY SOURCE
+      # 9. VERIFY SOURCE FILES
       # ============================================================
       - name: Verify RKMS source
         shell: bash
@@ -187,7 +192,7 @@ jobs:
           echo "app.js syntax: PASS"
 
       # ============================================================
-      # 11. VERIFY PYTHON
+      # 11. VERIFY PYTHON SCRIPTS
       # ============================================================
       - name: Verify Python scripts
         shell: bash
@@ -203,7 +208,7 @@ jobs:
           echo "Python scripts: PASS"
 
       # ============================================================
-      # 12. INSTALL NPM
+      # 12. INSTALL NPM DEPENDENCIES
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -228,10 +233,7 @@ jobs:
 
           npm run build
 
-          if [ ! -f "dist/index.html" ]; then
-            echo "ERROR: dist/index.html missing."
-            exit 1
-          fi
+          test -f dist/index.html
 
           echo "dist/index.html: PASS"
 
@@ -322,14 +324,17 @@ jobs:
 
           cd "$RKMS_SOURCE_DIR"
 
+          echo "----- variables.gradle -----"
           grep -E \
-            "compileSdkVersion|targetSdkVersion" \
+            "compileSdkVersion|targetSdkVersion|minSdkVersion" \
             android/variables.gradle || true
 
+          echo "----- Android Gradle Plugin -----"
           grep -E \
             "com.android.tools.build:gradle" \
             android/build.gradle || true
 
+          echo "----- Gradle Wrapper -----"
           grep -E \
             "distributionUrl" \
             android/gradle/wrapper/gradle-wrapper.properties || true
@@ -397,7 +402,7 @@ jobs:
           echo "Launcher icons byte-for-byte verification: PASS"
 
       # ============================================================
-      # 21. VERIFY GRADLE
+      # 21. VERIFY GRADLE 8.11.1
       # ============================================================
       - name: Verify Gradle 8.11.1
         shell: bash
@@ -485,7 +490,7 @@ jobs:
           echo "Gradle signing properties created."
 
       # ============================================================
-      # 25. PATCH APP GRADLE SIGNING
+      # 25. CONFIGURE ANDROID RELEASE SIGNING
       # ============================================================
       - name: Configure Android release signing
         shell: bash
@@ -500,8 +505,12 @@ jobs:
           p = Path("app/build.gradle")
           s = p.read_text()
 
-          if "keystore.properties" not in s:
-              prefix = r'''
+          # --------------------------------------------------------
+          # Add imports / keystore properties at top
+          # --------------------------------------------------------
+          prefix = '''import java.util.Properties
+          import java.io.FileInputStream
+
           def keystorePropertiesFile = rootProject.file("keystore.properties")
           def keystoreProperties = new Properties()
 
@@ -511,12 +520,14 @@ jobs:
 
           '''
 
+          if "def keystorePropertiesFile" not in s:
               s = prefix + s
 
-          if "signingConfigs" not in s:
-              marker = "android {"
-
-              signing = r'''
+          # --------------------------------------------------------
+          # Add release signing config inside android {}
+          # --------------------------------------------------------
+          if "signingConfigs {" not in s:
+              signing_block = '''
               signingConfigs {
                   release {
                       if (keystorePropertiesFile.exists()) {
@@ -530,43 +541,66 @@ jobs:
 
           '''
 
+              if "android {" not in s:
+                  raise SystemExit("ERROR: android { block not found.")
+
               s = s.replace(
-                  marker,
-                  marker + "\n" + signing,
+                  "android {",
+                  "android {\n" + signing_block,
                   1
               )
 
+          # --------------------------------------------------------
+          # Make sure release buildType uses release signing
+          # --------------------------------------------------------
           if "signingConfig signingConfigs.release" not in s:
-              release_marker = "buildTypes {"
 
-              release_block = r'''
+              if "buildTypes {" in s:
+                  target = '''buildTypes {
+                  '''
+
+                  replacement = '''buildTypes {
+                      release {
+                          signingConfig signingConfigs.release
+                      }
+                  '''
+
+                  s = s.replace(target, replacement, 1)
+
+              else:
+                  build_types = '''
               buildTypes {
                   release {
                       signingConfig signingConfigs.release
                   }
+              }
+              '''
 
-          '''
+                  if "android {" not in s:
+                      raise SystemExit("ERROR: android { block not found.")
 
-              s = s.replace(
-                  release_marker,
-                  release_block,
-                  1
-              )
+                  # Insert before final android closing brace
+                  pos = s.rfind("}")
+                  s = s[:pos] + build_types + "\n" + s[pos:]
 
-              # Remove duplicated opening buildTypes brace created
-              # by the replacement if necessary.
-              s = s.replace(
-                  "release {\n                      signingConfig signingConfigs.release\n                  }\n\n                  release {",
-                  "release {\n                      signingConfig signingConfigs.release\n                  }\n\n                  release {"
+          # --------------------------------------------------------
+          # Verify resulting configuration text
+          # --------------------------------------------------------
+          if "signingConfigs {" not in s:
+              raise SystemExit("ERROR: signingConfigs not created.")
+
+          if "signingConfig signingConfigs.release" not in s:
+              raise SystemExit(
+                  "ERROR: release signingConfig not configured."
               )
 
           p.write_text(s)
+
+          print("Release signing configuration successfully applied.")
           PY
 
-          echo "Release signing configuration injected."
-
       # ============================================================
-      # 26. VERIFY GRADLE SIGNING CONFIG
+      # 26. VERIFY SIGNING CONFIG
       # ============================================================
       - name: Verify Gradle signing configuration
         shell: bash
@@ -586,9 +620,9 @@ jobs:
           echo "Gradle release signing configuration: PASS"
 
       # ============================================================
-      # 27. BUILD SIGNED AAB
+      # 27. CLEAN GRADLE
       # ============================================================
-      - name: Build signed Play Store AAB
+      - name: Clean Android build
         shell: bash
         run: |
           set -e
@@ -597,16 +631,68 @@ jobs:
 
           chmod +x gradlew
 
-          ./gradlew clean bundleRelease \
+          ./gradlew clean \
+            --no-daemon
+
+          echo "Gradle clean: PASS"
+
+      # ============================================================
+      # 28. BUILD SIGNED APK + AAB TOGETHER
+      # ============================================================
+      - name: Build signed APK and Play Store AAB
+        shell: bash
+        run: |
+          set -e
+
+          cd "$RKMS_SOURCE_DIR/android"
+
+          chmod +x gradlew
+
+          ./gradlew \
+            assembleRelease \
+            bundleRelease \
             --no-daemon \
             --stacktrace
 
-          echo "bundleRelease: PASS"
+          echo
+          echo "=============================================="
+          echo " APK + AAB BUILD: PASS"
+          echo "=============================================="
 
       # ============================================================
-      # 28. LOCATE AAB
+      # 29. LOCATE APK
       # ============================================================
-      - name: Locate AAB
+      - name: Locate release APK
+        shell: bash
+        run: |
+          set -e
+
+          cd "$RKMS_SOURCE_DIR"
+
+          APK=$(find android/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Release APK was not generated."
+
+            find android/app/build/outputs/apk \
+              -type f \
+              -print || true
+
+            exit 1
+          fi
+
+          echo "RKMS_APK=$APK" >> "$GITHUB_ENV"
+
+          echo "Release APK:"
+          echo "$APK"
+
+      # ============================================================
+      # 30. LOCATE AAB
+      # ============================================================
+      - name: Locate release AAB
         shell: bash
         run: |
           set -e
@@ -619,9 +705,9 @@ jobs:
             | head -n 1)
 
           if [ -z "$AAB" ]; then
-            echo "ERROR: AAB was not generated."
+            echo "ERROR: Release AAB was not generated."
 
-            find android/app/build/outputs \
+            find android/app/build/outputs/bundle \
               -type f \
               -print || true
 
@@ -630,45 +716,87 @@ jobs:
 
           echo "RKMS_AAB=$AAB" >> "$GITHUB_ENV"
 
-          echo "AAB:"
+          echo "Release AAB:"
           echo "$AAB"
 
       # ============================================================
-      # 29. COPY FINAL AAB
+      # 31. PREPARE FINAL RELEASE FILES
       # ============================================================
-      - name: Prepare final Play Store AAB
+      - name: Prepare final APK and AAB
         shell: bash
         run: |
           set -e
 
           mkdir -p "$GITHUB_WORKSPACE/release"
 
+          cp "$RKMS_SOURCE_DIR/$RKMS_APK" \
+            "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
           cp "$RKMS_SOURCE_DIR/$RKMS_AAB" \
             "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab"
 
           test -s \
+            "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
+          test -s \
             "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab"
 
-          echo "Final AAB prepared."
+          echo "Final APK and AAB prepared."
 
       # ============================================================
-      # 30. VERIFY AAB SIGNATURE
+      # 32. VERIFY APK SIGNATURE
+      # ============================================================
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -e
+
+          APK="$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+
+          test -x "$APKSIGNER"
+
+          "$APKSIGNER" verify \
+            --verbose \
+            "$APK"
+
+          echo "APK signature verification: PASS"
+
+      # ============================================================
+      # 33. VERIFY AAB SIGNATURE
       # ============================================================
       - name: Verify AAB signature
         shell: bash
         run: |
           set -e
 
+          AAB="$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab"
+
           jarsigner \
             -verify \
             -verbose \
             -certs \
-            "$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab"
+            "$AAB"
 
           echo "AAB signature verification: PASS"
 
       # ============================================================
-      # 31. GENERATE SHA256
+      # 34. GENERATE APK SHA256
+      # ============================================================
+      - name: Generate APK SHA256
+        shell: bash
+        run: |
+          set -e
+
+          cd "$GITHUB_WORKSPACE/release"
+
+          sha256sum \
+            RKMS_CONNECT_ANDROID16_API36_RELEASE.apk \
+            | tee RKMS_ANDROID16_API36_APK_SHA256.txt
+
+      # ============================================================
+      # 35. GENERATE AAB SHA256
       # ============================================================
       - name: Generate AAB SHA256
         shell: bash
@@ -682,42 +810,94 @@ jobs:
             | tee RKMS_ANDROID16_API36_AAB_SHA256.txt
 
       # ============================================================
-      # 32. FINAL CHECK
+      # 36. APK PACKAGE / SDK FINAL CHECK
       # ============================================================
-      - name: Final Play Store AAB check
+      - name: Final APK verification
+        shell: bash
+        run: |
+          set -e
+
+          APK="$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+
+          "$APKSIGNER" verify "$APK"
+
+          echo
+          echo "APK:"
+          ls -lh "$APK"
+
+          echo
+          echo "APK SHA256:"
+          cat "$GITHUB_WORKSPACE/release/RKMS_ANDROID16_API36_APK_SHA256.txt"
+
+          echo
+          echo "APK FINAL CHECK: PASS"
+
+      # ============================================================
+      # 37. AAB FINAL CHECK
+      # ============================================================
+      - name: Final Play Store AAB verification
         shell: bash
         run: |
           set -e
 
           AAB="$GITHUB_WORKSPACE/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab"
 
-          test -f "$AAB"
-          test -s "$AAB"
-
           jarsigner \
             -verify \
             "$AAB"
 
           echo
-          echo "=============================================="
-          echo " RKMS PLAY STORE AAB: READY"
-          echo " Android API: 36"
-          echo " Signed: YES"
-          echo " Format: Android App Bundle"
-          echo "=============================================="
-          echo
-
+          echo "AAB:"
           ls -lh "$AAB"
 
+          echo
+          echo "AAB SHA256:"
+          cat "$GITHUB_WORKSPACE/release/RKMS_ANDROID16_API36_AAB_SHA256.txt"
+
+          echo
+          echo "AAB FINAL CHECK: PASS"
+
       # ============================================================
-      # 33. UPLOAD FINAL AAB
+      # 38. FINAL RELEASE SUMMARY
       # ============================================================
-      - name: Upload Play Store AAB
+      - name: Final RKMS release summary
+        shell: bash
+        run: |
+          set -e
+
+          echo
+          echo "=========================================================="
+          echo "        RKMS CONNECT FINAL RELEASE READY"
+          echo "=========================================================="
+          echo
+          echo "Android API       : 36"
+          echo "Android Version   : Android 16"
+          echo "Signed APK        : YES"
+          echo "Signed AAB        : YES"
+          echo "FCM Crash Fix     : INCLUDED"
+          echo "Original Logo     : VERIFIED"
+          echo
+          echo "APK:"
+          echo "RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+          echo
+          echo "AAB:"
+          echo "RKMS_CONNECT_ANDROID16_API36_RELEASE.aab"
+          echo
+          echo "=========================================================="
+
+      # ============================================================
+      # 39. UPLOAD APK + AAB
+      # ============================================================
+      - name: Upload APK and AAB
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS_CONNECT_ANDROID16_API36_PLAYSTORE_AAB
+          name: RKMS_CONNECT_ANDROID16_API36_APK_AAB_FINAL
           path: |
+            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
+            release/RKMS_ANDROID16_API36_APK_SHA256.txt
             release/RKMS_ANDROID16_API36_AAB_SHA256.txt
           if-no-files-found: error
           retention-days: 90
