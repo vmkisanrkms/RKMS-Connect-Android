@@ -1,4 +1,4 @@
-name: RKMS Android 16 API 36 - Final Release AAB
+name: RKMS Final Android 16 API 36 - Release AAB
 
 on:
   workflow_dispatch:
@@ -26,37 +26,61 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # 2. SHOW SOURCE
+      # 2. LOCATE RKMS SOURCE
       # ============================================================
       - name: Locate RKMS source
         shell: bash
         run: |
           set -e
 
-          echo "Repository:"
+          echo "=========================================="
+          echo "RKMS SOURCE DISCOVERY"
+          echo "=========================================="
+
+          echo "Workspace:"
           pwd
 
-          echo "Root files:"
+          echo "Repository root:"
           ls -la
 
+          # --------------------------------------------------------
+          # Prefer normal repository source
+          # --------------------------------------------------------
           if [ -f "package.json" ] && \
              [ -f "app.js" ] && \
              [ -f "index.html" ]; then
 
             echo "Using checked-out repository root."
 
+            echo "SOURCE_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+
           else
+
             echo "Repository root source not found."
+            echo "Searching for RKMS source ZIP..."
+
+            mkdir -p rkms_source
 
             CANDIDATE=""
 
+            # ------------------------------------------------------
+            # Preferred latest fixed ZIP
+            # ------------------------------------------------------
             if [ -f "RKMS_CONNECT_FIXED_2026-09-18.zip" ]; then
               CANDIDATE="RKMS_CONNECT_FIXED_2026-09-18.zip"
+
             elif [ -f "RKMS_CONNECT_FINAL_RULES_FIXED_2026-09-17.zip" ]; then
               CANDIDATE="RKMS_CONNECT_FINAL_RULES_FIXED_2026-09-17.zip"
+
             else
-              CANDIDATE="$(find . -maxdepth 2 -type f \
-                -name 'RKMS_CONNECT*.zip' | head -n 1 || true)"
+
+              CANDIDATE="$(find . \
+                -maxdepth 3 \
+                -type f \
+                -name 'RKMS_CONNECT*.zip' \
+                -print \
+                | head -n 1 || true)"
+
             fi
 
             if [ -z "$CANDIDATE" ]; then
@@ -64,34 +88,40 @@ jobs:
               exit 1
             fi
 
-            echo "Using source ZIP: $CANDIDATE"
+            echo "Using source ZIP:"
+            echo "$CANDIDATE"
 
-            mkdir -p rkms_source
             unzip -q "$CANDIDATE" -d rkms_source
 
-            SOURCE_DIR="$(find rkms_source -type f \
-              -name package.json -print -quit | xargs -r dirname)"
+            SOURCE_DIR="$(find rkms_source \
+              -type f \
+              -name package.json \
+              -print \
+              -quit \
+              | xargs -r dirname)"
 
             if [ -z "$SOURCE_DIR" ]; then
               echo "ERROR: package.json not found after ZIP extraction."
               exit 1
             fi
 
-            echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
-          fi
+            echo "SOURCE_DIR=$GITHUB_WORKSPACE/$SOURCE_DIR" >> "$GITHUB_ENV"
 
-          if [ -z "${SOURCE_DIR:-}" ]; then
-            echo "SOURCE_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
           fi
 
       # ============================================================
-      # 3. VERIFY REQUIRED SOURCE
+      # 3. VERIFY RKMS SOURCE
       # ============================================================
       - name: Verify RKMS source
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "VERIFY RKMS SOURCE"
+          echo "=========================================="
 
           test -f package.json
           test -f app.js
@@ -99,54 +129,92 @@ jobs:
           test -f capacitor.config.json
           test -f google-services.json
 
-          echo "RKMS source verification PASS."
+          echo "Required RKMS files found."
+
+          echo "Source directory:"
+          pwd
 
       # ============================================================
       # 4. NODE.JS 22
+      #
+      # IMPORTANT:
+      # No npm cache here.
+      # This avoids GitHub Actions failure when package-lock.json
+      # is not available at the cache path.
       # ============================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: ${{ env.SOURCE_DIR }}/package-lock.json
 
       # ============================================================
-      # 5. NPM INSTALL
+      # 5. SHOW NODE / NPM VERSION
+      # ============================================================
+      - name: Verify Node and npm
+        shell: bash
+        run: |
+          set -e
+
+          node --version
+          npm --version
+
+      # ============================================================
+      # 6. INSTALL DEPENDENCIES
       # ============================================================
       - name: Install dependencies
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
+          echo "=========================================="
+          echo "INSTALL NPM DEPENDENCIES"
+          echo "=========================================="
+
           if [ -f package-lock.json ]; then
+
+            echo "package-lock.json found."
+            echo "Running npm ci..."
+
             npm ci
+
           else
+
+            echo "package-lock.json not found."
+            echo "Running npm install..."
+
             npm install
+
           fi
 
       # ============================================================
-      # 6. JAVASCRIPT SYNTAX CHECK
+      # 7. JAVASCRIPT SYNTAX CHECK
       # ============================================================
       - name: Check JavaScript syntax
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
           node --check app.js
 
-          echo "JavaScript syntax PASS."
+          echo "JavaScript syntax check PASS."
 
       # ============================================================
-      # 7. WEB BUILD
+      # 8. WEB BUILD
       # ============================================================
       - name: Build web application
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "WEB BUILD"
+          echo "=========================================="
 
           if node -e "
             const p=require('./package.json');
@@ -154,34 +222,44 @@ jobs:
               p.scripts && p.scripts.build ? 0 : 1
             );
           "; then
+
             npm run build
+
           else
+
             echo "No npm build script found."
-            echo "Using existing web source."
+            echo "Using existing RKMS web source."
+
           fi
 
       # ============================================================
-      # 8. JAVA 17
+      # 9. JDK 17
       # ============================================================
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       # ============================================================
-      # 9. ANDROID SDK 36
+      # 10. ANDROID SDK
       # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # ============================================================
+      # 11. INSTALL ANDROID 16 / API 36
+      # ============================================================
       - name: Install Android 16 API 36
         shell: bash
         run: |
           set -e
 
-          yes | sdkmanager --licenses >/dev/null || true
+          echo "=========================================="
+          echo "ANDROID SDK 36"
+          echo "=========================================="
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
           sdkmanager \
             "platform-tools" \
@@ -191,45 +269,70 @@ jobs:
           echo "Android API 36 installed."
 
       # ============================================================
-      # 10. CAPACITOR ANDROID
+      # 12. PREPARE CAPACITOR ANDROID
       # ============================================================
       - name: Prepare Capacitor Android
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
+          echo "=========================================="
+          echo "CAPACITOR ANDROID"
+          echo "=========================================="
+
           if [ ! -d android ]; then
+
+            echo "Android project does not exist."
+            echo "Creating Android project..."
+
             npx cap add android
+
+          else
+
+            echo "Android project already exists."
+
           fi
 
           npx cap sync android
 
       # ============================================================
-      # 11. CONFIGURE ANDROID 16
+      # 13. CONFIGURE ANDROID 16
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
-          if [ -f scripts/configure-android-16.sh ]; then
-            chmod +x scripts/configure-android-16.sh
-            ./scripts/configure-android-16.sh
-          else
+          echo "=========================================="
+          echo "CONFIGURE ANDROID 16"
+          echo "=========================================="
+
+          if [ ! -f scripts/configure-android-16.sh ]; then
             echo "ERROR: configure-android-16.sh missing."
             exit 1
           fi
 
+          chmod +x scripts/configure-android-16.sh
+
+          ./scripts/configure-android-16.sh
+
       # ============================================================
-      # 12. NATIVE RKMS SETUP
+      # 14. RKMS NATIVE ANDROID SETUP
       # ============================================================
       - name: Configure RKMS native Android
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "RKMS NATIVE ANDROID SETUP"
+          echo "=========================================="
 
           if [ ! -f scripts/setup-android-native.sh ]; then
             echo "ERROR: setup-android-native.sh missing."
@@ -237,129 +340,236 @@ jobs:
           fi
 
           chmod +x scripts/setup-android-native.sh
+
           ./scripts/setup-android-native.sh
 
       # ============================================================
-      # 13. VERIFY FIREBASE CONFIG
+      # 15. VERIFY FIREBASE CONFIGURATION
       # ============================================================
       - name: Verify Firebase configuration
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
+          echo "=========================================="
+          echo "FIREBASE VERIFICATION"
+          echo "=========================================="
+
+          # Root Firebase file
           test -f google-services.json
+
+          # Native Android Firebase file
           test -f android/app/google-services.json
 
-          grep -q '"package_name"[[:space:]]*:[[:space:]]*"org.rkms.connect"' \
+          # Correct Android package
+          grep -q \
+            '"package_name"[[:space:]]*:[[:space:]]*"org.rkms.connect"' \
             google-services.json
 
-          grep -Rqs \
+          grep -q \
+            '"package_name"[[:space:]]*:[[:space:]]*"org.rkms.connect"' \
+            android/app/google-services.json
+
+          # Native Firebase initialization
+          if grep -Rqs \
             'FirebaseApp.initializeApp(this)' \
-            android/app/src/main/java
+            android/app/src/main/java; then
+
+            echo "FirebaseApp.initializeApp(this) FOUND."
+
+          else
+
+            echo "ERROR: Native Firebase initialization not found."
+            exit 1
+
+          fi
 
           echo "Firebase configuration PASS."
-          echo "Native Firebase initialization PASS."
 
       # ============================================================
-      # 14. VERIFY ANDROID PACKAGE / SDK
+      # 16. VERIFY GOOGLE SERVICES GRADLE PLUGIN
+      # ============================================================
+      - name: Verify Google Services plugin
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "GOOGLE SERVICES PLUGIN"
+          echo "=========================================="
+
+          grep -Rqs \
+            'com.google.gms.google-services' \
+            android
+
+          grep -Rqs \
+            'com.google.gms:google-services:4.4.3' \
+            android
+
+          echo "Google Services plugin PASS."
+
+      # ============================================================
+      # 17. VERIFY ANDROID PACKAGE / SDK
       # ============================================================
       - name: Verify Android package and SDK
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "ANDROID PACKAGE / SDK VERIFICATION"
+          echo "=========================================="
 
           grep -Rqs \
             'org.rkms.connect' \
             android/app/src/main
 
-          grep -Rqs \
+          if grep -Rqs \
             'compileSdk.*36\|compileSdkVersion.*36' \
-            android
+            android; then
 
-          grep -Rqs \
+            echo "compileSdk 36 found."
+
+          else
+
+            echo "ERROR: compileSdk 36 not found."
+            exit 1
+
+          fi
+
+          if grep -Rqs \
             'targetSdk.*36\|targetSdkVersion.*36' \
-            android
+            android; then
+
+            echo "targetSdk 36 found."
+
+          else
+
+            echo "ERROR: targetSdk 36 not found."
+            exit 1
+
+          fi
 
           echo "Android package/API verification PASS."
 
       # ============================================================
-      # 15. VERIFY NATIVE BRIDGE
+      # 18. VERIFY RKMS NATIVE BRIDGE
       # ============================================================
       - name: Verify RKMS Native Bridge
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
-          grep -Rqs "RKMSNativeBridge" android/app/src/main/java
+          echo "=========================================="
+          echo "NATIVE BRIDGE"
+          echo "=========================================="
+
+          grep -Rqs \
+            "RKMSNativeBridge" \
+            android/app/src/main/java
 
           echo "RKMS Native Bridge PASS."
 
       # ============================================================
-      # 16. VERIFY SAVED LOGIN / BIOMETRIC
+      # 19. VERIFY SAVED LOGIN
       # ============================================================
       - name: Verify saved login
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
           if [ -f scripts/verify-saved-login.py ]; then
+
             python3 scripts/verify-saved-login.py
+
           else
+
             echo "Saved-login verification script not found."
+            echo "Skipping."
+
           fi
 
       # ============================================================
-      # 17. VERIFY FCM PIPELINE
+      # 20. VERIFY FCM PIPELINE
       # ============================================================
       - name: Verify FCM pipeline
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
           if [ -f scripts/verify-fcm-pipeline.py ]; then
+
             python3 scripts/verify-fcm-pipeline.py
+
           else
+
             echo "FCM verification script not found."
+            echo "Skipping."
+
           fi
 
       # ============================================================
-      # 18. VERIFY LOGIN / NAVIGATION
+      # 21. VERIFY LOGIN / NAVIGATION
       # ============================================================
       - name: Verify login and navigation
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
           if [ -f scripts/verify-final-login-navigation.py ]; then
+
             python3 scripts/verify-final-login-navigation.py
+
+          else
+
+            echo "Login/navigation verification script not found."
+            echo "Skipping."
+
           fi
 
       # ============================================================
-      # 19. VERIFY AUTHORITY HIERARCHY
+      # 22. VERIFY AUTHORITY HIERARCHY
       # ============================================================
       - name: Verify authority hierarchy
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
           if [ -f scripts/verify-authority-hierarchy.py ]; then
+
             python3 scripts/verify-authority-hierarchy.py
+
+          else
+
+            echo "Authority hierarchy verification script not found."
+            echo "Skipping."
+
           fi
 
       # ============================================================
-      # 20. VERIFY DIRECTORY
+      # 23. VERIFY DIRECTORY
       # ============================================================
       - name: Verify directory
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
           if [ -f scripts/verify-directory-lists.py ]; then
@@ -370,13 +580,32 @@ jobs:
             python3 scripts/verify-member-directory-scope.py
           fi
 
+          if [ -f scripts/verify-v17-directory-deep.py ]; then
+            python3 scripts/verify-v17-directory-deep.py
+          fi
+
       # ============================================================
-      # 21. VERIFY CONTENT MANAGEMENT
+      # 24. VERIFY DIRECTORY CONTACT ACTIONS
+      # ============================================================
+      - name: Verify directory contact actions
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          if [ -f scripts/verify-directory-contact-actions.py ]; then
+            python3 scripts/verify-directory-contact-actions.py
+          fi
+
+      # ============================================================
+      # 25. VERIFY CONTENT MANAGEMENT
       # ============================================================
       - name: Verify content management
         shell: bash
         run: |
           set -e
+
           cd "$SOURCE_DIR"
 
           if [ -f scripts/verify-content-management-final.py ]; then
@@ -384,4 +613,351 @@ jobs:
           fi
 
       # ============================================================
-      # 
+      # 26. VERIFY PROFILE UPDATE
+      # ============================================================
+      - name: Verify profile update
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          if [ -f scripts/verify-profile-update-final.py ]; then
+            python3 scripts/verify-profile-update-final.py
+          fi
+
+      # ============================================================
+      # 27. VERIFY PDF PIPELINE
+      # ============================================================
+      - name: Verify PDF pipeline
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          if [ -f scripts/verify-pdf-pipeline.py ]; then
+            python3 scripts/verify-pdf-pipeline.py
+          fi
+
+      # ============================================================
+      # 28. VERIFY REPORT DOWNLOAD SCOPE
+      # ============================================================
+      - name: Verify report download scope
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          if [ -f scripts/verify-report-download-scope.py ]; then
+            python3 scripts/verify-report-download-scope.py
+          fi
+
+      # ============================================================
+      # 29. VERIFY FINAL RKMS
+      # ============================================================
+      - name: Final RKMS verification
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          if [ -f scripts/verify-rkms-final.py ]; then
+            python3 scripts/verify-rkms-final.py
+          fi
+
+      # ============================================================
+      # 30. VERIFY DOCUMENT SIGNER FLOW
+      #
+      # Digital ID
+      # Membership Certificate
+      # Appointment Letter
+      # ============================================================
+      - name: Verify document signer flow
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "DOCUMENT SIGNER VERIFICATION"
+          echo "=========================================="
+
+          grep -q \
+            "getAppointmentMeta" \
+            app.js
+
+          grep -q \
+            "getMembershipApprovalMeta" \
+            app.js
+
+          grep -q \
+            "appointing_officer_signature_url" \
+            app.js
+
+          grep -q \
+            "national_president_signature_url" \
+            app.js
+
+          echo "Digital ID signer flow PASS."
+          echo "Membership Certificate signer flow PASS."
+          echo "Appointment Letter signer flow PASS."
+
+      # ============================================================
+      # 31. VERIFY GUEST NAVIGATION
+      # ============================================================
+      - name: Verify guest navigation
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "GUEST NAVIGATION"
+          echo "=========================================="
+
+          grep -q \
+            'guest-nav' \
+            app.js
+
+          grep -q \
+            'guest-nav' \
+            styles.css
+
+          if grep -q \
+            'सदस्य / PDA अधिकारी Login' \
+            app.js; then
+
+            echo "ERROR: Old split login text still exists."
+            exit 1
+
+          fi
+
+          echo "Guest navigation PASS."
+
+      # ============================================================
+      # 32. VERIFY ANDROID MANIFEST
+      # ============================================================
+      - name: Verify Android manifest
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          test -f "$MANIFEST"
+
+          grep -q \
+            'android.permission.INTERNET' \
+            "$MANIFEST"
+
+          grep -q \
+            'android.permission.POST_NOTIFICATIONS' \
+            "$MANIFEST"
+
+          echo "Android manifest permissions PASS."
+
+      # ============================================================
+      # 33. VERIFY CAPACITOR
+      # ============================================================
+      - name: Verify Capacitor Android
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          test -d android
+          test -f android/gradlew
+
+          echo "Capacitor Android project PASS."
+
+      # ============================================================
+      # 34. CONFIGURE RELEASE SIGNING
+      # ============================================================
+      - name: Configure release signing
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "RELEASE SIGNING"
+          echo "=========================================="
+
+          if [ ! -f scripts/configure-release-signing.sh ]; then
+            echo "ERROR: configure-release-signing.sh missing."
+            exit 1
+          fi
+
+          chmod +x scripts/configure-release-signing.sh
+
+          ./scripts/configure-release-signing.sh
+
+      # ============================================================
+      # 35. SETUP GRADLE 8.11.1
+      # ============================================================
+      - name: Setup Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+
+      # ============================================================
+      # 36. VERIFY GRADLE
+      # ============================================================
+      - name: Verify Gradle
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR/android"
+
+          chmod +x gradlew
+
+          ./gradlew --version
+
+      # ============================================================
+      # 37. BUILD SIGNED RELEASE AAB
+      # ============================================================
+      - name: Build signed Release AAB
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR/android"
+
+          echo "=========================================="
+          echo "BUILD RELEASE AAB"
+          echo "=========================================="
+
+          chmod +x gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            clean \
+            bundleRelease
+
+      # ============================================================
+      # 38. LOCATE AAB
+      # ============================================================
+      - name: Locate Release AAB
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "LOCATE AAB"
+          echo "=========================================="
+
+          AAB="$(find android/app/build/outputs/bundle \
+            -type f \
+            -name '*release*.aab' \
+            -print \
+            | head -n 1)"
+
+          if [ -z "$AAB" ]; then
+            echo "ERROR: Release AAB not found."
+            exit 1
+          fi
+
+          echo "AAB=$AAB" >> "$GITHUB_ENV"
+
+          echo "Release AAB:"
+          ls -lh "$AAB"
+
+      # ============================================================
+      # 39. VERIFY AAB
+      # ============================================================
+      - name: Verify AAB
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          test -f "$AAB"
+
+          echo "AAB file exists."
+
+      # ============================================================
+      # 40. VERIFY AAB SIGNATURE
+      # ============================================================
+      - name: Verify AAB signature
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "=========================================="
+          echo "AAB SIGNATURE"
+          echo "=========================================="
+
+          jarsigner \
+            -verify \
+            -verbose \
+            -certs \
+            "$AAB"
+
+          echo "AAB signature verification PASS."
+
+      # ============================================================
+      # 41. GENERATE SHA256
+      # ============================================================
+      - name: Generate SHA256
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          sha256sum "$AAB" \
+            | tee RKMS_RELEASE_AAB_SHA256.txt
+
+      # ============================================================
+      # 42. PREPARE RELEASE ARTIFACTS
+      # ============================================================
+      - name: Prepare release artifacts
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          rm -rf release
+          mkdir -p release
+
+          cp "$AAB" \
+            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
+
+          cp RKMS_RELEASE_AAB_SHA256.txt \
+            release/
+
+          echo "=========================================="
+          echo "RELEASE ARTIFACTS"
+          echo "=========================================="
+
+          ls -lh release/
+
+      # ============================================================
+      # 43. UPLOAD FINAL AAB
+      # ============================================================
+      - name: Upload final Release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-CONNECT-Android16-API36-Release
+          path: |
+            ${{ env.SOURCE_DIR }}/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
+            ${{ env.SOURCE_DIR }}/release/RKMS_RELEASE_AAB_SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
