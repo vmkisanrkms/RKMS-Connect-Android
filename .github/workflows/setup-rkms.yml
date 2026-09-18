@@ -68,7 +68,13 @@ jobs:
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: RKMS source ZIP not found."
-            find . -maxdepth 1 -type f -name '*.zip' -print
+            echo ""
+            echo "Available ZIP files:"
+            find . \
+              -maxdepth 1 \
+              -type f \
+              -name '*.zip' \
+              -print
             exit 1
           fi
 
@@ -362,12 +368,11 @@ jobs:
           path = Path(sys.argv[1])
           s = path.read_text()
 
-          # The generated bridge may contain a literal two-character
-          # sequence "\n" where Java source requires an actual newline.
+          # Repair ONLY literal \n sequences which occur immediately
+          # before @JavascriptInterface.
           #
-          # Repair only when that sequence is immediately followed by
-          # an @JavascriptInterface declaration. This avoids modifying
-          # normal Java string escape sequences elsewhere.
+          # This deliberately does not replace every \n in the file,
+          # because valid Java string escape sequences must remain intact.
 
           pattern = r'\\n(?=\s*@JavascriptInterface\b)'
 
@@ -378,13 +383,13 @@ jobs:
               path.write_text(s)
 
               print(
-                  f"Repaired {len(matches)} literal \\\\n "
-                  f"sequence(s) before @JavascriptInterface."
+                  f"Repaired {len(matches)} broken literal "
+                  f"\\\\n sequence(s)."
               )
           else:
               print(
-                  "No broken literal \\\\n sequence found before "
-                  "@JavascriptInterface."
+                  "No broken literal \\\\n sequence found "
+                  "before @JavascriptInterface."
               )
           PY
 
@@ -392,13 +397,13 @@ jobs:
           echo "Checking bridge for remaining broken declarations..."
 
           if grep -Fq '\n @JavascriptInterface' "$BRIDGE_FILE"; then
-            echo "ERROR: Broken literal \\n remains in bridge."
+            echo "ERROR: Literal \\n remains before @JavascriptInterface."
             grep -n -F '\n @JavascriptInterface' "$BRIDGE_FILE" || true
             exit 1
           fi
 
           if grep -Fq '\n@JavascriptInterface' "$BRIDGE_FILE"; then
-            echo "ERROR: Broken literal \\n remains in bridge."
+            echo "ERROR: Literal \\n remains before @JavascriptInterface."
             grep -n -F '\n@JavascriptInterface' "$BRIDGE_FILE" || true
             exit 1
           fi
@@ -563,8 +568,15 @@ jobs:
                   "ERROR: dependencies block not found."
               )
 
-          bom = '    implementation platform("com.google.firebase:firebase-bom:34.19.0")'
-          messaging = '    implementation "com.google.firebase:firebase-messaging"'
+          bom = (
+              '    implementation platform('
+              '"com.google.firebase:firebase-bom:34.19.0")'
+          )
+
+          messaging = (
+              '    implementation '
+              '"com.google.firebase:firebase-messaging"'
+          )
 
           if "com.google.firebase:firebase-bom:" not in s:
               s = s.replace(
@@ -627,6 +639,8 @@ jobs:
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             echo "ERROR: MainActivity.java/MainActivity.kt not found."
+            echo ""
+            echo "Available Activity files:"
             find android/app/src/main/java \
               -type f \
               \( -name '*.java' -o -name '*.kt' \) \
@@ -651,38 +665,52 @@ jobs:
 
           if path.suffix == ".java":
 
+              # ----------------------------------------------------
+              # Firebase import
+              # ----------------------------------------------------
+
               if "import com.google.firebase.FirebaseApp;" not in s:
 
                   package_match = re.search(
-                      r'^(package\s+[^;]+;\s*)',
+                      r'^(package\s+[^;]+;)',
                       s,
                       flags=re.MULTILINE
                   )
 
-                  if package_match:
-                      pos = package_match.end()
-
-                      s = (
-                          s[:pos]
-                          + "\n\nimport com.google.firebase.FirebaseApp;"
-                          + s[pos:]
-                      )
-
-                  else:
+                  if not package_match:
                       raise SystemExit(
                           "ERROR: Java package declaration not found."
                       )
 
+                  pos = package_match.end()
+
+                  s = (
+                      s[:pos]
+                      + "\n\nimport com.google.firebase.FirebaseApp;"
+                      + s[pos:]
+                  )
+
+              # ----------------------------------------------------
+              # Firebase initialization
+              # ----------------------------------------------------
+
               if "FirebaseApp.initializeApp(this)" in s:
 
                   print(
-                      "Firebase initialization already present."
+                      "FirebaseApp.initializeApp(this) "
+                      "already present."
                   )
 
               else:
 
+                  # IMPORTANT:
+                  # Detect ANY existing Java onCreate(Bundle).
+                  # This includes public/protected/private and
+                  # package-private declarations.
                   oncreate = re.search(
-                      r'protected\s+void\s+onCreate\s*\(\s*Bundle\s+\w+\s*\)\s*\{',
+                      r'(?m)^[ \t]*(?:(?:public|protected|private)\s+)?'
+                      r'(?:static\s+)?(?:final\s+)?void\s+onCreate\s*'
+                      r'\(\s*Bundle\s+\w+\s*\)\s*\{',
                       s
                   )
 
@@ -698,33 +726,36 @@ jobs:
 
                       print(
                           "FirebaseApp.initializeApp(this) "
-                          "inserted into existing onCreate()."
+                          "inserted into EXISTING onCreate()."
                       )
 
                   else:
 
+                      # ------------------------------------------------
+                      # No existing onCreate -> create exactly ONE.
+                      # ------------------------------------------------
+
                       if "import android.os.Bundle;" not in s:
 
                           package_match = re.search(
-                              r'^(package\s+[^;]+;\s*)',
+                              r'^(package\s+[^;]+;)',
                               s,
                               flags=re.MULTILINE
                           )
 
-                          if package_match:
-
-                              pos = package_match.end()
-
-                              s = (
-                                  s[:pos]
-                                  + "\n\nimport android.os.Bundle;"
-                                  + s[pos:]
-                              )
-
-                          else:
+                          if not package_match:
                               raise SystemExit(
-                                  "ERROR: Java package declaration not found."
+                                  "ERROR: Java package declaration "
+                                  "not found."
                               )
+
+                          pos = package_match.end()
+
+                          s = (
+                              s[:pos]
+                              + "\n\nimport android.os.Bundle;"
+                              + s[pos:]
+                          )
 
                       method = """
               @Override
@@ -745,12 +776,15 @@ jobs:
                       s = s[:last] + method + s[last:]
 
                       print(
-                          "Firebase initialization inserted "
-                          "as new onCreate()."
+                          "No existing onCreate() found."
+                      )
+
+                      print(
+                          "Created ONE new onCreate() with "
+                          "Firebase initialization."
                       )
 
               path.write_text(s)
-
 
           # ========================================================
           # KOTLIN
@@ -758,39 +792,48 @@ jobs:
 
           else:
 
+              # ----------------------------------------------------
+              # Firebase import
+              # ----------------------------------------------------
+
               if "import com.google.firebase.FirebaseApp" not in s:
 
                   package_match = re.search(
-                      r'^(package\s+[^\n]+\n)',
+                      r'^(package\s+[^\n]+)',
                       s,
                       flags=re.MULTILINE
                   )
 
-                  if package_match:
-
-                      pos = package_match.end()
-
-                      s = (
-                          s[:pos]
-                          + "\nimport com.google.firebase.FirebaseApp\n"
-                          + s[pos:]
-                      )
-
-                  else:
+                  if not package_match:
                       raise SystemExit(
                           "ERROR: Kotlin package declaration not found."
                       )
 
+                  pos = package_match.end()
+
+                  s = (
+                      s[:pos]
+                      + "\nimport com.google.firebase.FirebaseApp"
+                      + s[pos:]
+                  )
+
+              # ----------------------------------------------------
+              # Firebase initialization
+              # ----------------------------------------------------
+
               if "FirebaseApp.initializeApp(this)" in s:
 
                   print(
-                      "Firebase initialization already present."
+                      "FirebaseApp.initializeApp(this) "
+                      "already present."
                   )
 
               else:
 
+                  # Detect existing Kotlin onCreate().
                   oncreate = re.search(
-                      r'override\s+fun\s+onCreate\s*\(\s*\w+\s*:\s*Bundle\s*\?\s*\)\s*\{',
+                      r'(?m)^[ \t]*(?:override\s+)?fun\s+onCreate\s*'
+                      r'\(\s*\w+\s*:\s*Bundle\s*\?\s*\)\s*\{',
                       s
                   )
 
@@ -805,8 +848,8 @@ jobs:
                       )
 
                       print(
-                          "Firebase initialization inserted "
-                          "into Kotlin onCreate()."
+                          "FirebaseApp.initializeApp(this) "
+                          "inserted into EXISTING Kotlin onCreate()."
                       )
 
                   else:
@@ -814,25 +857,24 @@ jobs:
                       if "import android.os.Bundle" not in s:
 
                           package_match = re.search(
-                              r'^(package\s+[^\n]+\n)',
+                              r'^(package\s+[^\n]+)',
                               s,
                               flags=re.MULTILINE
                           )
 
-                          if package_match:
-
-                              pos = package_match.end()
-
-                              s = (
-                                  s[:pos]
-                                  + "\nimport android.os.Bundle\n"
-                                  + s[pos:]
-                              )
-
-                          else:
+                          if not package_match:
                               raise SystemExit(
-                                  "ERROR: Kotlin package declaration not found."
+                                  "ERROR: Kotlin package declaration "
+                                  "not found."
                               )
+
+                          pos = package_match.end()
+
+                          s = (
+                              s[:pos]
+                              + "\nimport android.os.Bundle"
+                              + s[pos:]
+                          )
 
                       method = """
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -852,8 +894,12 @@ jobs:
                       s = s[:last] + method + s[last:]
 
                       print(
-                          "Firebase initialization inserted "
-                          "as new Kotlin onCreate()."
+                          "No existing Kotlin onCreate() found."
+                      )
+
+                      print(
+                          "Created ONE new onCreate() with "
+                          "Firebase initialization."
                       )
 
               path.write_text(s)
@@ -862,13 +908,45 @@ jobs:
           PY
 
           echo ""
-          echo "Firebase initialization source:"
+          echo "============================================================"
+          echo "VERIFY FIREBASE INITIALIZATION"
+          echo "============================================================"
+
           grep -n -F \
             'FirebaseApp.initializeApp(this)' \
             "$MAIN_ACTIVITY"
 
+          # --------------------------------------------------------
+          # HARD CHECK:
+          # MainActivity must not contain duplicate Java
+          # onCreate(Bundle) declarations.
+          # --------------------------------------------------------
+
+          ONCREATE_COUNT="$(grep -E \
+            -c '^[[:space:]]*(public|protected|private)?[[:space:]]*(static[[:space:]]+)?(final[[:space:]]+)?void[[:space:]]+onCreate[[:space:]]*\([[:space:]]*Bundle[[:space:]]+' \
+            "$MAIN_ACTIVITY" || true)"
+
+          echo "Java onCreate(Bundle) count: $ONCREATE_COUNT"
+
+          if [ "$ONCREATE_COUNT" -gt 1 ]; then
+            echo ""
+            echo "ERROR: Duplicate onCreate(Bundle) methods detected."
+            echo ""
+            grep -n -E \
+              'onCreate[[:space:]]*\([[:space:]]*Bundle' \
+              "$MAIN_ACTIVITY" \
+              || true
+            exit 1
+          fi
+
           echo ""
+          echo "Single onCreate(Bundle): PASS"
+          echo "Firebase initialization: PASS"
+
+          echo ""
+          echo "============================================================"
           echo "FORCE FIREBASE INITIALIZATION: PASS"
+          echo "============================================================"
 
 
       # ============================================================
@@ -1417,12 +1495,12 @@ jobs:
           s = p.read_text()
 
           signing_block = """
-              release {
-                  storeFile file("../../rkms-release.keystore")
-                  storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
-                  keyAlias System.getenv("RKMS_KEY_ALIAS")
-                  keyPassword System.getenv("RKMS_KEY_PASSWORD")
-              }
+                  release {
+                      storeFile file("../../rkms-release.keystore")
+                      storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("RKMS_KEY_ALIAS")
+                      keyPassword System.getenv("RKMS_KEY_PASSWORD")
+                  }
           """
 
           if "signingConfigs {" not in s:
