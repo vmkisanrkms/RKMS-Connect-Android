@@ -30,7 +30,7 @@ jobs:
 
 
       # ============================================================
-      # 2. EXTRACT AND LOCATE RKMS SOURCE
+      # 2. EXTRACT RKMS SOURCE ZIP
       # ============================================================
 
       - name: Extract and locate RKMS source
@@ -214,6 +214,10 @@ jobs:
         run: |
           set -e
 
+          echo "============================================================"
+          echo "ANDROID SDK SETUP"
+          echo "============================================================"
+
           SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -x "$SDKMANAGER" ]; then
@@ -273,7 +277,7 @@ jobs:
 
 
       # ============================================================
-      # 12. ANDROID 16 CONFIGURATION
+      # 12. ANDROID 16 / API 36
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -317,7 +321,56 @@ jobs:
 
 
       # ============================================================
-      # 14. FIREBASE SDK
+      # 14. FORCE FIREBASE CONFIG FILE INTO ANDROID APP
+      # ============================================================
+
+      - name: Force Firebase configuration into Android app
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "============================================================"
+          echo "FIREBASE CONFIGURATION FILE"
+          echo "============================================================"
+
+          # --------------------------------------------------------
+          # Root Firebase file must exist
+          # --------------------------------------------------------
+
+          if [ ! -f google-services.json ]; then
+            echo "ERROR: Root google-services.json missing."
+            exit 1
+          fi
+
+          echo "Root google-services.json: PRESENT"
+
+          # --------------------------------------------------------
+          # Make Android app directory
+          # --------------------------------------------------------
+
+          mkdir -p android/app
+
+          # --------------------------------------------------------
+          # Always copy the authoritative root Firebase config
+          # --------------------------------------------------------
+
+          cp -f google-services.json android/app/google-services.json
+
+          # --------------------------------------------------------
+          # Verify copied file
+          # --------------------------------------------------------
+
+          test -f android/app/google-services.json
+          test -s android/app/google-services.json
+
+          echo "Android app google-services.json: PRESENT"
+          echo "Firebase configuration copy: PASS"
+
+
+      # ============================================================
+      # 15. FORCE ADD FIREBASE SDK
       # ============================================================
 
       - name: Force add Firebase SDK after native setup
@@ -326,6 +379,10 @@ jobs:
           set -e
 
           cd "$SOURCE_DIR"
+
+          echo "============================================================"
+          echo "FIREBASE SDK DEPENDENCIES"
+          echo "============================================================"
 
           test -f android/app/build.gradle
 
@@ -366,7 +423,7 @@ jobs:
           PY
 
           echo ""
-          echo "Firebase dependencies:"
+          echo "Firebase dependency lines:"
           grep -n "com.google.firebase" android/app/build.gradle || true
 
           grep -Fq \
@@ -384,7 +441,7 @@ jobs:
 
 
       # ============================================================
-      # 15. FIREBASE CONFIGURATION
+      # 16. VERIFY FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -398,23 +455,62 @@ jobs:
           echo "FIREBASE CONFIGURATION VERIFICATION"
           echo "============================================================"
 
+          # --------------------------------------------------------
+          # Firebase JSON files
+          # --------------------------------------------------------
+
           test -f google-services.json
           echo "Root google-services.json: PRESENT"
 
           test -f android/app/google-services.json
           echo "Android google-services.json: PRESENT"
 
-          grep -Fq \
-            '"package_name": "org.rkms.connect"' \
-            google-services.json
+          # --------------------------------------------------------
+          # Validate Firebase JSON and package name
+          # --------------------------------------------------------
 
-          echo "Root Firebase package name: PASS"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
 
-          grep -Fq \
-            '"package_name": "org.rkms.connect"' \
-            android/app/google-services.json
+          files = [
+              Path("google-services.json"),
+              Path("android/app/google-services.json"),
+          ]
 
-          echo "Android Firebase package name: PASS"
+          expected = "org.rkms.connect"
+
+          for path in files:
+              try:
+                  data = json.loads(path.read_text())
+              except Exception as e:
+                  raise SystemExit(
+                      f"ERROR: Invalid JSON in {path}: {e}"
+                  )
+
+              found = []
+
+              for client in data.get("client", []):
+                  info = client.get("client_info", {})
+                  package_name = info.get("android_client_info", {}).get(
+                      "package_name"
+                  )
+
+                  if package_name:
+                      found.append(package_name)
+
+              if expected not in found:
+                  raise SystemExit(
+                      f"ERROR: {expected} not found in {path}. "
+                      f"Found: {found}"
+                  )
+
+              print(f"{path}: package {expected}: PASS")
+          PY
+
+          # --------------------------------------------------------
+          # Native Firebase initialization
+          # --------------------------------------------------------
 
           grep -R -Fq \
             'FirebaseApp.initializeApp(this)' \
@@ -426,6 +522,10 @@ jobs:
 
           echo "FirebaseApp.initializeApp(this): PASS"
 
+          # --------------------------------------------------------
+          # Firebase BOM
+          # --------------------------------------------------------
+
           grep -Fq \
             'com.google.firebase:firebase-bom:34.19.0' \
             android/app/build.gradle \
@@ -436,6 +536,10 @@ jobs:
 
           echo "Firebase BOM: PASS"
 
+          # --------------------------------------------------------
+          # Firebase Messaging
+          # --------------------------------------------------------
+
           grep -Fq \
             'com.google.firebase:firebase-messaging' \
             android/app/build.gradle \
@@ -445,6 +549,10 @@ jobs:
             }
 
           echo "Firebase Messaging: PASS"
+
+          # --------------------------------------------------------
+          # Google Services plugin
+          # --------------------------------------------------------
 
           grep -R -Fq \
             'com.google.gms.google-services' \
@@ -457,11 +565,13 @@ jobs:
           echo "Google Services plugin: PASS"
 
           echo ""
+          echo "============================================================"
           echo "FIREBASE CONFIGURATION: PASS"
+          echo "============================================================"
 
 
       # ============================================================
-      # 16. PACKAGE / NATIVE BRIDGE
+      # 17. PACKAGE / NATIVE BRIDGE
       # ============================================================
 
       - name: Verify package and native bridge
@@ -493,7 +603,7 @@ jobs:
 
 
       # ============================================================
-      # 17. SAVED LOGIN
+      # 18. SAVED LOGIN
       # ============================================================
 
       - name: Verify saved login
@@ -511,7 +621,7 @@ jobs:
 
 
       # ============================================================
-      # 18. FCM PIPELINE
+      # 19. FCM PIPELINE
       # ============================================================
 
       - name: Verify FCM pipeline
@@ -529,7 +639,7 @@ jobs:
 
 
       # ============================================================
-      # 19. FINAL LOGIN
+      # 20. FINAL LOGIN
       # ============================================================
 
       - name: Verify final login
@@ -547,7 +657,7 @@ jobs:
 
 
       # ============================================================
-      # 20. AUTHORITY HIERARCHY
+      # 21. AUTHORITY HIERARCHY
       # ============================================================
 
       - name: Verify authority hierarchy
@@ -565,7 +675,7 @@ jobs:
 
 
       # ============================================================
-      # 21. DIRECTORY
+      # 22. DIRECTORY
       # ============================================================
 
       - name: Verify directory
@@ -587,11 +697,11 @@ jobs:
             python3 scripts/verify-directory-contact-actions.py
           fi
 
-          echo "Directory verification: PASS"
+          echo "Directory verification completed."
 
 
       # ============================================================
-      # 22. DIRECTORY DEEP CHECK
+      # 23. DIRECTORY DEEP RULES
       # ============================================================
 
       - name: Verify directory deep rules
@@ -609,7 +719,7 @@ jobs:
 
 
       # ============================================================
-      # 23. PROFILE UPDATE
+      # 24. PROFILE UPDATE
       # ============================================================
 
       - name: Verify profile update
@@ -623,11 +733,11 @@ jobs:
             python3 scripts/verify-profile-update-final.py
           fi
 
-          echo "Profile update verification: PASS"
+          echo "Profile update verification completed."
 
 
       # ============================================================
-      # 24. PDF PIPELINE
+      # 25. PDF PIPELINE
       # ============================================================
 
       - name: Verify PDF pipeline
@@ -641,11 +751,11 @@ jobs:
             python3 scripts/verify-pdf-pipeline.py
           fi
 
-          echo "PDF pipeline verification: PASS"
+          echo "PDF pipeline verification completed."
 
 
       # ============================================================
-      # 25. REPORT DOWNLOAD
+      # 26. REPORT DOWNLOAD
       # ============================================================
 
       - name: Verify report download scope
@@ -659,11 +769,11 @@ jobs:
             python3 scripts/verify-report-download-scope.py
           fi
 
-          echo "Report download scope: PASS"
+          echo "Report download scope verification completed."
 
 
       # ============================================================
-      # 26. COMPLAINT FLOW
+      # 27. COMPLAINT FLOW
       # ============================================================
 
       - name: Verify complaint flow
@@ -684,7 +794,7 @@ jobs:
 
 
       # ============================================================
-      # 27. FINAL RKMS RULES
+      # 28. FINAL RKMS RULES
       # ============================================================
 
       - name: Verify final RKMS rules
@@ -698,11 +808,11 @@ jobs:
             python3 scripts/verify-rkms-final.py
           fi
 
-          echo "Final RKMS rules: PASS"
+          echo "Final RKMS rules verification completed."
 
 
       # ============================================================
-      # 28. DOCUMENT SIGNER
+      # 29. DOCUMENT SIGNER
       # ============================================================
 
       - name: Verify document signer
@@ -732,7 +842,7 @@ jobs:
 
 
       # ============================================================
-      # 29. GUEST NAVIGATION
+      # 30. GUEST NAVIGATION
       # ============================================================
 
       - name: Verify guest navigation
@@ -758,7 +868,7 @@ jobs:
 
 
       # ============================================================
-      # 30. ANDROID MANIFEST
+      # 31. ANDROID MANIFEST
       # ============================================================
 
       - name: Inspect Android manifest
@@ -785,7 +895,7 @@ jobs:
 
 
       # ============================================================
-      # 31. CAPACITOR CHECK
+      # 32. CAPACITOR CHECK
       # ============================================================
 
       - name: Capacitor check
@@ -801,7 +911,7 @@ jobs:
 
 
       # ============================================================
-      # 32. RELEASE SIGNING PREPARATION
+      # 33. RELEASE SIGNING PREPARATION
       # ============================================================
 
       - name: Prepare release signing
@@ -841,7 +951,7 @@ jobs:
 
 
       # ============================================================
-      # 33. GRADLE 8.11.1
+      # 34. GRADLE 8.11.1
       # ============================================================
 
       - name: Configure Gradle 8.11.1
@@ -867,7 +977,7 @@ jobs:
 
 
       # ============================================================
-      # 34. RELEASE SIGNING CONFIGURATION
+      # 35. RELEASE SIGNING CONFIGURATION
       # ============================================================
 
       - name: Configure release signing
@@ -883,10 +993,7 @@ jobs:
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          if "signingConfigs {" not in s:
-              s = s.replace(
-                  "android {",
-                  """android {
+          signing_block = """
               signingConfigs {
                   release {
                       storeFile file("../../rkms-release.keystore")
@@ -895,25 +1002,33 @@ jobs:
                       keyPassword System.getenv("RKMS_KEY_PASSWORD")
                   }
               }
-          """,
+          """
+
+          if "signingConfigs {" not in s:
+              s = s.replace(
+                  "android {",
+                  "android {" + signing_block,
                   1
               )
-          elif "storeFile file(\"../../rkms-release.keystore\")" not in s:
+          elif "rkms-release.keystore" not in s:
               s = s.replace(
                   "signingConfigs {",
-                  """signingConfigs {
-                  release {
-                      storeFile file("../../rkms-release.keystore")
-                      storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
-                      keyAlias System.getenv("RKMS_KEY_ALIAS")
-                      keyPassword System.getenv("RKMS_KEY_PASSWORD")
-                  }
-          """,
+                  signing_block.strip(),
                   1
               )
 
           if "signingConfig signingConfigs.release" not in s:
-              if "buildTypes {" not in s:
+              if "buildTypes {" in s:
+                  s = s.replace(
+                      "buildTypes {",
+                      """buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              """,
+                      1
+                  )
+              else:
                   s += """
           android {
               buildTypes {
@@ -923,16 +1038,6 @@ jobs:
               }
           }
           """
-              else:
-                  s = s.replace(
-                      "buildTypes {",
-                      """buildTypes {
-              release {
-                  signingConfig signingConfigs.release
-              }
-          """,
-                      1
-                  )
 
           p.write_text(s)
 
@@ -943,7 +1048,7 @@ jobs:
 
 
       # ============================================================
-      # 35. FINAL FIREBASE PRE-BUILD CHECK
+      # 36. FINAL FIREBASE PRE-BUILD CHECK
       # ============================================================
 
       - name: Final Firebase pre-build check
@@ -977,7 +1082,8 @@ jobs:
             'com.google.gms.google-services' \
             android
 
-          echo "google-services.json: PASS"
+          echo "Root google-services.json: PASS"
+          echo "Android google-services.json: PASS"
           echo "Firebase BOM: PASS"
           echo "Firebase Messaging: PASS"
           echo "FirebaseApp.initializeApp(this): PASS"
@@ -988,7 +1094,7 @@ jobs:
 
 
       # ============================================================
-      # 36. FINAL ANDROID CONFIG CHECK
+      # 37. FINAL ANDROID CONFIGURATION
       # ============================================================
 
       - name: Final Android configuration check
@@ -1045,7 +1151,7 @@ jobs:
 
 
       # ============================================================
-      # 37. BUILD SIGNED RELEASE AAB
+      # 38. BUILD SIGNED RELEASE AAB
       # ============================================================
 
       - name: Build signed Release AAB
@@ -1069,7 +1175,7 @@ jobs:
 
 
       # ============================================================
-      # 38. LOCATE AAB
+      # 39. LOCATE AAB
       # ============================================================
 
       - name: Locate AAB
@@ -1097,7 +1203,7 @@ jobs:
 
 
       # ============================================================
-      # 39. VERIFY AAB SIGNATURE
+      # 40. VERIFY AAB SIGNATURE
       # ============================================================
 
       - name: Verify AAB signature
@@ -1117,7 +1223,7 @@ jobs:
 
 
       # ============================================================
-      # 40. SHA256
+      # 41. SHA256
       # ============================================================
 
       - name: Calculate AAB SHA256
@@ -1135,7 +1241,7 @@ jobs:
 
 
       # ============================================================
-      # 41. UPLOAD AAB
+      # 42. UPLOAD AAB
       # ============================================================
 
       - name: Upload Release AAB
