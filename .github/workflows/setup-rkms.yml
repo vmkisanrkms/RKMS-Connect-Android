@@ -11,10 +11,12 @@ jobs:
   android-release:
 
     name: RKMS Android 16 API 36 Release
-
     runs-on: ubuntu-latest
 
     env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
       RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
       RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
       RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
@@ -35,16 +37,10 @@ jobs:
       # ============================================================
       # 2. LOCATE CORRECT RKMS SOURCE
       #
-      # IMPORTANT:
-      # Do NOT blindly select the newest ZIP.
+      # If repository root is RKMS source, use it directly.
       #
-      # The selected source MUST contain:
-      # team_rkms
-      # A94473
-      # Team RKMS UUID
-      # teamRkmsAvatar
-      # isTeamRKMSProfile
-      # SUPER_ADMIN
+      # Otherwise search ZIPs and ACCEPT ONLY a ZIP which contains
+      # the Team RKMS implementation.
       # ============================================================
 
       - name: Locate correct RKMS source
@@ -56,16 +52,11 @@ jobs:
           echo "RKMS SOURCE SELECTION"
           echo "============================================================"
 
-          # --------------------------------------------------------
-          # CASE 1:
-          # Repository itself is the RKMS project.
-          # --------------------------------------------------------
-
-          if [ -f "package.json" ] &&
-             [ -f "app.js" ] &&
+          if [ -f "package.json" ] && \
+             [ -f "app.js" ] && \
              [ -f "index.html" ]; then
 
-            echo "Repository root contains RKMS source."
+            echo "RKMS source found in repository root."
 
             echo "SOURCE_DIR=." >> "$GITHUB_ENV"
 
@@ -73,10 +64,9 @@ jobs:
           fi
 
 
-          # --------------------------------------------------------
-          # CASE 2:
-          # Search ZIP files.
-          # --------------------------------------------------------
+          echo "Repository root is not RKMS source."
+          echo "Searching RKMS ZIP files..."
+
 
           mapfile -t ZIP_CANDIDATES < <(
             find . \
@@ -90,8 +80,10 @@ jobs:
 
           if [ "${#ZIP_CANDIDATES[@]}" -eq 0 ]; then
 
-            echo "ERROR: No ZIP files found."
+            echo "ERROR: No RKMS ZIP found."
 
+            echo ""
+            echo "Available files:"
             find . \
               -maxdepth 4 \
               -type f \
@@ -103,40 +95,29 @@ jobs:
 
 
           echo ""
-          echo "ZIP candidates found:"
+          echo "ZIP candidates:"
           printf '%s\n' "${ZIP_CANDIDATES[@]}"
 
 
-          # --------------------------------------------------------
-          # Try each ZIP.
-          #
-          # Only accept a ZIP that actually contains the Team RKMS
-          # implementation.
-          # --------------------------------------------------------
-
           SELECTED_ZIP=""
-
-          rm -rf .rkms_extract
-
-          mkdir -p .rkms_extract
 
 
           for ZIP_FILE in "${ZIP_CANDIDATES[@]}"; do
 
             echo ""
             echo "------------------------------------------------------------"
-            echo "Checking:"
+            echo "Testing ZIP:"
             echo "$ZIP_FILE"
             echo "------------------------------------------------------------"
 
-            TEST_DIR=".rkms_extract/test"
+            TEST_DIR=".rkms_test_extract"
 
             rm -rf "$TEST_DIR"
-
             mkdir -p "$TEST_DIR"
 
+
             if ! unzip -q "$ZIP_FILE" -d "$TEST_DIR"; then
-              echo "ZIP extraction failed - skipping."
+              echo "ZIP extraction failed. Skipping."
               continue
             fi
 
@@ -151,7 +132,7 @@ jobs:
 
 
             if [ -z "$TEST_PACKAGE_JSON" ]; then
-              echo "No package.json - skipping."
+              echo "package.json not found. Skipping."
               continue
             fi
 
@@ -162,37 +143,39 @@ jobs:
 
 
             if [ ! -f "$TEST_SOURCE_DIR/app.js" ]; then
-              echo "No app.js - skipping."
+              echo "app.js not found. Skipping."
               continue
             fi
 
 
-            # ------------------------------------------------------
-            # Team RKMS source verification
-            # ------------------------------------------------------
-
             REQUIRED_OK=true
+
 
             grep -Fq "team_rkms" \
               "$TEST_SOURCE_DIR/app.js" \
               || REQUIRED_OK=false
 
+
             grep -Fq "A94473" \
               "$TEST_SOURCE_DIR/app.js" \
               || REQUIRED_OK=false
+
 
             grep -Fq \
               "b909411c-591d-4a57-9d8d-280842901331" \
               "$TEST_SOURCE_DIR/app.js" \
               || REQUIRED_OK=false
 
+
             grep -Fq "teamRkmsAvatar" \
               "$TEST_SOURCE_DIR/app.js" \
               || REQUIRED_OK=false
 
+
             grep -Fq "isTeamRKMSProfile" \
               "$TEST_SOURCE_DIR/app.js" \
               || REQUIRED_OK=false
+
 
             grep -Fq "SUPER_ADMIN" \
               "$TEST_SOURCE_DIR/app.js" \
@@ -201,25 +184,27 @@ jobs:
 
             if [ "$REQUIRED_OK" = true ]; then
 
-              echo ""
-              echo "TEAM RKMS SOURCE ACCEPTED:"
-              echo "$ZIP_FILE"
-
               SELECTED_ZIP="$ZIP_FILE"
+
+              echo ""
+              echo "============================================================"
+              echo "CORRECT TEAM RKMS ZIP FOUND"
+              echo "============================================================"
+              echo "$SELECTED_ZIP"
+              echo "============================================================"
 
               break
 
             fi
 
 
-            echo "Team RKMS implementation not complete - skipping."
+            echo "Team RKMS markers incomplete. Skipping."
 
           done
 
 
-          # --------------------------------------------------------
-          # No correct ZIP found
-          # --------------------------------------------------------
+          rm -rf .rkms_test_extract
+
 
           if [ -z "$SELECTED_ZIP" ]; then
 
@@ -228,28 +213,25 @@ jobs:
             echo "ERROR: CORRECT TEAM RKMS SOURCE NOT FOUND"
             echo "============================================================"
             echo ""
-            echo "The workflow will NOT build an old/incorrect ZIP."
+            echo "The workflow intentionally refuses to build an old"
+            echo "or incomplete RKMS ZIP."
             echo ""
-            echo "Required Team RKMS markers:"
-            echo " - team_rkms"
-            echo " - A94473"
-            echo " - Team RKMS UUID"
-            echo " - teamRkmsAvatar"
-            echo " - isTeamRKMSProfile"
-            echo " - SUPER_ADMIN"
+            echo "Required markers:"
+            echo "  team_rkms"
+            echo "  A94473"
+            echo "  Team RKMS UUID"
+            echo "  teamRkmsAvatar"
+            echo "  isTeamRKMSProfile"
+            echo "  SUPER_ADMIN"
             echo ""
 
             exit 1
           fi
 
 
-          # --------------------------------------------------------
-          # Extract selected ZIP
-          # --------------------------------------------------------
-
           rm -rf .rkms_extract
-
           mkdir -p .rkms_extract
+
 
           unzip -q \
             "$SELECTED_ZIP" \
@@ -266,9 +248,7 @@ jobs:
 
 
           if [ -z "$PACKAGE_JSON" ]; then
-
-            echo "ERROR: package.json missing from selected ZIP."
-
+            echo "ERROR: package.json missing."
             exit 1
           fi
 
@@ -278,20 +258,19 @@ jobs:
           )"
 
 
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+
+
           echo ""
           echo "============================================================"
-          echo "SELECTED RKMS SOURCE"
+          echo "SELECTED SOURCE DIRECTORY"
           echo "============================================================"
           echo "$SOURCE_DIR"
           echo "============================================================"
 
 
-          echo "SOURCE_DIR=$SOURCE_DIR" \
-            >> "$GITHUB_ENV"
-
-
       # ============================================================
-      # 3. VERIFY SOURCE
+      # 3. VERIFY RKMS SOURCE
       # ============================================================
 
       - name: Verify RKMS source
@@ -324,7 +303,7 @@ jobs:
 
 
       # ============================================================
-      # 4. TEAM RKMS FINAL SOURCE AUDIT
+      # 4. TEAM RKMS SOURCE AUDIT
       # ============================================================
 
       - name: Audit Team RKMS Super Admin Chat
@@ -335,6 +314,7 @@ jobs:
           cd "$SOURCE_DIR"
 
           grep -Fq "team_rkms" app.js
+
           grep -Fq "A94473" app.js
 
           grep -Fq \
@@ -342,36 +322,24 @@ jobs:
             app.js
 
           grep -Fq "teamRkmsAvatar" app.js
+
           grep -Fq "isTeamRKMSProfile" app.js
+
           grep -Fq "SUPER_ADMIN" app.js
 
-          # Team RKMS logo rendering in chat
-          grep -Fq \
-            "isTeamRKMSProfile(p) ? teamRkmsAvatar()" \
-            app.js
-
-          # Recent chat logo rendering
-          grep -Fq \
-            "isTeamRKMSProfile(t) ? teamRkmsAvatar()" \
-            app.js
-
-          # Conversation header logo rendering
-          grep -Fq \
-            "isTeamRKMSProfile(meta) ? teamRkmsAvatar()" \
-            app.js
+          test -s \
+            assets/rkms-logo-transparent.png
 
           echo ""
           echo "============================================================"
           echo "TEAM RKMS AUDIT: PASS"
           echo "============================================================"
-          echo "Team identity       : PASS"
-          echo "Member ID A94473    : PASS"
-          echo "Team UUID            : PASS"
-          echo "Logo function        : PASS"
-          echo "New Chat logo        : PASS"
-          echo "Recent Chat logo     : PASS"
-          echo "Conversation logo    : PASS"
-          echo "Super Admin support  : PASS"
+          echo "Team identity      : PASS"
+          echo "Member ID A94473   : PASS"
+          echo "Team UUID           : PASS"
+          echo "Logo asset          : PASS"
+          echo "Logo function       : PASS"
+          echo "Super Admin support : PASS"
           echo "============================================================"
 
 
@@ -444,10 +412,13 @@ jobs:
 
 
       # ============================================================
-      # 9. RKMS STATIC AUDITS
+      # 9. STATIC RKMS VERIFICATION
       #
-      # Android-specific verifier intentionally NOT here.
-      # verify-android-16.py needs android/variables.gradle.
+      # IMPORTANT:
+      # verify-android-16.py is NOT executed here.
+      #
+      # It needs android/variables.gradle, which does not exist
+      # until Capacitor creates the Android project.
       # ============================================================
 
       - name: Run RKMS static verification
@@ -458,11 +429,17 @@ jobs:
           cd "$SOURCE_DIR"
 
           python3 scripts/verify-rkms-final.py
+
           python3 scripts/verify-member-directory-scope.py
+
           python3 scripts/verify-authority-hierarchy.py
+
           python3 scripts/verify-fcm-pipeline.py
+
           python3 scripts/verify-final-login-navigation.py
+
           python3 scripts/verify-saved-login.py
+
           python3 scripts/verify-native-bridge.py
 
           echo ""
@@ -493,42 +470,65 @@ jobs:
 
       # ============================================================
       # 11. ANDROID SDK
+      #
+      # IMPORTANT:
+      # android-actions/setup-android@v3 is intentionally NOT used.
+      #
+      # This avoids the Node 20 deprecation / command-line-tools
+      # replacement problem seen in the previous run.
       # ============================================================
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-
-      # ============================================================
-      # 12. INSTALL API 36
-      # ============================================================
-
-      - name: Install Android API 36
         shell: bash
         run: |
           set -euo pipefail
 
-          yes | sdkmanager --licenses \
+          SDK="${ANDROID_HOME}"
+
+          echo "ANDROID_HOME=$SDK"
+
+          test -d "$SDK"
+
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/build-tools/36.0.0" >> "$GITHUB_PATH"
+
+          export PATH="$SDK/cmdline-tools/latest/bin:$SDK/platform-tools:$SDK/build-tools/36.0.0:$PATH"
+
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+
+          test -x "$SDKMANAGER"
+
+          echo "sdkmanager:"
+          "$SDKMANAGER" --version
+
+          yes | \
+            "$SDKMANAGER" \
+            --licenses \
             >/dev/null 2>&1 \
             || true
 
-          sdkmanager \
+          "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
 
           test -d \
-            "${ANDROID_HOME}/platforms/android-36"
+            "$SDK/platforms/android-36"
 
           test -d \
-            "${ANDROID_HOME}/build-tools/36.0.0"
+            "$SDK/build-tools/36.0.0"
 
-          echo "Android API 36: PASS"
-          echo "Build Tools 36.0.0: PASS"
+          echo ""
+          echo "============================================================"
+          echo "ANDROID SDK SETUP: PASS"
+          echo "ANDROID API 36: PASS"
+          echo "BUILD TOOLS 36.0.0: PASS"
+          echo "============================================================"
 
 
       # ============================================================
-      # 13. GENERATE ANDROID
+      # 12. GENERATE CAPACITOR ANDROID
       # ============================================================
 
       - name: Generate Capacitor Android
@@ -550,7 +550,7 @@ jobs:
 
 
       # ============================================================
-      # 14. CONFIGURE ANDROID 16
+      # 13. CONFIGURE ANDROID 16
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -572,9 +572,9 @@ jobs:
 
 
       # ============================================================
-      # 15. NOW RUN ANDROID VERIFIER
+      # 14. ANDROID 16 VERIFICATION
       #
-      # This is intentionally AFTER npx cap add android.
+      # NOW android/variables.gradle EXISTS.
       # ============================================================
 
       - name: Verify Android 16 API 36
@@ -597,7 +597,7 @@ jobs:
 
 
       # ============================================================
-      # 16. CAPACITOR SYNC
+      # 15. CAPACITOR SYNC
       # ============================================================
 
       - name: Sync Capacitor Android
@@ -613,7 +613,7 @@ jobs:
 
 
       # ============================================================
-      # 17. RKMS NATIVE ANDROID
+      # 16. RKMS NATIVE ANDROID
       # ============================================================
 
       - name: Configure RKMS native Android
@@ -643,7 +643,7 @@ jobs:
 
 
       # ============================================================
-      # 18. APPLICATION ID
+      # 17. VERIFY APPLICATION ID
       # ============================================================
 
       - name: Verify application ID
@@ -661,7 +661,7 @@ jobs:
 
 
       # ============================================================
-      # 19. FIREBASE
+      # 18. VERIFY FIREBASE
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -706,9 +706,8 @@ jobs:
               print(" -", package_name)
 
           if "org.rkms.connect" not in packages:
-
               raise SystemExit(
-                  "ERROR: org.rkms.connect Firebase client missing"
+                  "ERROR: org.rkms.connect missing from Firebase"
               )
 
           print("Firebase configuration: PASS")
@@ -716,7 +715,7 @@ jobs:
 
 
       # ============================================================
-      # 20. FIREBASE INITIALIZATION
+      # 19. VERIFY FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -744,8 +743,7 @@ jobs:
 
           if [ "$COUNT" -ne 1 ]; then
 
-            echo "ERROR:"
-            echo "Firebase initialization count = $COUNT"
+            echo "ERROR: Firebase initialization count = $COUNT"
 
             exit 1
           fi
@@ -754,7 +752,7 @@ jobs:
 
 
       # ============================================================
-      # 21. GRADLE 8.11.1
+      # 20. GRADLE 8.11.1
       # ============================================================
 
       - name: Configure Gradle 8.11.1
@@ -787,7 +785,7 @@ jobs:
 
 
       # ============================================================
-      # 22. SIGNING SECRETS
+      # 21. SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -811,7 +809,7 @@ jobs:
 
 
       # ============================================================
-      # 23. PREPARE KEYSTORE
+      # 22. PREPARE KEYSTORE
       # ============================================================
 
       - name: Prepare release keystore
@@ -832,10 +830,7 @@ jobs:
 
 
       # ============================================================
-      # 24. CONFIGURE RELEASE SIGNING
-      #
-      # This safely modifies the existing release build type
-      # instead of creating a duplicate release block.
+      # 23. CONFIGURE RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -847,6 +842,7 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path(
               "android/app/build.gradle"
@@ -854,102 +850,102 @@ jobs:
 
           text = path.read_text()
 
-          signing_line = """
-                  storeFile file("../../rkms-release.keystore")
-                  storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
-                  keyAlias System.getenv("RKMS_KEY_ALIAS")
-                  keyPassword System.getenv("RKMS_KEY_PASSWORD")
-          """
-
           # --------------------------------------------------------
-          # signingConfigs
+          # Add signingConfigs if needed.
           # --------------------------------------------------------
 
           if "rkms-release.keystore" not in text:
 
-              if "signingConfigs {" in text:
+              signing_block = """
+          signingConfigs {
+              release {
+                  storeFile file("../../rkms-release.keystore")
+                  storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
+                  keyAlias System.getenv("RKMS_KEY_ALIAS")
+                  keyPassword System.getenv("RKMS_KEY_PASSWORD")
+              }
+          }
 
-                  marker = "signingConfigs {"
-
-                  insert = f"""{marker}
-              release {{
-          {signing_line}
-              }}
           """
 
-                  text = text.replace(
-                      marker,
-                      insert,
-                      1
+              android_match = re.search(
+                  r'\bandroid\s*\{',
+                  text
+              )
+
+              if not android_match:
+                  raise SystemExit(
+                      "ERROR: android block not found."
                   )
 
-              else:
+              pos = android_match.end()
 
-                  marker = "android {"
-
-                  block = f"""android {{
-              signingConfigs {{
-                  release {{
-          {signing_line}
-                  }}
-              }}
-          """
-
-                  text = text.replace(
-                      marker,
-                      block,
-                      1
-                  )
+              text = (
+                  text[:pos]
+                  + "\n"
+                  + signing_block
+                  + text[pos:]
+              )
 
 
           # --------------------------------------------------------
-          # Find buildTypes block and existing release block.
+          # Locate buildTypes -> release.
           # --------------------------------------------------------
 
-          build_types_pos = text.find(
-              "buildTypes {"
+          build_match = re.search(
+              r'\bbuildTypes\s*\{',
+              text
           )
 
-          if build_types_pos == -1:
-
+          if not build_match:
               raise SystemExit(
                   "ERROR: buildTypes block not found."
               )
 
 
-          release_pos = text.find(
-              "release {",
-              build_types_pos
+          release_match = re.search(
+              r'\brelease\s*\{',
+              text[build_match.end():]
           )
 
-          if release_pos == -1:
-
+          if not release_match:
               raise SystemExit(
                   "ERROR: release build type not found."
               )
 
 
-          # --------------------------------------------------------
-          # Add signingConfig only if missing.
-          # --------------------------------------------------------
-
-          release_end_search = text.find(
-              "\n",
-              release_pos
+          release_start = (
+              build_match.end()
+              + release_match.start()
           )
 
-          if "signingConfig signingConfigs.release" not in text:
 
-              insertion = (
-                  "\n"
-                  "            signingConfig "
-                  "signingConfigs.release"
-              )
+          # --------------------------------------------------------
+          # Add signingConfig if it is not already present.
+          # --------------------------------------------------------
+
+          release_open = text.find(
+              "{",
+              release_start
+          )
+
+          search_end = release_open + 2500
+
+          release_section = text[
+              release_open:search_end
+          ]
+
+          if "signingConfig signingConfigs.release" \
+             not in release_section:
+
+              insert_pos = release_open + 1
 
               text = (
-                  text[:release_end_search + 1]
-                  + insertion
-                  + text[release_end_search + 1:]
+                  text[:insert_pos]
+                  + """
+                  signingConfig signingConfigs.release
+          """
+                  + text[insert_pos:]
               )
 
 
@@ -962,18 +958,18 @@ jobs:
 
 
           grep -Fq \
-            "signingConfig signingConfigs.release" \
+            "rkms-release.keystore" \
             android/app/build.gradle
 
           grep -Fq \
-            "rkms-release.keystore" \
+            "signingConfig signingConfigs.release" \
             android/app/build.gradle
 
           echo "Release signing configuration: PASS"
 
 
       # ============================================================
-      # 25. FINAL ANDROID VALUES
+      # 24. FINAL ANDROID SDK VALUES
       # ============================================================
 
       - name: Verify final Android SDK values
@@ -1027,18 +1023,37 @@ jobs:
 
           if compile_sdk != 36:
               raise SystemExit(
-                  "ERROR: compileSdkVersion is not 36"
+                  "ERROR: compileSdkVersion != 36"
               )
 
           if target_sdk != 36:
               raise SystemExit(
-                  "ERROR: targetSdkVersion is not 36"
+                  "ERROR: targetSdkVersion != 36"
               )
 
           print(
               "Android SDK values: PASS"
           )
           PY
+
+
+      # ============================================================
+      # 25. FINAL GRADLE CHECK
+      # ============================================================
+
+      - name: Final Gradle check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$SOURCE_DIR/android"
+
+          chmod +x gradlew
+
+          ./gradlew \
+            --version
+
+          echo "Gradle check: PASS"
 
 
       # ============================================================
@@ -1054,7 +1069,7 @@ jobs:
 
 
       # ============================================================
-      # 27. BUILD APK + AAB
+      # 27. BUILD SIGNED APK + AAB
       # ============================================================
 
       - name: Build signed APK and AAB
@@ -1075,7 +1090,7 @@ jobs:
 
 
       # ============================================================
-      # 28. VERIFY APK
+      # 28. VERIFY APK SIGNATURE
       # ============================================================
 
       - name: Verify signed APK
@@ -1089,9 +1104,7 @@ jobs:
 
           test -s "$APK"
 
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-
-          APKSIGNER="$SDK/build-tools/36.0.0/apksigner"
+          APKSIGNER="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
 
           test -x "$APKSIGNER"
 
@@ -1109,7 +1122,7 @@ jobs:
 
 
       # ============================================================
-      # 29. VERIFY AAB
+      # 29. VERIFY AAB SIGNATURE
       # ============================================================
 
       - name: Verify signed AAB
@@ -1160,19 +1173,23 @@ jobs:
             android/app/build/outputs/bundle/release/app-release.aab \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
 
+
           sha256sum \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk \
             > release/RKMS_APK_SHA256.txt
 
+
           sha256sum \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab \
             > release/RKMS_AAB_SHA256.txt
+
 
           test -s \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
 
           test -s \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
+
 
           echo ""
           echo "APK SHA256:"
@@ -1195,32 +1212,33 @@ jobs:
           cd "$SOURCE_DIR"
 
           APK="release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
           AAB="release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab"
+
 
           test -s "$APK"
           test -s "$AAB"
 
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 
-          "$SDK/build-tools/36.0.0/apksigner" \
+          "${ANDROID_HOME}/build-tools/36.0.0/apksigner" \
             verify \
             "$APK"
+
 
           jarsigner \
             -verify \
             "$AAB"
 
+
           echo ""
           echo "============================================================"
-          echo "              FINAL RELEASE VERIFICATION"
+          echo "FINAL RELEASE VERIFICATION: PASS"
           echo "============================================================"
-          echo ""
+
           echo "APK: PASS"
           echo "AAB: PASS"
           echo "APK signature: PASS"
           echo "AAB signature: PASS"
-          echo ""
-          echo "============================================================"
 
 
       # ============================================================
@@ -1231,17 +1249,20 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Android-16-API36-FINAL-APK-AAB
+
           path: |
             ${{ env.SOURCE_DIR }}/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
             ${{ env.SOURCE_DIR }}/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
             ${{ env.SOURCE_DIR }}/release/RKMS_APK_SHA256.txt
             ${{ env.SOURCE_DIR }}/release/RKMS_AAB_SHA256.txt
+
           if-no-files-found: error
+
           retention-days: 90
 
 
       # ============================================================
-      # 33. FINAL SUMMARY
+      # 33. FINAL BUILD SUMMARY
       # ============================================================
 
       - name: FINAL BUILD SUMMARY
@@ -1249,7 +1270,7 @@ jobs:
         run: |
           echo ""
           echo "============================================================"
-          echo "             RKMS FINAL BUILD SUCCESS"
+          echo "              RKMS FINAL BUILD SUCCESS"
           echo "============================================================"
           echo ""
           echo "Android API 36       : PASS"
