@@ -30,7 +30,7 @@ jobs:
 
 
       # ============================================================
-      # 2. EXTRACT RKMS SOURCE ZIP
+      # 2. EXTRACT RKMS SOURCE
       # ============================================================
 
       - name: Extract and locate RKMS source
@@ -321,7 +321,7 @@ jobs:
 
 
       # ============================================================
-      # 14. FORCE FIREBASE CONFIG FILE INTO ANDROID APP
+      # 14. FIREBASE JSON
       # ============================================================
 
       - name: Force Firebase configuration into Android app
@@ -335,54 +335,33 @@ jobs:
           echo "FIREBASE CONFIGURATION FILE"
           echo "============================================================"
 
-          # --------------------------------------------------------
-          # Root Firebase file must exist
-          # --------------------------------------------------------
-
           if [ ! -f google-services.json ]; then
             echo "ERROR: Root google-services.json missing."
             exit 1
           fi
 
-          echo "Root google-services.json: PRESENT"
-
-          # --------------------------------------------------------
-          # Make Android app directory
-          # --------------------------------------------------------
-
           mkdir -p android/app
 
-          # --------------------------------------------------------
-          # Always copy the authoritative root Firebase config
-          # --------------------------------------------------------
-
           cp -f google-services.json android/app/google-services.json
-
-          # --------------------------------------------------------
-          # Verify copied file
-          # --------------------------------------------------------
 
           test -f android/app/google-services.json
           test -s android/app/google-services.json
 
+          echo "Root google-services.json: PRESENT"
           echo "Android app google-services.json: PRESENT"
           echo "Firebase configuration copy: PASS"
 
 
       # ============================================================
-      # 15. FORCE ADD FIREBASE SDK
+      # 15. FIREBASE SDK DEPENDENCY
       # ============================================================
 
-      - name: Force add Firebase SDK after native setup
+      - name: Force add Firebase SDK
         shell: bash
         run: |
           set -e
 
           cd "$SOURCE_DIR"
-
-          echo "============================================================"
-          echo "FIREBASE SDK DEPENDENCIES"
-          echo "============================================================"
 
           test -f android/app/build.gradle
 
@@ -396,7 +375,7 @@ jobs:
 
           if marker not in s:
               raise SystemExit(
-                  "ERROR: dependencies block not found in android/app/build.gradle"
+                  "ERROR: dependencies block not found."
               )
 
           bom = '    implementation platform("com.google.firebase:firebase-bom:34.19.0")'
@@ -422,10 +401,6 @@ jobs:
           print("Firebase Messaging added/confirmed.")
           PY
 
-          echo ""
-          echo "Firebase dependency lines:"
-          grep -n "com.google.firebase" android/app/build.gradle || true
-
           grep -Fq \
             'com.google.firebase:firebase-bom:34.19.0' \
             android/app/build.gradle
@@ -434,14 +409,290 @@ jobs:
             'com.google.firebase:firebase-messaging' \
             android/app/build.gradle
 
-          echo ""
           echo "Firebase BOM: PASS"
           echo "Firebase Messaging: PASS"
-          echo "Firebase SDK dependency injection: PASS"
 
 
       # ============================================================
-      # 16. VERIFY FIREBASE CONFIGURATION
+      # 16. FORCE FIREBASE INITIALIZATION
+      # ============================================================
+
+      - name: Force Firebase initialization into MainActivity
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "============================================================"
+          echo "FORCE FIREBASE INITIALIZATION"
+          echo "============================================================"
+
+          MAIN_ACTIVITY="$(find android/app/src/main/java \
+            -type f \
+            -name 'MainActivity.java' \
+            | head -1)"
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            MAIN_ACTIVITY="$(find android/app/src/main/java \
+              -type f \
+              -name 'MainActivity.kt' \
+              | head -1)"
+          fi
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: MainActivity.java/MainActivity.kt not found."
+            echo ""
+            echo "Available Activity files:"
+            find android/app/src/main/java \
+              -type f \
+              \( -name '*.java' -o -name '*.kt' \) \
+              | sort
+            exit 1
+          fi
+
+          echo "MainActivity:"
+          echo "$MAIN_ACTIVITY"
+
+          python3 - "$MAIN_ACTIVITY" <<'PY'
+          from pathlib import Path
+          import sys
+          import re
+
+          path = Path(sys.argv[1])
+          s = path.read_text()
+
+          # ========================================================
+          # JAVA
+          # ========================================================
+
+          if path.suffix == ".java":
+
+              # ----------------------------------------------------
+              # Import FirebaseApp
+              # ----------------------------------------------------
+
+              if "import com.google.firebase.FirebaseApp;" not in s:
+
+                  package_match = re.search(
+                      r'^(package\s+[^;]+;\s*)',
+                      s,
+                      flags=re.MULTILINE
+                  )
+
+                  if package_match:
+                      pos = package_match.end()
+                      s = (
+                          s[:pos]
+                          + "\n\nimport com.google.firebase.FirebaseApp;"
+                          + s[pos:]
+                      )
+                  else:
+                      raise SystemExit(
+                          "ERROR: Java package declaration not found."
+                      )
+
+              # ----------------------------------------------------
+              # Existing initialization
+              # ----------------------------------------------------
+
+              if "FirebaseApp.initializeApp(this)" in s:
+                  print("Firebase initialization already present.")
+
+              else:
+
+                  # ------------------------------------------------
+                  # Existing onCreate
+                  # ------------------------------------------------
+
+                  oncreate = re.search(
+                      r'protected\s+void\s+onCreate\s*\(\s*Bundle\s+\w+\s*\)\s*\{',
+                      s
+                  )
+
+                  if oncreate:
+
+                      insert_at = oncreate.end()
+
+                      s = (
+                          s[:insert_at]
+                          + "\n        FirebaseApp.initializeApp(this);"
+                          + s[insert_at:]
+                      )
+
+                      print(
+                          "FirebaseApp.initializeApp(this) "
+                          "inserted into existing onCreate()."
+                      )
+
+                  else:
+
+                      # --------------------------------------------
+                      # Need Bundle import
+                      # --------------------------------------------
+
+                      if "import android.os.Bundle;" not in s:
+
+                          package_match = re.search(
+                              r'^(package\s+[^;]+;\s*)',
+                              s,
+                              flags=re.MULTILINE
+                          )
+
+                          if package_match:
+                              pos = package_match.end()
+                              s = (
+                                  s[:pos]
+                                  + "\n\nimport android.os.Bundle;"
+                                  + s[pos:]
+                              )
+                          else:
+                              raise SystemExit(
+                                  "ERROR: Java package declaration not found."
+                              )
+
+                      # --------------------------------------------
+                      # Insert onCreate before final class brace
+                      # --------------------------------------------
+
+                      method = """
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  FirebaseApp.initializeApp(this);
+                  super.onCreate(savedInstanceState);
+              }
+
+          """
+
+                      last = s.rfind("}")
+
+                      if last == -1:
+                          raise SystemExit(
+                              "ERROR: Java class closing brace not found."
+                          )
+
+                      s = s[:last] + method + s[last:]
+
+                      print(
+                          "Firebase initialization inserted "
+                          "as new onCreate()."
+                      )
+
+              path.write_text(s)
+
+
+          # ========================================================
+          # KOTLIN
+          # ========================================================
+
+          else:
+
+              if "import com.google.firebase.FirebaseApp" not in s:
+
+                  package_match = re.search(
+                      r'^(package\s+[^\n]+\n)',
+                      s,
+                      flags=re.MULTILINE
+                  )
+
+                  if package_match:
+                      pos = package_match.end()
+                      s = (
+                          s[:pos]
+                          + "\nimport com.google.firebase.FirebaseApp\n"
+                          + s[pos:]
+                      )
+                  else:
+                      raise SystemExit(
+                          "ERROR: Kotlin package declaration not found."
+                      )
+
+              if "FirebaseApp.initializeApp(this)" in s:
+                  print("Firebase initialization already present.")
+
+              else:
+
+                  oncreate = re.search(
+                      r'override\s+fun\s+onCreate\s*\(\s*\w+\s*:\s*Bundle\s*\)\s*\{',
+                      s
+                  )
+
+                  if oncreate:
+
+                      insert_at = oncreate.end()
+
+                      s = (
+                          s[:insert_at]
+                          + "\n        FirebaseApp.initializeApp(this)"
+                          + s[insert_at:]
+                      )
+
+                      print(
+                          "Firebase initialization inserted "
+                          "into Kotlin onCreate()."
+                      )
+
+                  else:
+
+                      if "import android.os.Bundle" not in s:
+
+                          package_match = re.search(
+                              r'^(package\s+[^\n]+\n)',
+                              s,
+                              flags=re.MULTILINE
+                          )
+
+                          if package_match:
+                              pos = package_match.end()
+                              s = (
+                                  s[:pos]
+                                  + "\nimport android.os.Bundle\n"
+                                  + s[pos:]
+                              )
+                          else:
+                              raise SystemExit(
+                                  "ERROR: Kotlin package declaration not found."
+                              )
+
+                      method = """
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  FirebaseApp.initializeApp(this)
+                  super.onCreate(savedInstanceState)
+              }
+
+          """
+
+                      last = s.rfind("}")
+
+                      if last == -1:
+                          raise SystemExit(
+                              "ERROR: Kotlin class closing brace not found."
+                          )
+
+                      s = s[:last] + method + s[last:]
+
+                      print(
+                          "Firebase initialization inserted "
+                          "as new Kotlin onCreate()."
+                      )
+
+              path.write_text(s)
+
+          print("Firebase MainActivity patch: PASS")
+          PY
+
+          echo ""
+          echo "Firebase initialization source:"
+          grep -n -F \
+            'FirebaseApp.initializeApp(this)' \
+            "$MAIN_ACTIVITY"
+
+          echo ""
+          echo "FORCE FIREBASE INITIALIZATION: PASS"
+
+
+      # ============================================================
+      # 17. VERIFY FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -455,112 +706,90 @@ jobs:
           echo "FIREBASE CONFIGURATION VERIFICATION"
           echo "============================================================"
 
-          # --------------------------------------------------------
-          # Firebase JSON files
-          # --------------------------------------------------------
-
           test -f google-services.json
           echo "Root google-services.json: PRESENT"
 
           test -f android/app/google-services.json
           echo "Android google-services.json: PRESENT"
 
-          # --------------------------------------------------------
-          # Validate Firebase JSON and package name
-          # --------------------------------------------------------
-
           python3 - <<'PY'
           import json
           from pathlib import Path
 
-          files = [
-              Path("google-services.json"),
-              Path("android/app/google-services.json"),
-          ]
-
           expected = "org.rkms.connect"
 
-          for path in files:
-              try:
-                  data = json.loads(path.read_text())
-              except Exception as e:
-                  raise SystemExit(
-                      f"ERROR: Invalid JSON in {path}: {e}"
-                  )
+          for path in [
+              Path("google-services.json"),
+              Path("android/app/google-services.json"),
+          ]:
 
-              found = []
+              data = json.loads(path.read_text())
+
+              packages = []
 
               for client in data.get("client", []):
                   info = client.get("client_info", {})
-                  package_name = info.get("android_client_info", {}).get(
+                  android_info = info.get(
+                      "android_client_info",
+                      {}
+                  )
+
+                  package_name = android_info.get(
                       "package_name"
                   )
 
                   if package_name:
-                      found.append(package_name)
+                      packages.append(package_name)
 
-              if expected not in found:
+              if expected not in packages:
                   raise SystemExit(
-                      f"ERROR: {expected} not found in {path}. "
-                      f"Found: {found}"
+                      f"ERROR: {expected} missing from {path}. "
+                      f"Found: {packages}"
                   )
 
-              print(f"{path}: package {expected}: PASS")
+              print(
+                  f"{path}: package {expected}: PASS"
+              )
           PY
 
-          # --------------------------------------------------------
-          # Native Firebase initialization
-          # --------------------------------------------------------
+          MAIN_ACTIVITY="$(find android/app/src/main/java \
+            -type f \
+            -name 'MainActivity.java' \
+            | head -1)"
 
-          grep -R -Fq \
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            MAIN_ACTIVITY="$(find android/app/src/main/java \
+              -type f \
+              -name 'MainActivity.kt' \
+              | head -1)"
+          fi
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: MainActivity not found."
+            exit 1
+          fi
+
+          grep -Fq \
             'FirebaseApp.initializeApp(this)' \
-            android/app/src/main/java \
-            || {
-              echo "ERROR: FirebaseApp.initializeApp(this) not found."
-              exit 1
-            }
+            "$MAIN_ACTIVITY"
 
           echo "FirebaseApp.initializeApp(this): PASS"
 
-          # --------------------------------------------------------
-          # Firebase BOM
-          # --------------------------------------------------------
-
           grep -Fq \
             'com.google.firebase:firebase-bom:34.19.0' \
-            android/app/build.gradle \
-            || {
-              echo "ERROR: Firebase BOM missing."
-              exit 1
-            }
+            android/app/build.gradle
 
           echo "Firebase BOM: PASS"
 
-          # --------------------------------------------------------
-          # Firebase Messaging
-          # --------------------------------------------------------
-
           grep -Fq \
             'com.google.firebase:firebase-messaging' \
-            android/app/build.gradle \
-            || {
-              echo "ERROR: Firebase Messaging dependency missing."
-              exit 1
-            }
+            android/app/build.gradle
 
           echo "Firebase Messaging: PASS"
 
-          # --------------------------------------------------------
-          # Google Services plugin
-          # --------------------------------------------------------
-
           grep -R -Fq \
             'com.google.gms.google-services' \
-            android \
-            || {
-              echo "ERROR: Google Services plugin missing."
-              exit 1
-            }
+            android
 
           echo "Google Services plugin: PASS"
 
@@ -571,7 +800,7 @@ jobs:
 
 
       # ============================================================
-      # 17. PACKAGE / NATIVE BRIDGE
+      # 18. PACKAGE / NATIVE BRIDGE
       # ============================================================
 
       - name: Verify package and native bridge
@@ -583,27 +812,19 @@ jobs:
 
           grep -R -Fq \
             'org.rkms.connect' \
-            android/app \
-            || {
-              echo "ERROR: RKMS package name missing."
-              exit 1
-            }
+            android/app
 
           echo "Package org.rkms.connect: PASS"
 
           grep -R -Fq \
             'RKMSNativeBridge' \
-            android/app/src/main/java \
-            || {
-              echo "ERROR: RKMSNativeBridge missing."
-              exit 1
-            }
+            android/app/src/main/java
 
           echo "RKMSNativeBridge: PASS"
 
 
       # ============================================================
-      # 18. SAVED LOGIN
+      # 19. SAVED LOGIN
       # ============================================================
 
       - name: Verify saved login
@@ -621,7 +842,7 @@ jobs:
 
 
       # ============================================================
-      # 19. FCM PIPELINE
+      # 20. FCM PIPELINE
       # ============================================================
 
       - name: Verify FCM pipeline
@@ -639,7 +860,7 @@ jobs:
 
 
       # ============================================================
-      # 20. FINAL LOGIN
+      # 21. FINAL LOGIN
       # ============================================================
 
       - name: Verify final login
@@ -657,7 +878,7 @@ jobs:
 
 
       # ============================================================
-      # 21. AUTHORITY HIERARCHY
+      # 22. AUTHORITY HIERARCHY
       # ============================================================
 
       - name: Verify authority hierarchy
@@ -675,7 +896,7 @@ jobs:
 
 
       # ============================================================
-      # 22. DIRECTORY
+      # 23. DIRECTORY
       # ============================================================
 
       - name: Verify directory
@@ -701,7 +922,7 @@ jobs:
 
 
       # ============================================================
-      # 23. DIRECTORY DEEP RULES
+      # 24. DIRECTORY DEEP RULES
       # ============================================================
 
       - name: Verify directory deep rules
@@ -719,7 +940,7 @@ jobs:
 
 
       # ============================================================
-      # 24. PROFILE UPDATE
+      # 25. PROFILE UPDATE
       # ============================================================
 
       - name: Verify profile update
@@ -737,7 +958,7 @@ jobs:
 
 
       # ============================================================
-      # 25. PDF PIPELINE
+      # 26. PDF PIPELINE
       # ============================================================
 
       - name: Verify PDF pipeline
@@ -755,7 +976,7 @@ jobs:
 
 
       # ============================================================
-      # 26. REPORT DOWNLOAD
+      # 27. REPORT DOWNLOAD
       # ============================================================
 
       - name: Verify report download scope
@@ -773,7 +994,7 @@ jobs:
 
 
       # ============================================================
-      # 27. COMPLAINT FLOW
+      # 28. COMPLAINT FLOW
       # ============================================================
 
       - name: Verify complaint flow
@@ -790,11 +1011,11 @@ jobs:
             }
           fi
 
-          echo "Complaint verification step completed."
+          echo "Complaint verification completed."
 
 
       # ============================================================
-      # 28. FINAL RKMS RULES
+      # 29. FINAL RKMS RULES
       # ============================================================
 
       - name: Verify final RKMS rules
@@ -812,7 +1033,7 @@ jobs:
 
 
       # ============================================================
-      # 29. DOCUMENT SIGNER
+      # 30. DOCUMENT SIGNER
       # ============================================================
 
       - name: Verify document signer
@@ -842,7 +1063,7 @@ jobs:
 
 
       # ============================================================
-      # 30. GUEST NAVIGATION
+      # 31. GUEST NAVIGATION
       # ============================================================
 
       - name: Verify guest navigation
@@ -868,7 +1089,7 @@ jobs:
 
 
       # ============================================================
-      # 31. ANDROID MANIFEST
+      # 32. ANDROID MANIFEST
       # ============================================================
 
       - name: Inspect Android manifest
@@ -895,7 +1116,7 @@ jobs:
 
 
       # ============================================================
-      # 32. CAPACITOR CHECK
+      # 33. CAPACITOR CHECK
       # ============================================================
 
       - name: Capacitor check
@@ -911,7 +1132,7 @@ jobs:
 
 
       # ============================================================
-      # 33. RELEASE SIGNING PREPARATION
+      # 34. RELEASE SIGNING
       # ============================================================
 
       - name: Prepare release signing
@@ -951,7 +1172,7 @@ jobs:
 
 
       # ============================================================
-      # 34. GRADLE 8.11.1
+      # 35. GRADLE 8.11.1
       # ============================================================
 
       - name: Configure Gradle 8.11.1
@@ -977,7 +1198,7 @@ jobs:
 
 
       # ============================================================
-      # 35. RELEASE SIGNING CONFIGURATION
+      # 36. RELEASE SIGNING CONFIGURATION
       # ============================================================
 
       - name: Configure release signing
@@ -993,7 +1214,9 @@ jobs:
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          signing_block = """
+          if "signingConfigs {" not in s:
+
+              signing = """
               signingConfigs {
                   release {
                       storeFile file("../../rkms-release.keystore")
@@ -1004,21 +1227,33 @@ jobs:
               }
           """
 
-          if "signingConfigs {" not in s:
               s = s.replace(
                   "android {",
-                  "android {" + signing_block,
+                  "android {" + signing,
                   1
               )
+
           elif "rkms-release.keystore" not in s:
+
+              signing = """
+                  release {
+                      storeFile file("../../rkms-release.keystore")
+                      storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("RKMS_KEY_ALIAS")
+                      keyPassword System.getenv("RKMS_KEY_PASSWORD")
+                  }
+              """
+
               s = s.replace(
                   "signingConfigs {",
-                  signing_block.strip(),
+                  "signingConfigs {" + signing,
                   1
               )
 
           if "signingConfig signingConfigs.release" not in s:
+
               if "buildTypes {" in s:
+
                   s = s.replace(
                       "buildTypes {",
                       """buildTypes {
@@ -1028,7 +1263,9 @@ jobs:
               """,
                       1
                   )
+
               else:
+
                   s += """
           android {
               buildTypes {
@@ -1048,7 +1285,7 @@ jobs:
 
 
       # ============================================================
-      # 36. FINAL FIREBASE PRE-BUILD CHECK
+      # 37. FINAL FIREBASE PRE-BUILD CHECK
       # ============================================================
 
       - name: Final Firebase pre-build check
@@ -1058,13 +1295,27 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          echo "============================================================"
-          echo "FINAL FIREBASE PRE-BUILD CHECK"
-          echo "============================================================"
-
           test -f google-services.json
           test -f android/app/google-services.json
           test -f android/app/build.gradle
+
+          MAIN_ACTIVITY="$(find android/app/src/main/java \
+            -type f \
+            -name 'MainActivity.java' \
+            | head -1)"
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            MAIN_ACTIVITY="$(find android/app/src/main/java \
+              -type f \
+              -name 'MainActivity.kt' \
+              | head -1)"
+          fi
+
+          test -n "$MAIN_ACTIVITY"
+
+          grep -Fq \
+            'FirebaseApp.initializeApp(this)' \
+            "$MAIN_ACTIVITY"
 
           grep -Fq \
             'com.google.firebase:firebase-bom:34.19.0' \
@@ -1075,18 +1326,13 @@ jobs:
             android/app/build.gradle
 
           grep -R -Fq \
-            'FirebaseApp.initializeApp(this)' \
-            android/app/src/main/java
-
-          grep -R -Fq \
             'com.google.gms.google-services' \
             android
 
-          echo "Root google-services.json: PASS"
-          echo "Android google-services.json: PASS"
+          echo "Firebase JSON: PASS"
+          echo "Firebase initialization: PASS"
           echo "Firebase BOM: PASS"
           echo "Firebase Messaging: PASS"
-          echo "FirebaseApp.initializeApp(this): PASS"
           echo "Google Services plugin: PASS"
 
           echo ""
@@ -1094,7 +1340,7 @@ jobs:
 
 
       # ============================================================
-      # 37. FINAL ANDROID CONFIGURATION
+      # 38. FINAL ANDROID CONFIGURATION
       # ============================================================
 
       - name: Final Android configuration check
@@ -1104,33 +1350,11 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          echo "============================================================"
-          echo "FINAL ANDROID CONFIGURATION"
-          echo "============================================================"
-
           test -f android/app/build.gradle
-          echo "android/app/build.gradle: PASS"
-
           test -f android/app/src/main/AndroidManifest.xml
+
+          echo "android/app/build.gradle: PASS"
           echo "AndroidManifest.xml: PASS"
-
-          if grep -R -E \
-            'compileSdk(Version)?[[:space:]]*(=)?[[:space:]]*36' \
-            android \
-            >/dev/null 2>&1; then
-            echo "compileSdk 36: PASS"
-          else
-            echo "compileSdk 36: inherited/generated configuration"
-          fi
-
-          if grep -R -E \
-            'targetSdk(Version)?[[:space:]]*(=)?[[:space:]]*36' \
-            android \
-            >/dev/null 2>&1; then
-            echo "targetSdk 36: PASS"
-          else
-            echo "targetSdk 36: inherited/generated configuration"
-          fi
 
           test -d "${ANDROID_HOME}/platforms/android-36"
           echo "Android platform 36: PASS"
@@ -1145,13 +1369,11 @@ jobs:
           echo "Package org.rkms.connect: PASS"
 
           echo ""
-          echo "============================================================"
           echo "FINAL ANDROID CONFIGURATION: PASS"
-          echo "============================================================"
 
 
       # ============================================================
-      # 38. BUILD SIGNED RELEASE AAB
+      # 39. BUILD RELEASE AAB
       # ============================================================
 
       - name: Build signed Release AAB
@@ -1175,7 +1397,7 @@ jobs:
 
 
       # ============================================================
-      # 39. LOCATE AAB
+      # 40. LOCATE AAB
       # ============================================================
 
       - name: Locate AAB
@@ -1203,7 +1425,7 @@ jobs:
 
 
       # ============================================================
-      # 40. VERIFY AAB SIGNATURE
+      # 41. VERIFY AAB SIGNATURE
       # ============================================================
 
       - name: Verify AAB signature
@@ -1223,7 +1445,7 @@ jobs:
 
 
       # ============================================================
-      # 41. SHA256
+      # 42. SHA256
       # ============================================================
 
       - name: Calculate AAB SHA256
@@ -1241,7 +1463,7 @@ jobs:
 
 
       # ============================================================
-      # 42. UPLOAD AAB
+      # 43. UPLOAD AAB
       # ============================================================
 
       - name: Upload Release AAB
