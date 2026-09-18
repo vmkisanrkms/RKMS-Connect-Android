@@ -335,51 +335,97 @@ jobs:
           echo "ANDROID MIN SDK 23"
           echo "============================================================"
 
+          test -d android
           test -f android/app/build.gradle
+
+          echo ""
+          echo "Checking Android Gradle files..."
+
+          find android \
+            -type f \
+            \( -name 'variables.gradle' \
+               -o -name 'build.gradle' \
+               -o -name 'build.gradle.kts' \) \
+            -print
+
+          VARIABLES_FILE="android/variables.gradle"
+
+          if [ ! -f "$VARIABLES_FILE" ]; then
+            echo "ERROR: android/variables.gradle not found."
+            echo ""
+            echo "Android directory:"
+            find android -maxdepth 3 -type f | sort
+            exit 1
+          fi
+
+          echo ""
+          echo "Current minSdk configuration:"
+          grep -n -E \
+            'minSdkVersion|minSdk' \
+            "$VARIABLES_FILE" \
+            || true
 
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
+          path = Path("android/variables.gradle")
+          s = path.read_text()
 
-          # Handle standard Gradle syntax:
-          # minSdkVersion 22
-          # minSdkVersion 21
-          # etc.
-          s = re.sub(
-              r'\bminSdkVersion\s+\d+',
-              'minSdkVersion 23',
-              s
+          # Standard Capacitor variables.gradle:
+          #
+          # minSdkVersion = 22
+          #
+          # Force only the numeric value to 23.
+          pattern = r'(\bminSdkVersion\s*=\s*)\d+'
+
+          if re.search(pattern, s):
+              s = re.sub(
+                  pattern,
+                  r'\g<1>23',
+                  s
+              )
+          else:
+              raise SystemExit(
+                  "ERROR: minSdkVersion declaration "
+                  "not found in android/variables.gradle."
+              )
+
+          path.write_text(s)
+
+          print(
+              "android/variables.gradle "
+              "minSdkVersion changed/confirmed as 23."
           )
-
-          # Handle newer syntax:
-          # minSdk = 22
-          # minSdk = 21
-          # etc.
-          s = re.sub(
-              r'\bminSdk\s*=\s*\d+',
-              'minSdk = 23',
-              s
-          )
-
-          p.write_text(s)
           PY
 
-          echo "Checking final minSdk..."
+          echo ""
+          echo "Final variables.gradle:"
+          grep -n -E \
+            'minSdkVersion|minSdk' \
+            android/variables.gradle
 
           if grep -Eq \
-            'minSdkVersion[[:space:]]+23|minSdk[[:space:]]*=[[:space:]]*23' \
-            android/app/build.gradle; then
-            echo "Android minSdk 23: PASS"
-          else
-            echo "ERROR: minSdk 23 was not applied."
+            'minSdkVersion[[:space:]]*=[[:space:]]*23' \
+            android/variables.gradle; then
+
             echo ""
-            echo "Current minSdk configuration:"
-            grep -n -E 'minSdkVersion|minSdk' android/app/build.gradle || true
+            echo "Android minSdk 23: PASS"
+
+          else
+
+            echo ""
+            echo "ERROR: minSdkVersion 23 was not applied."
+            echo ""
+            cat android/variables.gradle
             exit 1
+
           fi
+
+          echo ""
+          echo "============================================================"
+          echo "ANDROID MIN SDK 23: PASS"
+          echo "============================================================"
 
 
       # ============================================================
@@ -1394,9 +1440,11 @@ jobs:
 
           test -f android/app/build.gradle
           test -f android/app/src/main/AndroidManifest.xml
+          test -f android/variables.gradle
 
           echo "android/app/build.gradle: PASS"
           echo "AndroidManifest.xml: PASS"
+          echo "android/variables.gradle: PASS"
 
           test -d "${ANDROID_HOME}/platforms/android-36"
           echo "Android platform 36: PASS"
@@ -1410,18 +1458,29 @@ jobs:
 
           echo "Package org.rkms.connect: PASS"
 
+          echo ""
+          echo "Checking minSdk source..."
+
           if grep -Eq \
-            'minSdkVersion[[:space:]]+23|minSdk[[:space:]]*=[[:space:]]*23' \
-            android/app/build.gradle; then
+            'minSdkVersion[[:space:]]*=[[:space:]]*23' \
+            android/variables.gradle; then
+
             echo "Android minSdk 23: PASS"
+
           else
+
             echo "ERROR: Android minSdk 23 not found."
-            grep -n -E 'minSdkVersion|minSdk' android/app/build.gradle || true
+            echo ""
+            echo "Current android/variables.gradle:"
+            cat android/variables.gradle
             exit 1
+
           fi
 
           echo ""
+          echo "============================================================"
           echo "FINAL ANDROID CONFIGURATION: PASS"
+          echo "============================================================"
 
 
       # ============================================================
