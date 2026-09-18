@@ -49,18 +49,18 @@ jobs:
           echo "Repository files:"
           find . -maxdepth 2 -type f | sort | head -300
 
-          # --------------------------------------------------------
-          # Prefer the exact latest FCM crash fixed ZIP
-          # --------------------------------------------------------
-
           ZIP_FILE=""
+
+          # --------------------------------------------------------
+          # Exact latest FCM crash fixed ZIP
+          # --------------------------------------------------------
 
           if [ -f "./RKMS_CONNECT_FINAL_AUDITED_SIGNED_LOGO_FIXED_2026-09-18_FCM_CRASH_FIXED.zip" ]; then
             ZIP_FILE="./RKMS_CONNECT_FINAL_AUDITED_SIGNED_LOGO_FIXED_2026-09-18_FCM_CRASH_FIXED.zip"
           fi
 
           # --------------------------------------------------------
-          # Fallback: find any FCM crash fixed ZIP
+          # Fallback: any FCM fixed ZIP
           # --------------------------------------------------------
 
           if [ -z "$ZIP_FILE" ]; then
@@ -73,7 +73,7 @@ jobs:
           fi
 
           # --------------------------------------------------------
-          # Final fallback: find RKMS ZIP
+          # Fallback: any RKMS source ZIP
           # --------------------------------------------------------
 
           if [ -z "$ZIP_FILE" ]; then
@@ -99,7 +99,7 @@ jobs:
           echo "$ZIP_FILE"
 
           # --------------------------------------------------------
-          # Extract
+          # Extract ZIP
           # --------------------------------------------------------
 
           rm -rf .rkms_build_src
@@ -123,9 +123,9 @@ jobs:
             echo ""
             echo "ERROR: package.json not found after ZIP extraction."
             echo ""
-            echo "Extracted directory structure:"
+            echo "Extracted files:"
             find .rkms_build_src \
-              -maxdepth 5 \
+              -maxdepth 6 \
               -type f \
               | sort \
               | head -500
@@ -139,7 +139,7 @@ jobs:
           echo "$SOURCE_DIR"
 
           # --------------------------------------------------------
-          # Verify mandatory source files
+          # Mandatory files
           # --------------------------------------------------------
 
           test -f "$SOURCE_DIR/package.json"
@@ -173,14 +173,13 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          echo "Current source:"
+          echo "Source directory:"
           pwd
 
           test -f package.json
           test -f index.html
           test -f capacitor.config.json
 
-          echo ""
           echo "package.json: PASS"
           echo "index.html: PASS"
           echo "capacitor.config.json: PASS"
@@ -367,10 +366,32 @@ jobs:
 
 
       # ============================================================
-      # 13. ADD FIREBASE SDK DEPENDENCIES
+      # 13. CONFIGURE RKMS NATIVE ANDROID
       # ============================================================
 
-      - name: Add Firebase SDK dependencies
+      - name: Configure RKMS native Android
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          if [ -f scripts/setup-android-native.sh ]; then
+            chmod +x scripts/setup-android-native.sh
+            ./scripts/setup-android-native.sh
+          else
+            echo "ERROR: scripts/setup-android-native.sh missing."
+            exit 1
+          fi
+
+          echo "RKMS native Android setup: PASS"
+
+
+      # ============================================================
+      # 14. FORCE ADD FIREBASE SDK AFTER NATIVE SETUP
+      # ============================================================
+
+      - name: Force add Firebase SDK after native setup
         shell: bash
         run: |
           set -e
@@ -393,14 +414,14 @@ jobs:
 
           if marker not in s:
               raise SystemExit(
-                  "ERROR: android/app/build.gradle dependencies block missing"
+                  "ERROR: dependencies block not found in android/app/build.gradle"
               )
 
-          bom = (
+          firebase_bom = (
               'implementation platform("com.google.firebase:firebase-bom:34.19.0")'
           )
 
-          messaging = (
+          firebase_messaging = (
               'implementation "com.google.firebase:firebase-messaging"'
           )
 
@@ -411,7 +432,7 @@ jobs:
           if "com.google.firebase:firebase-bom:" not in s:
               s = s.replace(
                   marker,
-                  marker + "\n    " + bom,
+                  marker + "\n    " + firebase_bom,
                   1
               )
 
@@ -422,81 +443,40 @@ jobs:
           if "com.google.firebase:firebase-messaging" not in s:
               s = s.replace(
                   marker,
-                  marker + "\n    " + messaging,
+                  marker + "\n    " + firebase_messaging,
                   1
               )
 
           p.write_text(s)
 
-          print("Firebase BOM dependency: PASS")
-          print("Firebase Messaging dependency: PASS")
+          print("Firebase BOM added/confirmed.")
+          print("Firebase Messaging added/confirmed.")
           PY
 
           echo ""
-          echo "Checking dependencies..."
+          echo "Firebase dependency lines:"
+          grep -n "com.google.firebase" android/app/build.gradle || true
 
-          grep -q \
+          # --------------------------------------------------------
+          # HARD CHECK
+          # --------------------------------------------------------
+
+          grep -Fq \
             'com.google.firebase:firebase-bom:34.19.0' \
             android/app/build.gradle
 
-          grep -q \
+          grep -Fq \
             'com.google.firebase:firebase-messaging' \
             android/app/build.gradle
 
-          echo "Firebase SDK dependencies ready."
-          echo "Firebase dependency verification: PASS"
+          echo ""
+          echo "Firebase BOM: PASS"
+          echo "Firebase Messaging: PASS"
+          echo "Firebase SDK dependency injection: PASS"
 
 
       # ============================================================
-      # 14. CONFIGURE RKMS NATIVE ANDROID
-      # ============================================================
-
-      - name: Configure RKMS native Android
-        shell: bash
-        run: |
-          set -e
-
-          cd "$SOURCE_DIR"
-
-          if [ -f scripts/setup-android-native.sh ]; then
-            chmod +x scripts/setup-android-native.sh
-            ./scripts/setup-android-native.sh
-          else
-            echo "ERROR: scripts/setup-android-native.sh missing."
-            exit 1
-          fi
-
-          echo "RKMS native Android setup: PASS"
-
-
-      # ============================================================
-      # 15. RE-CHECK FIREBASE SDK AFTER NATIVE SETUP
-      # ============================================================
-
-      - name: Re-check Firebase SDK after native setup
-        shell: bash
-        run: |
-          set -e
-
-          cd "$SOURCE_DIR"
-
-          test -f android/app/build.gradle
-
-          grep -q \
-            'com.google.firebase:firebase-bom:34.19.0' \
-            android/app/build.gradle
-
-          grep -q \
-            'com.google.firebase:firebase-messaging' \
-            android/app/build.gradle
-
-          echo "Firebase BOM: PRESENT"
-          echo "Firebase Messaging: PRESENT"
-          echo "Firebase SDK re-check: PASS"
-
-
-      # ============================================================
-      # 16. VERIFY FIREBASE CONFIGURATION
+      # 15. VERIFY FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -510,21 +490,37 @@ jobs:
           echo "FIREBASE CONFIGURATION VERIFICATION"
           echo "============================================================"
 
-          test -f google-services.json
-          test -f android/app/google-services.json
+          # --------------------------------------------------------
+          # google-services.json
+          # --------------------------------------------------------
 
+          test -f google-services.json
           echo "Root google-services.json: PRESENT"
+
+          test -f android/app/google-services.json
           echo "Android google-services.json: PRESENT"
 
-          grep -q '"package_name": "org.rkms.connect"' \
+          # --------------------------------------------------------
+          # Correct package
+          # --------------------------------------------------------
+
+          grep -Fq \
+            '"package_name": "org.rkms.connect"' \
             google-services.json
 
-          grep -q '"package_name": "org.rkms.connect"' \
+          echo "Root Firebase package name: PASS"
+
+          grep -Fq \
+            '"package_name": "org.rkms.connect"' \
             android/app/google-services.json
 
-          echo "Firebase package name: PASS"
+          echo "Android Firebase package name: PASS"
 
-          grep -R -q \
+          # --------------------------------------------------------
+          # Native Firebase initialization
+          # --------------------------------------------------------
+
+          grep -R -Fq \
             'FirebaseApp.initializeApp(this)' \
             android/app/src/main/java \
             || {
@@ -532,9 +528,27 @@ jobs:
               exit 1
             }
 
-          echo "FirebaseApp.initializeApp(this): PRESENT"
+          echo "FirebaseApp.initializeApp(this): PASS"
 
-          grep -R -q \
+          # --------------------------------------------------------
+          # Firebase BOM
+          # --------------------------------------------------------
+
+          grep -Fq \
+            'com.google.firebase:firebase-bom:34.19.0' \
+            android/app/build.gradle \
+            || {
+              echo "ERROR: Firebase BOM missing."
+              exit 1
+            }
+
+          echo "Firebase BOM: PASS"
+
+          # --------------------------------------------------------
+          # Firebase Messaging
+          # --------------------------------------------------------
+
+          grep -Fq \
             'com.google.firebase:firebase-messaging' \
             android/app/build.gradle \
             || {
@@ -542,24 +556,13 @@ jobs:
               exit 1
             }
 
-          echo "Firebase Messaging dependency: PRESENT"
+          echo "Firebase Messaging: PASS"
 
-          echo ""
-          echo "Firebase configuration: PASS"
+          # --------------------------------------------------------
+          # Google Services plugin
+          # --------------------------------------------------------
 
-
-      # ============================================================
-      # 17. VERIFY GOOGLE SERVICES PLUGIN
-      # ============================================================
-
-      - name: Verify Google Services plugin
-        shell: bash
-        run: |
-          set -e
-
-          cd "$SOURCE_DIR"
-
-          grep -R -q \
+          grep -R -Fq \
             'com.google.gms.google-services' \
             android \
             || {
@@ -569,9 +572,14 @@ jobs:
 
           echo "Google Services plugin: PASS"
 
+          echo ""
+          echo "============================================================"
+          echo "FIREBASE CONFIGURATION: PASS"
+          echo "============================================================"
+
 
       # ============================================================
-      # 18. VERIFY PACKAGE / NATIVE BRIDGE
+      # 16. VERIFY PACKAGE / NATIVE BRIDGE
       # ============================================================
 
       - name: Verify package and native bridge
@@ -581,7 +589,7 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          grep -R -q \
+          grep -R -Fq \
             'org.rkms.connect' \
             android/app \
             || {
@@ -591,7 +599,7 @@ jobs:
 
           echo "Package org.rkms.connect: PASS"
 
-          grep -R -q \
+          grep -R -Fq \
             'RKMSNativeBridge' \
             android/app/src/main/java \
             || {
@@ -603,7 +611,7 @@ jobs:
 
 
       # ============================================================
-      # 19. VERIFY SAVED LOGIN
+      # 17. VERIFY SAVED LOGIN
       # ============================================================
 
       - name: Verify saved login
@@ -621,7 +629,7 @@ jobs:
 
 
       # ============================================================
-      # 20. VERIFY FCM PIPELINE
+      # 18. VERIFY FCM PIPELINE
       # ============================================================
 
       - name: Verify FCM pipeline
@@ -639,7 +647,7 @@ jobs:
 
 
       # ============================================================
-      # 21. VERIFY FINAL LOGIN
+      # 19. VERIFY FINAL LOGIN
       # ============================================================
 
       - name: Verify final login
@@ -657,7 +665,7 @@ jobs:
 
 
       # ============================================================
-      # 22. VERIFY AUTHORITY HIERARCHY
+      # 20. VERIFY AUTHORITY HIERARCHY
       # ============================================================
 
       - name: Verify authority hierarchy
@@ -675,7 +683,7 @@ jobs:
 
 
       # ============================================================
-      # 23. VERIFY DIRECTORY
+      # 21. VERIFY DIRECTORY
       # ============================================================
 
       - name: Verify directory
@@ -701,7 +709,7 @@ jobs:
 
 
       # ============================================================
-      # 24. VERIFY CONTENT RULES
+      # 22. VERIFY CONTENT RULES
       # ============================================================
 
       - name: Verify content rules
@@ -719,7 +727,7 @@ jobs:
 
 
       # ============================================================
-      # 25. VERIFY PROFILE UPDATE
+      # 23. VERIFY PROFILE UPDATE
       # ============================================================
 
       - name: Verify profile update
@@ -737,7 +745,7 @@ jobs:
 
 
       # ============================================================
-      # 26. VERIFY PDF PIPELINE
+      # 24. VERIFY PDF PIPELINE
       # ============================================================
 
       - name: Verify PDF pipeline
@@ -755,7 +763,7 @@ jobs:
 
 
       # ============================================================
-      # 27. VERIFY REPORT DOWNLOAD
+      # 25. VERIFY REPORT DOWNLOAD
       # ============================================================
 
       - name: Verify report download scope
@@ -773,7 +781,7 @@ jobs:
 
 
       # ============================================================
-      # 28. VERIFY COMPLAINT FLOW
+      # 26. VERIFY COMPLAINT FLOW
       # ============================================================
 
       - name: Verify complaint flow
@@ -795,7 +803,7 @@ jobs:
 
 
       # ============================================================
-      # 29. VERIFY FINAL RKMS RULES
+      # 27. VERIFY FINAL RKMS RULES
       # ============================================================
 
       - name: Verify final RKMS rules
@@ -813,7 +821,7 @@ jobs:
 
 
       # ============================================================
-      # 30. VERIFY DIGITAL ID / SIGNER
+      # 28. VERIFY DIGITAL ID / SIGNER
       # ============================================================
 
       - name: Verify document signer
@@ -827,7 +835,7 @@ jobs:
           echo "DOCUMENT SIGNER CHECK"
           echo "============================================================"
 
-          if grep -R -q \
+          if grep -R -Fq \
             'resolveOfficerSignature' \
             .; then
             echo "resolveOfficerSignature: PRESENT"
@@ -835,7 +843,7 @@ jobs:
             echo "WARNING: resolveOfficerSignature not found."
           fi
 
-          if grep -R -q \
+          if grep -R -Fq \
             'signature_url' \
             .; then
             echo "signature_url: PRESENT"
@@ -847,7 +855,7 @@ jobs:
 
 
       # ============================================================
-      # 31. VERIFY GUEST NAVIGATION
+      # 29. VERIFY GUEST NAVIGATION
       # ============================================================
 
       - name: Verify guest navigation
@@ -861,7 +869,7 @@ jobs:
             if grep -q 'rkmsBottomNav' index.html; then
               echo "rkmsBottomNav: PRESENT"
             else
-              echo "rkmsBottomNav: not found in index.html"
+              echo "rkmsBottomNav not found in index.html."
             fi
           fi
 
@@ -869,7 +877,7 @@ jobs:
             if grep -q 'guest-nav' styles.css; then
               echo "guest-nav CSS: PRESENT"
             else
-              echo "guest-nav CSS: not found"
+              echo "guest-nav CSS not found."
             fi
           fi
 
@@ -877,7 +885,7 @@ jobs:
 
 
       # ============================================================
-      # 32. ANDROID MANIFEST INSPECTION
+      # 30. ANDROID MANIFEST INSPECTION
       # ============================================================
 
       - name: Inspect Android manifest
@@ -909,7 +917,7 @@ jobs:
 
 
       # ============================================================
-      # 33. CAPACITOR CHECK
+      # 31. CAPACITOR CHECK
       # ============================================================
 
       - name: Capacitor check
@@ -925,7 +933,7 @@ jobs:
 
 
       # ============================================================
-      # 34. PREPARE RELEASE SIGNING
+      # 32. PREPARE RELEASE SIGNING
       # ============================================================
 
       - name: Prepare release signing
@@ -969,7 +977,7 @@ jobs:
 
 
       # ============================================================
-      # 35. CONFIGURE GRADLE 8.11.1
+      # 33. CONFIGURE GRADLE 8.11.1
       # ============================================================
 
       - name: Configure Gradle 8.11.1
@@ -981,9 +989,7 @@ jobs:
 
           GRADLE_VERSION="8.11.1"
 
-          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
-            mkdir -p gradle/wrapper
-          fi
+          mkdir -p gradle/wrapper
 
           cat > gradle/wrapper/gradle-wrapper.properties <<EOF
           distributionBase=GRADLE_USER_HOME
@@ -999,7 +1005,7 @@ jobs:
 
 
       # ============================================================
-      # 36. CONFIGURE RELEASE SIGNING
+      # 34. CONFIGURE RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -1016,10 +1022,10 @@ jobs:
           s = p.read_text()
 
           # --------------------------------------------------------
-          # Add signingConfigs.release if it does not exist
+          # signingConfigs
           # --------------------------------------------------------
 
-          if "signingConfigs" not in s:
+          if "signingConfigs {" not in s:
 
               if "android {" not in s:
                   raise SystemExit(
@@ -1041,10 +1047,8 @@ jobs:
                   1
               )
 
-          elif "signingConfigs.release" not in s:
+          elif "signingConfigs {" in s and "signingConfigs.release" not in s:
 
-              # If signingConfigs exists but release does not,
-              # insert release config inside the existing block.
               s = s.replace(
                   "signingConfigs {",
                   """signingConfigs {
@@ -1059,7 +1063,7 @@ jobs:
               )
 
           # --------------------------------------------------------
-          # Add release signingConfig safely
+          # release build type
           # --------------------------------------------------------
 
           if "signingConfig signingConfigs.release" not in s:
@@ -1088,10 +1092,10 @@ jobs:
 
 
       # ============================================================
-      # 37. FINAL PRE-BUILD FIREBASE CHECK
+      # 35. FINAL FIREBASE PRE-BUILD CHECK
       # ============================================================
 
-      - name: Final pre-build Firebase check
+      - name: Final Firebase pre-build check
         shell: bash
         run: |
           set -e
@@ -1106,19 +1110,19 @@ jobs:
           test -f android/app/google-services.json
           test -f android/app/build.gradle
 
-          grep -q \
+          grep -Fq \
             'com.google.firebase:firebase-bom:34.19.0' \
             android/app/build.gradle
 
-          grep -q \
+          grep -Fq \
             'com.google.firebase:firebase-messaging' \
             android/app/build.gradle
 
-          grep -R -q \
+          grep -R -Fq \
             'FirebaseApp.initializeApp(this)' \
             android/app/src/main/java
 
-          grep -R -q \
+          grep -R -Fq \
             'com.google.gms.google-services' \
             android
 
@@ -1133,7 +1137,44 @@ jobs:
 
 
       # ============================================================
-      # 38. BUILD SIGNED RELEASE AAB
+      # 36. FINAL ANDROID CONFIG CHECK
+      # ============================================================
+
+      - name: Final Android configuration check
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "============================================================"
+          echo "FINAL ANDROID CONFIGURATION"
+          echo "============================================================"
+
+          test -f android/app/build.gradle
+          test -f android/app/src/main/AndroidManifest.xml
+
+          grep -R -E \
+            'compileSdk(Version)?[[:space:]]*[=]?[[:space:]]*36' \
+            android \
+            >/dev/null \
+            || {
+              echo "WARNING: compileSdk 36 not directly detected."
+            }
+
+          grep -R -E \
+            'targetSdk(Version)?[[:space:]]*[=]?[[:space:]]*36' \
+            android \
+            >/dev/null \
+            || {
+              echo "WARNING: targetSdk 36 not directly detected."
+            }
+
+          echo "Android configuration check completed."
+
+
+      # ============================================================
+      # 37. BUILD SIGNED RELEASE AAB
       # ============================================================
 
       - name: Build signed Release AAB
@@ -1157,7 +1198,7 @@ jobs:
 
 
       # ============================================================
-      # 39. LOCATE AAB
+      # 38. LOCATE AAB
       # ============================================================
 
       - name: Locate AAB
@@ -1185,7 +1226,7 @@ jobs:
 
 
       # ============================================================
-      # 40. VERIFY AAB SIGNATURE
+      # 39. VERIFY AAB SIGNATURE
       # ============================================================
 
       - name: Verify AAB signature
@@ -1205,7 +1246,7 @@ jobs:
 
 
       # ============================================================
-      # 41. CALCULATE SHA256
+      # 40. CALCULATE SHA256
       # ============================================================
 
       - name: Calculate AAB SHA256
@@ -1215,12 +1256,15 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          echo "AAB SHA256:"
+          echo "============================================================"
+          echo "AAB SHA256"
+          echo "============================================================"
+
           sha256sum "$AAB"
 
 
       # ============================================================
-      # 42. UPLOAD RELEASE AAB
+      # 41. UPLOAD RELEASE AAB
       # ============================================================
 
       - name: Upload Release AAB
