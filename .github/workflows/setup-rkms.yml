@@ -321,7 +321,102 @@ jobs:
 
 
       # ============================================================
-      # 14. FORCE ANDROID MIN SDK 23
+      # 14. REPAIR RKMS NATIVE BRIDGE JAVA
+      # ============================================================
+
+      - name: Repair RKMS native bridge Java
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          echo "============================================================"
+          echo "REPAIR RKMS NATIVE BRIDGE JAVA"
+          echo "============================================================"
+
+          BRIDGE_FILE="$(find android/app/src/main/java \
+            -type f \
+            -name 'RKMSNativeBridge.java' \
+            | head -1)"
+
+          if [ -z "$BRIDGE_FILE" ]; then
+            echo "ERROR: RKMSNativeBridge.java not found."
+            echo ""
+            echo "Available Java files:"
+            find android/app/src/main/java \
+              -type f \
+              -name '*.java' \
+              | sort
+            exit 1
+          fi
+
+          echo "Bridge file:"
+          echo "$BRIDGE_FILE"
+
+          python3 - "$BRIDGE_FILE" <<'PY'
+          from pathlib import Path
+          import sys
+          import re
+
+          path = Path(sys.argv[1])
+          s = path.read_text()
+
+          # The generated bridge may contain a literal two-character
+          # sequence "\n" where Java source requires an actual newline.
+          #
+          # Repair only when that sequence is immediately followed by
+          # an @JavascriptInterface declaration. This avoids modifying
+          # normal Java string escape sequences elsewhere.
+
+          pattern = r'\\n(?=\s*@JavascriptInterface\b)'
+
+          matches = list(re.finditer(pattern, s))
+
+          if matches:
+              s = re.sub(pattern, '\n', s)
+              path.write_text(s)
+
+              print(
+                  f"Repaired {len(matches)} literal \\\\n "
+                  f"sequence(s) before @JavascriptInterface."
+              )
+          else:
+              print(
+                  "No broken literal \\\\n sequence found before "
+                  "@JavascriptInterface."
+              )
+          PY
+
+          echo ""
+          echo "Checking bridge for remaining broken declarations..."
+
+          if grep -Fq '\n @JavascriptInterface' "$BRIDGE_FILE"; then
+            echo "ERROR: Broken literal \\n remains in bridge."
+            grep -n -F '\n @JavascriptInterface' "$BRIDGE_FILE" || true
+            exit 1
+          fi
+
+          if grep -Fq '\n@JavascriptInterface' "$BRIDGE_FILE"; then
+            echo "ERROR: Broken literal \\n remains in bridge."
+            grep -n -F '\n@JavascriptInterface' "$BRIDGE_FILE" || true
+            exit 1
+          fi
+
+          echo "No broken literal \\n declaration found: PASS"
+
+          echo ""
+          echo "RKMSNativeBridge.java:"
+          sed -n '1,180p' "$BRIDGE_FILE"
+
+          echo ""
+          echo "============================================================"
+          echo "RKMS NATIVE BRIDGE REPAIR: PASS"
+          echo "============================================================"
+
+
+      # ============================================================
+      # 15. FORCE ANDROID MIN SDK 23
       # ============================================================
 
       - name: Force Android minSdk 23
@@ -338,22 +433,10 @@ jobs:
           test -d android
           test -f android/app/build.gradle
 
-          echo ""
-          echo "Checking Android Gradle files..."
-
-          find android \
-            -type f \
-            \( -name 'variables.gradle' \
-               -o -name 'build.gradle' \
-               -o -name 'build.gradle.kts' \) \
-            -print
-
           VARIABLES_FILE="android/variables.gradle"
 
           if [ ! -f "$VARIABLES_FILE" ]; then
             echo "ERROR: android/variables.gradle not found."
-            echo ""
-            echo "Android directory:"
             find android -maxdepth 3 -type f | sort
             exit 1
           fi
@@ -372,11 +455,6 @@ jobs:
           path = Path("android/variables.gradle")
           s = path.read_text()
 
-          # Standard Capacitor variables.gradle:
-          #
-          # minSdkVersion = 22
-          #
-          # Force only the numeric value to 23.
           pattern = r'(\bminSdkVersion\s*=\s*)\d+'
 
           if re.search(pattern, s):
@@ -416,7 +494,6 @@ jobs:
 
             echo ""
             echo "ERROR: minSdkVersion 23 was not applied."
-            echo ""
             cat android/variables.gradle
             exit 1
 
@@ -429,7 +506,7 @@ jobs:
 
 
       # ============================================================
-      # 15. FIREBASE JSON
+      # 16. FIREBASE JSON
       # ============================================================
 
       - name: Force Firebase configuration into Android app
@@ -461,7 +538,7 @@ jobs:
 
 
       # ============================================================
-      # 16. FIREBASE SDK DEPENDENCY
+      # 17. FIREBASE SDK DEPENDENCY
       # ============================================================
 
       - name: Force add Firebase SDK
@@ -522,7 +599,7 @@ jobs:
 
 
       # ============================================================
-      # 17. FORCE FIREBASE INITIALIZATION
+      # 18. FORCE FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Force Firebase initialization into MainActivity
@@ -550,8 +627,6 @@ jobs:
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             echo "ERROR: MainActivity.java/MainActivity.kt not found."
-            echo ""
-            echo "Available Activity files:"
             find android/app/src/main/java \
               -type f \
               \( -name '*.java' -o -name '*.kt' \) \
@@ -586,18 +661,23 @@ jobs:
 
                   if package_match:
                       pos = package_match.end()
+
                       s = (
                           s[:pos]
                           + "\n\nimport com.google.firebase.FirebaseApp;"
                           + s[pos:]
                       )
+
                   else:
                       raise SystemExit(
                           "ERROR: Java package declaration not found."
                       )
 
               if "FirebaseApp.initializeApp(this)" in s:
-                  print("Firebase initialization already present.")
+
+                  print(
+                      "Firebase initialization already present."
+                  )
 
               else:
 
@@ -632,12 +712,15 @@ jobs:
                           )
 
                           if package_match:
+
                               pos = package_match.end()
+
                               s = (
                                   s[:pos]
                                   + "\n\nimport android.os.Bundle;"
                                   + s[pos:]
                               )
+
                           else:
                               raise SystemExit(
                                   "ERROR: Java package declaration not found."
@@ -684,24 +767,30 @@ jobs:
                   )
 
                   if package_match:
+
                       pos = package_match.end()
+
                       s = (
                           s[:pos]
                           + "\nimport com.google.firebase.FirebaseApp\n"
                           + s[pos:]
                       )
+
                   else:
                       raise SystemExit(
                           "ERROR: Kotlin package declaration not found."
                       )
 
               if "FirebaseApp.initializeApp(this)" in s:
-                  print("Firebase initialization already present.")
+
+                  print(
+                      "Firebase initialization already present."
+                  )
 
               else:
 
                   oncreate = re.search(
-                      r'override\s+fun\s+onCreate\s*\(\s*\w+\s*:\s*Bundle\s*\)\s*\{',
+                      r'override\s+fun\s+onCreate\s*\(\s*\w+\s*:\s*Bundle\s*\?\s*\)\s*\{',
                       s
                   )
 
@@ -731,12 +820,15 @@ jobs:
                           )
 
                           if package_match:
+
                               pos = package_match.end()
+
                               s = (
                                   s[:pos]
                                   + "\nimport android.os.Bundle\n"
                                   + s[pos:]
                               )
+
                           else:
                               raise SystemExit(
                                   "ERROR: Kotlin package declaration not found."
@@ -780,7 +872,7 @@ jobs:
 
 
       # ============================================================
-      # 18. VERIFY FIREBASE CONFIGURATION
+      # 19. VERIFY FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -816,7 +908,9 @@ jobs:
               packages = []
 
               for client in data.get("client", []):
+
                   info = client.get("client_info", {})
+
                   android_info = info.get(
                       "android_client_info",
                       {}
@@ -888,7 +982,7 @@ jobs:
 
 
       # ============================================================
-      # 19. PACKAGE / NATIVE BRIDGE
+      # 20. PACKAGE / NATIVE BRIDGE
       # ============================================================
 
       - name: Verify package and native bridge
@@ -908,11 +1002,31 @@ jobs:
             'RKMSNativeBridge' \
             android/app/src/main/java
 
-          echo "RKMSNativeBridge: PASS"
+          echo "RKMSNativeBridge: PRESENT"
+
+          BRIDGE_FILE="$(find android/app/src/main/java \
+            -type f \
+            -name 'RKMSNativeBridge.java' \
+            | head -1)"
+
+          if [ -n "$BRIDGE_FILE" ]; then
+
+            if grep -Fq '\n @JavascriptInterface' "$BRIDGE_FILE"; then
+              echo "ERROR: broken literal \\n remains."
+              exit 1
+            fi
+
+            if grep -Fq '\n@JavascriptInterface' "$BRIDGE_FILE"; then
+              echo "ERROR: broken literal \\n remains."
+              exit 1
+            fi
+
+            echo "RKMSNativeBridge Java syntax preparation: PASS"
+          fi
 
 
       # ============================================================
-      # 20. SAVED LOGIN
+      # 21. SAVED LOGIN
       # ============================================================
 
       - name: Verify saved login
@@ -930,7 +1044,7 @@ jobs:
 
 
       # ============================================================
-      # 21. FCM PIPELINE
+      # 22. FCM PIPELINE
       # ============================================================
 
       - name: Verify FCM pipeline
@@ -948,7 +1062,7 @@ jobs:
 
 
       # ============================================================
-      # 22. FINAL LOGIN
+      # 23. FINAL LOGIN
       # ============================================================
 
       - name: Verify final login
@@ -966,7 +1080,7 @@ jobs:
 
 
       # ============================================================
-      # 23. AUTHORITY HIERARCHY
+      # 24. AUTHORITY HIERARCHY
       # ============================================================
 
       - name: Verify authority hierarchy
@@ -984,7 +1098,7 @@ jobs:
 
 
       # ============================================================
-      # 24. DIRECTORY
+      # 25. DIRECTORY
       # ============================================================
 
       - name: Verify directory
@@ -1010,7 +1124,7 @@ jobs:
 
 
       # ============================================================
-      # 25. DIRECTORY DEEP RULES
+      # 26. DIRECTORY DEEP RULES
       # ============================================================
 
       - name: Verify directory deep rules
@@ -1028,7 +1142,7 @@ jobs:
 
 
       # ============================================================
-      # 26. PROFILE UPDATE
+      # 27. PROFILE UPDATE
       # ============================================================
 
       - name: Verify profile update
@@ -1046,7 +1160,7 @@ jobs:
 
 
       # ============================================================
-      # 27. PDF PIPELINE
+      # 28. PDF PIPELINE
       # ============================================================
 
       - name: Verify PDF pipeline
@@ -1064,7 +1178,7 @@ jobs:
 
 
       # ============================================================
-      # 28. REPORT DOWNLOAD
+      # 29. REPORT DOWNLOAD
       # ============================================================
 
       - name: Verify report download scope
@@ -1082,7 +1196,7 @@ jobs:
 
 
       # ============================================================
-      # 29. COMPLAINT FLOW
+      # 30. COMPLAINT FLOW
       # ============================================================
 
       - name: Verify complaint flow
@@ -1103,7 +1217,7 @@ jobs:
 
 
       # ============================================================
-      # 30. FINAL RKMS RULES
+      # 31. FINAL RKMS RULES
       # ============================================================
 
       - name: Verify final RKMS rules
@@ -1121,7 +1235,7 @@ jobs:
 
 
       # ============================================================
-      # 31. DOCUMENT SIGNER
+      # 32. DOCUMENT SIGNER
       # ============================================================
 
       - name: Verify document signer
@@ -1151,7 +1265,7 @@ jobs:
 
 
       # ============================================================
-      # 32. GUEST NAVIGATION
+      # 33. GUEST NAVIGATION
       # ============================================================
 
       - name: Verify guest navigation
@@ -1177,7 +1291,7 @@ jobs:
 
 
       # ============================================================
-      # 33. ANDROID MANIFEST
+      # 34. ANDROID MANIFEST
       # ============================================================
 
       - name: Inspect Android manifest
@@ -1204,7 +1318,7 @@ jobs:
 
 
       # ============================================================
-      # 34. CAPACITOR CHECK
+      # 35. CAPACITOR CHECK
       # ============================================================
 
       - name: Capacitor check
@@ -1220,7 +1334,7 @@ jobs:
 
 
       # ============================================================
-      # 35. RELEASE SIGNING
+      # 36. RELEASE SIGNING
       # ============================================================
 
       - name: Prepare release signing
@@ -1260,7 +1374,7 @@ jobs:
 
 
       # ============================================================
-      # 36. GRADLE 8.11.1
+      # 37. GRADLE 8.11.1
       # ============================================================
 
       - name: Configure Gradle 8.11.1
@@ -1286,7 +1400,7 @@ jobs:
 
 
       # ============================================================
-      # 37. RELEASE SIGNING CONFIGURATION
+      # 38. RELEASE SIGNING CONFIGURATION
       # ============================================================
 
       - name: Configure release signing
@@ -1301,6 +1415,15 @@ jobs:
 
           p = Path("android/app/build.gradle")
           s = p.read_text()
+
+          signing_block = """
+              release {
+                  storeFile file("../../rkms-release.keystore")
+                  storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
+                  keyAlias System.getenv("RKMS_KEY_ALIAS")
+                  keyPassword System.getenv("RKMS_KEY_PASSWORD")
+              }
+          """
 
           if "signingConfigs {" not in s:
 
@@ -1323,18 +1446,9 @@ jobs:
 
           elif "rkms-release.keystore" not in s:
 
-              signing = """
-                  release {
-                      storeFile file("../../rkms-release.keystore")
-                      storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
-                      keyAlias System.getenv("RKMS_KEY_ALIAS")
-                      keyPassword System.getenv("RKMS_KEY_PASSWORD")
-                  }
-              """
-
               s = s.replace(
                   "signingConfigs {",
-                  "signingConfigs {" + signing,
+                  "signingConfigs {" + signing_block,
                   1
               )
 
@@ -1342,13 +1456,15 @@ jobs:
 
               if "buildTypes {" in s:
 
-                  s = s.replace(
-                      "buildTypes {",
-                      """buildTypes {
+                  release_config = """
                   release {
                       signingConfig signingConfigs.release
                   }
-              """,
+              """
+
+                  s = s.replace(
+                      "buildTypes {",
+                      "buildTypes {" + release_config,
                       1
                   )
 
@@ -1373,7 +1489,7 @@ jobs:
 
 
       # ============================================================
-      # 38. FINAL FIREBASE PRE-BUILD CHECK
+      # 39. FINAL FIREBASE PRE-BUILD CHECK
       # ============================================================
 
       - name: Final Firebase pre-build check
@@ -1428,7 +1544,55 @@ jobs:
 
 
       # ============================================================
-      # 39. FINAL ANDROID CONFIGURATION
+      # 40. FINAL NATIVE BRIDGE CHECK
+      # ============================================================
+
+      - name: Final native bridge check
+        shell: bash
+        run: |
+          set -e
+
+          cd "$SOURCE_DIR"
+
+          BRIDGE_FILE="$(find android/app/src/main/java \
+            -type f \
+            -name 'RKMSNativeBridge.java' \
+            | head -1)"
+
+          if [ -z "$BRIDGE_FILE" ]; then
+            echo "ERROR: RKMSNativeBridge.java not found."
+            exit 1
+          fi
+
+          echo "Checking:"
+          echo "$BRIDGE_FILE"
+
+          if grep -Fq '\n @JavascriptInterface' "$BRIDGE_FILE"; then
+            echo "ERROR: literal \\n remains before @JavascriptInterface."
+            grep -n -F '\n @JavascriptInterface' "$BRIDGE_FILE" || true
+            exit 1
+          fi
+
+          if grep -Fq '\n@JavascriptInterface' "$BRIDGE_FILE"; then
+            echo "ERROR: literal \\n remains before @JavascriptInterface."
+            grep -n -F '\n@JavascriptInterface' "$BRIDGE_FILE" || true
+            exit 1
+          fi
+
+          grep -Fq \
+            'isFirebaseReady' \
+            "$BRIDGE_FILE"
+
+          grep -Fq \
+            'saveSession' \
+            "$BRIDGE_FILE"
+
+          echo "Native bridge declarations: PASS"
+          echo "Native bridge literal-newline check: PASS"
+
+
+      # ============================================================
+      # 41. FINAL ANDROID CONFIGURATION
       # ============================================================
 
       - name: Final Android configuration check
@@ -1471,7 +1635,6 @@ jobs:
 
             echo "ERROR: Android minSdk 23 not found."
             echo ""
-            echo "Current android/variables.gradle:"
             cat android/variables.gradle
             exit 1
 
@@ -1484,7 +1647,7 @@ jobs:
 
 
       # ============================================================
-      # 40. BUILD RELEASE AAB
+      # 42. BUILD RELEASE AAB
       # ============================================================
 
       - name: Build signed Release AAB
@@ -1508,7 +1671,7 @@ jobs:
 
 
       # ============================================================
-      # 41. LOCATE AAB
+      # 43. LOCATE AAB
       # ============================================================
 
       - name: Locate AAB
@@ -1536,7 +1699,7 @@ jobs:
 
 
       # ============================================================
-      # 42. VERIFY AAB SIGNATURE
+      # 44. VERIFY AAB SIGNATURE
       # ============================================================
 
       - name: Verify AAB signature
@@ -1556,7 +1719,7 @@ jobs:
 
 
       # ============================================================
-      # 43. SHA256
+      # 45. SHA256
       # ============================================================
 
       - name: Calculate AAB SHA256
@@ -1574,7 +1737,7 @@ jobs:
 
 
       # ============================================================
-      # 44. UPLOAD AAB
+      # 46. UPLOAD AAB
       # ============================================================
 
       - name: Upload Release AAB
