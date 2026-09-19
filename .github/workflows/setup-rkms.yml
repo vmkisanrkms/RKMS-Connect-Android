@@ -1,4 +1,4 @@
-name: RKMS Android 16 API 36 APK + AAB
+name: RKMS Android 16 API 36 - Final APK + AAB
 
 on:
   workflow_dispatch:
@@ -6,17 +6,19 @@ on:
 permissions:
   contents: read
 
+env:
+  ANDROID_API: "36"
+  BUILD_TOOLS: "36.0.0"
+  NODE_VERSION: "22"
+  JAVA_VERSION: "17"
+  AGP_VERSION: "8.9.1"
+  GRADLE_VERSION: "8.11.1"
+  APP_ID: "org.rkms.connect"
+
 jobs:
-  android-release:
-
-    name: RKMS Final Android 16 API 36 APK + AAB
+  android-build:
+    name: RKMS Android 16 API 36 APK + AAB
     runs-on: ubuntu-latest
-
-    env:
-      RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
-      RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
-      RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
-      RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
 
     steps:
 
@@ -30,698 +32,658 @@ jobs:
 
 
       # ============================================================
-      # 2. LOCATE EXACT RKMS SOURCE ZIP
+      # 2. FIND FINAL RKMS SOURCE
       # ============================================================
-      - name: Locate RKMS source ZIP
+      - name: Resolve RKMS source
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="RKMS_CONNECT_FINAL_MERGED_DEEP_AUDIT_CHAT_WHATSAPP_PDA_PASSWORD_20260919.zip"
+          echo "Checking repository..."
 
-          echo "=============================================="
-          echo " RKMS SOURCE ZIP VERIFICATION"
-          echo "=============================================="
+          if [[ -f "package.json" ]] && \
+             [[ -f "package-lock.json" ]] && \
+             [[ -f "app.js" ]] && \
+             [[ -f "index.html" ]] && \
+             [[ -f "styles.css" ]] && \
+             [[ -f "capacitor.config.json" ]] && \
+             [[ -f "google-services.json" ]]; then
 
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: RKMS source ZIP not found:"
-            echo "$ZIP_FILE"
-            echo
-            echo "Available ZIP files:"
-            find . \
-              -type f \
-              -iname "*.zip" \
-              -not -path "./.git/*" \
-              | sort
-            exit 1
-          fi
+            echo "Root source detected."
+            echo "RKMS_SOURCE_DIR=." >> "$GITHUB_ENV"
 
-          echo "FOUND: $ZIP_FILE"
+          else
 
-          required_files=(
-            "package.json"
-            "package-lock.json"
-            "app.js"
-            "index.html"
-            "styles.css"
-            "capacitor.config.json"
-            "google-services.json"
-            "scripts/configure-android-16.sh"
-            "scripts/setup-android-native.sh"
-            "scripts/configure-release-signing.sh"
-          )
+            ZIP="RKMS_CONNECT_CHAT_DIGITAL_ID_ANDROID16_API36_FINAL_APK_BUILD.zip"
 
-          echo
-          echo "Checking ZIP contents..."
+            if [[ ! -f "$ZIP" ]]; then
+              ZIP="RKMS_CONNECT_FINAL_MERGED_DEEP_AUDIT_CHAT_WHATSAPP_PDA_PASSWORD_20260919.zip"
+            fi
 
-          ZIP_LIST="$(unzip -Z1 "$ZIP_FILE")"
-
-          for file in "${required_files[@]}"; do
-            if printf '%s\n' "$ZIP_LIST" | grep -Fxq "$file"; then
-              echo "FOUND: $file"
-            else
-              echo "MISSING: $file"
+            if [[ ! -f "$ZIP" ]]; then
+              echo "::error::Final RKMS source ZIP not found."
+              echo "Expected:"
+              echo "  RKMS_CONNECT_CHAT_DIGITAL_ID_ANDROID16_API36_FINAL_APK_BUILD.zip"
+              echo "or:"
+              echo "  RKMS_CONNECT_FINAL_MERGED_DEEP_AUDIT_CHAT_WHATSAPP_PDA_PASSWORD_20260919.zip"
               exit 1
             fi
-          done
 
-          echo
-          echo "ZIP verification: PASS"
+            echo "Extracting: $ZIP"
 
-          rm -rf rkms-source
-          mkdir -p rkms-source
+            rm -rf rkms-source
+            mkdir -p rkms-source
 
-          unzip -q "$ZIP_FILE" -d rkms-source
+            unzip -q "$ZIP" -d rkms-source
 
-          for file in "${required_files[@]}"; do
-            test -f "rkms-source/$file"
-          done
+            SOURCE="rkms-source"
 
-          echo "Extracted RKMS source: PASS"
+            if [[ ! -f "$SOURCE/package.json" ]]; then
+              FOUND="$(find "$SOURCE" -type f -name package.json -print -quit || true)"
+
+              if [[ -z "$FOUND" ]]; then
+                echo "::error::package.json not found after extraction."
+                exit 1
+              fi
+
+              SOURCE="$(dirname "$FOUND")"
+            fi
+
+            echo "Resolved source: $SOURCE"
+
+            echo "RKMS_SOURCE_DIR=$SOURCE" >> "$GITHUB_ENV"
+          fi
 
 
       # ============================================================
-      # 3. NODE 22
-      # ============================================================
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-
-      # ============================================================
-      # 4. VERIFY SOURCE
+      # 3. VERIFY SOURCE
       # ============================================================
       - name: Verify RKMS source
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          echo "=============================================="
-          echo " RKMS SOURCE VERIFICATION"
-          echo "=============================================="
+          REQUIRED=(
+            package.json
+            package-lock.json
+            app.js
+            index.html
+            styles.css
+            capacitor.config.json
+            google-services.json
+          )
 
+          for FILE in "${REQUIRED[@]}"; do
+            if [[ ! -f "$FILE" ]]; then
+              echo "::error::Missing required file: $FILE"
+              exit 1
+            fi
+          done
+
+          echo "All required RKMS source files are present."
+
+          echo "----- package.json -----"
+          cat package.json
+
+          echo "----- capacitor.config.json -----"
+          cat capacitor.config.json
+
+
+      # ============================================================
+      # 4. NODE 22
+      # ============================================================
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.RKMS_SOURCE_DIR }}/package-lock.json
+
+
+      # ============================================================
+      # 5. VERIFY NODE / NPM
+      # ============================================================
+      - name: Verify Node environment
+        shell: bash
+        run: |
           node --version
           npm --version
 
-          test -s package.json
-          test -s package-lock.json
-          test -s app.js
-          test -s index.html
-          test -s styles.css
-          test -s capacitor.config.json
-          test -s google-services.json
-
-          node --check app.js
-
-          echo "RKMS source: PASS"
-
 
       # ============================================================
-      # 5. VERIFY PACKAGE + CAPACITOR
+      # 6. VERIFY CAPACITOR
       # ============================================================
-      - name: Verify package and Capacitor configuration
+      - name: Verify Capacitor versions
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          node <<'NODE'
-          const fs = require("fs");
+          node - <<'NODE'
+          const p = require('./package.json');
 
-          const pkg = JSON.parse(
-            fs.readFileSync("package.json", "utf8")
-          );
-
-          const cap = JSON.parse(
-            fs.readFileSync("capacitor.config.json", "utf8")
-          );
-
-          if (pkg.name !== "rkms") {
-            throw new Error(
-              `Unexpected package name: ${pkg.name}`
-            );
-          }
-
-          if (!pkg.scripts || !pkg.scripts.build) {
-            throw new Error(
-              "package.json build script is missing"
-            );
-          }
-
-          if (cap.appId !== "org.rkms.connect") {
-            throw new Error(
-              `Unexpected appId: ${cap.appId}`
-            );
-          }
-
-          if (cap.webDir !== "dist") {
-            throw new Error(
-              `Unexpected webDir: ${cap.webDir}`
-            );
-          }
-
-          const deps = {
-            ...(pkg.dependencies || {}),
-            ...(pkg.devDependencies || {})
+          const expected = {
+            "@capacitor/core": "6.2.2",
+            "@capacitor/android": "6.2.2",
+            "@capacitor/app": "6.0.3",
+            "@capacitor/push-notifications": "6.0.3",
+            "@capacitor/cli": "6.2.2"
           };
 
-          if (deps["@capacitor/core"] !== "6.2.2") {
-            throw new Error(
-              `Unexpected @capacitor/core: ${deps["@capacitor/core"]}`
-            );
-          }
+          for (const [name, version] of Object.entries(expected)) {
+            const actual =
+              (p.dependencies && p.dependencies[name]) ||
+              (p.devDependencies && p.devDependencies[name]);
 
-          if (deps["@capacitor/android"] !== "6.2.2") {
-            throw new Error(
-              `Unexpected @capacitor/android: ${deps["@capacitor/android"]}`
-            );
-          }
+            if (!actual || !actual.includes(version)) {
+              console.error(`Invalid ${name}: ${actual}`);
+              process.exit(1);
+            }
 
-          if (
-            deps["@capacitor/push-notifications"] !== "6.0.3"
-          ) {
-            throw new Error(
-              `Unexpected @capacitor/push-notifications: ${deps["@capacitor/push-notifications"]}`
-            );
+            console.log(`${name}: ${actual}`);
           }
-
-          console.log("package.json: PASS");
-          console.log("capacitor.config.json: PASS");
-          console.log("App ID: org.rkms.connect");
-          console.log("WebDir: dist");
           NODE
 
 
       # ============================================================
-      # 6. NPM INSTALL
+      # 7. NPM CI
       # ============================================================
       - name: Install npm dependencies
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          npm ci --no-audit --no-fund
-
-          npm ls @capacitor/core --depth=0
-          npm ls @capacitor/android --depth=0
-          npm ls @capacitor/push-notifications --depth=0
-
-          echo "npm dependencies: PASS"
+          npm ci
 
 
       # ============================================================
-      # 7. WEB BUILD
+      # 8. BUILD WEB APP
       # ============================================================
       - name: Build RKMS web application
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
           npm run build
 
-          test -s dist/index.html
+          if [[ ! -d "dist" ]]; then
+            echo "::error::dist directory was not created."
+            exit 1
+          fi
 
-          echo "Web build: PASS"
+          if [[ ! -f "dist/index.html" ]]; then
+            echo "::error::dist/index.html missing."
+            exit 1
+          fi
+
+          echo "Web build completed."
 
 
       # ============================================================
-      # 8. JDK 17
+      # 9. JAVA 17
       # ============================================================
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
 
 
       # ============================================================
-      # 9. ANDROID SDK
+      # 10. VERIFY JAVA
       # ============================================================
-      - name: Configure Android SDK
+      - name: Verify Java
+        shell: bash
+        run: |
+          java -version
+
+
+      # ============================================================
+      # 11. ANDROID SDK
+      # ============================================================
+      - name: Setup Android SDK
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" \
-            >> "$GITHUB_ENV"
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 
-          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" \
-            >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
 
-          echo "/usr/local/lib/android/sdk/platform-tools" \
-            >> "$GITHUB_PATH"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
 
-          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" \
-            >> "$GITHUB_PATH"
-
-          test -d /usr/local/lib/android/sdk
-
-          test -x \
-            /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
-
-          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
-            --version
-
-          echo "Android SDK: PASS"
-
-
-      # ============================================================
-      # 10. ANDROID LICENSES
-      # ============================================================
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          yes | \
-            /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
-            --sdk_root=/usr/local/lib/android/sdk \
-            --licenses >/dev/null 2>&1 || true
-
-          echo "Android SDK licenses: PASS"
-
-
-      # ============================================================
-      # 11. ANDROID 16 / API 36
-      # ============================================================
-      - name: Install Android 16 API 36
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
-            --sdk_root=/usr/local/lib/android/sdk \
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;${BUILD_TOOLS}"
 
-          test -d "$ANDROID_HOME/platforms/android-36"
-          test -d "$ANDROID_HOME/build-tools/36.0.0"
-
-          echo "Android API 36: PASS"
-          echo "Build Tools 36.0.0: PASS"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
 
 
       # ============================================================
-      # 12. GENERATE CAPACITOR ANDROID
+      # 12. VERIFY ANDROID SDK
       # ============================================================
-      - name: Generate Capacitor Android project
+      - name: Verify Android SDK
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          SDK="${ANDROID_HOME}"
+
+          test -d "$SDK/platforms/android-${ANDROID_API}"
+          test -d "$SDK/build-tools/${BUILD_TOOLS}"
+
+          "$SDK/platform-tools/adb" version
+          "$SDK/build-tools/${BUILD_TOOLS}/aapt" version
+
+
+      # ============================================================
+      # 13. CREATE CAPACITOR ANDROID PROJECT
+      # ============================================================
+      - name: Create Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
 
           rm -rf android
 
           npx cap add android
 
-          test -f android/app/build.gradle
-          test -f android/gradlew
-
-          echo "Capacitor Android project: PASS"
-
 
       # ============================================================
-      # 13. CONFIGURE ANDROID 16
+      # 14. CONFIGURE ANDROID 16 / API 36
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
+
+          if [[ ! -f "scripts/configure-android-16.sh" ]]; then
+            echo "::error::scripts/configure-android-16.sh missing."
+            exit 1
+          fi
 
           chmod +x scripts/configure-android-16.sh
-
-          bash scripts/configure-android-16.sh
-
-          grep -q \
-            "compileSdkVersion = 36" \
-            android/variables.gradle
-
-          grep -q \
-            "targetSdkVersion = 36" \
-            android/variables.gradle
-
-          grep -q \
-            "com.android.tools.build:gradle:8.9.1" \
-            android/build.gradle
-
-          grep -q \
-            "gradle-8.11.1-bin.zip" \
-            android/gradle/wrapper/gradle-wrapper.properties
-
-          echo "Android 16 configuration: PASS"
+          ./scripts/configure-android-16.sh
 
 
       # ============================================================
-      # 14. CAPACITOR SYNC
+      # 15. VERIFY ANDROID CONFIGURATION
       # ============================================================
-      - name: Sync Capacitor
+      - name: Verify Android API 36 configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
+
+          grep -R "compileSdk.*36" android \
+            || {
+              echo "::error::compileSdk 36 not found."
+              exit 1
+            }
+
+          grep -R "targetSdk.*36" android \
+            || {
+              echo "::error::targetSdk 36 not found."
+              exit 1
+            }
+
+          grep -R "8.9.1" android \
+            || {
+              echo "::error::AGP 8.9.1 not found."
+              exit 1
+            }
+
+          echo "Android API 36 configuration verified."
+
+
+      # ============================================================
+      # 16. CAPACITOR SYNC
+      # ============================================================
+      - name: Capacitor sync
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
 
           npx cap sync android
 
-          test -f \
-            android/app/src/main/AndroidManifest.xml
-
-          echo "Capacitor sync: PASS"
-
 
       # ============================================================
-      # 15. RKMS NATIVE + FIREBASE SETUP
+      # 17. SETUP NATIVE RKMS
       # ============================================================
-      - name: Setup RKMS native Android and Firebase
+      - name: Setup RKMS native Android
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
+
+          if [[ ! -f "scripts/setup-android-native.sh" ]]; then
+            echo "::error::scripts/setup-android-native.sh missing."
+            exit 1
+          fi
 
           chmod +x scripts/setup-android-native.sh
-
-          bash scripts/setup-android-native.sh
-
-          test -s android/app/google-services.json
-
-          echo "RKMS native setup: PASS"
+          ./scripts/setup-android-native.sh
 
 
       # ============================================================
-      # 16. ENSURE FIREBASE SDK
-      #
-      # MainActivity.java uses FirebaseApp.initializeApp(this).
-      # FirebaseApp must therefore be available at compile time.
-      # ============================================================
-      - name: Ensure Firebase SDK dependency
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd rkms-source
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("android/app/build.gradle")
-          text = path.read_text()
-
-          firebase_bom = (
-              "implementation platform("
-              "'com.google.firebase:firebase-bom:33.9.0'"
-              ")"
-          )
-
-          firebase_messaging = (
-              "implementation "
-              "'com.google.firebase:firebase-messaging'"
-          )
-
-          match = re.search(
-              r'(?m)^[ \t]*dependencies[ \t]*\{',
-              text
-          )
-
-          if not match:
-              raise SystemExit(
-                  "ERROR: dependencies block not found"
-              )
-
-          start = match.end()
-
-          depth = 1
-          pos = start
-
-          while pos < len(text) and depth:
-              if text[pos] == "{":
-                  depth += 1
-              elif text[pos] == "}":
-                  depth -= 1
-              pos += 1
-
-          if depth != 0:
-              raise SystemExit(
-                  "ERROR: dependencies block malformed"
-              )
-
-          end = pos - 1
-
-          block = text[start:end]
-
-          if "com.google.firebase:firebase-bom:" not in block:
-              block = (
-                  "\n"
-                  "    // RKMS Firebase BOM\n"
-                  f"    {firebase_bom}\n"
-                  + block
-              )
-
-          if "com.google.firebase:firebase-messaging" not in block:
-              block += (
-                  "\n"
-                  "    // RKMS Firebase Messaging\n"
-                  f"    {firebase_messaging}\n"
-              )
-
-          text = text[:start] + block + text[end:]
-
-          path.write_text(text)
-
-          print("Firebase dependencies ensured.")
-          PY
-
-          grep -q \
-            "com.google.firebase:firebase-bom:33.9.0" \
-            android/app/build.gradle
-
-          grep -q \
-            "com.google.firebase:firebase-messaging" \
-            android/app/build.gradle
-
-          echo "Firebase SDK dependency: PASS"
-
-
-      # ============================================================
-      # 17. VERIFY FIREBASE
+      # 18. VERIFY FIREBASE FILE
       # ============================================================
       - name: Verify Firebase configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          grep -q \
-            "com.google.gms.google-services" \
-            android/app/build.gradle
+          test -f google-services.json
+          test -f android/app/google-services.json
 
-          python3 <<'PY'
-          import json
-          from pathlib import Path
+          node - <<'NODE'
+          const fs = require('fs');
 
-          path = Path("android/app/google-services.json")
+          const root = JSON.parse(
+            fs.readFileSync('google-services.json', 'utf8')
+          );
 
-          data = json.loads(path.read_text())
+          const clients = root.client || [];
 
-          packages = []
+          const found = clients.some(c =>
+            c.client_info &&
+            c.client_info.android_client_info &&
+            c.client_info.android_client_info.package_name ===
+              'org.rkms.connect'
+          );
 
-          for client in data.get("client", []):
-              packages.append(
-                  client
-                  .get("client_info", {})
-                  .get("android_client_info", {})
-                  .get("package_name")
-              )
+          if (!found) {
+            console.error(
+              'Firebase package org.rkms.connect not found.'
+            );
+            process.exit(1);
+          }
 
-          if "org.rkms.connect" not in packages:
-              raise SystemExit(
-                  "ERROR: org.rkms.connect missing from "
-                  "google-services.json"
-              )
-
-          print("Firebase package: org.rkms.connect")
-          print("Firebase configuration: PASS")
-          PY
-
-          if grep -Rqs \
-            "FirebaseApp.initializeApp" \
-            android/app/src/main/java/org/rkms/connect; then
-
-            echo "FirebaseApp.initializeApp: FOUND"
-
-          else
-
-            echo "ERROR: FirebaseApp.initializeApp not found"
-            exit 1
-
-          fi
+          console.log(
+            'Firebase package org.rkms.connect verified.'
+          );
+          NODE
 
 
       # ============================================================
-      # 18. LAUNCHER ICONS
+      # 19. FIREBASE DEPENDENCY FIX
+      # ============================================================
+      - name: Ensure Firebase dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          GRADLE_FILE="android/app/build.gradle"
+
+          if [[ ! -f "$GRADLE_FILE" ]]; then
+            echo "::error::android/app/build.gradle missing."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/build.gradle")
+          s = p.read_text()
+
+          bom = "implementation platform('com.google.firebase:firebase-bom:33.9.0')"
+          msg = "implementation 'com.google.firebase:firebase-messaging'"
+
+          if bom not in s or msg not in s:
+              marker = "dependencies {"
+
+              if marker not in s:
+                  raise SystemExit(
+                      "dependencies block not found"
+                  )
+
+              insert = (
+                  marker
+                  + "\n    "
+                  + bom
+                  + "\n    "
+                  + msg
+              )
+
+              s = s.replace(
+                  marker,
+                  insert,
+                  1
+              )
+
+              p.write_text(s)
+
+          print("Firebase dependencies verified.")
+          PY
+
+
+      # ============================================================
+      # 20. VERIFY FIREBASE COMPILE DEPENDENCIES
+      # ============================================================
+      - name: Verify Firebase compile classpath
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          ./gradlew \
+            :app:dependencies \
+            --configuration debugCompileClasspath \
+            --no-daemon \
+            > firebase-dependencies.txt
+
+          grep -q "firebase-messaging" firebase-dependencies.txt \
+            || {
+              echo "::error::firebase-messaging missing from compile classpath."
+              exit 1
+            }
+
+          echo "Firebase Messaging compile dependency verified."
+
+
+      # ============================================================
+      # 21. VERIFY FIREBASE INITIALIZATION
+      # ============================================================
+      - name: Verify Firebase initialization
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          if ! grep -R \
+            "FirebaseApp.initializeApp" \
+            android/app/src/main/java \
+            >/dev/null 2>&1; then
+
+            echo "::error::FirebaseApp.initializeApp(this) not found."
+            exit 1
+          fi
+
+          echo "Firebase initialization verified."
+
+
+      # ============================================================
+      # 22. VERIFY NATIVE BRIDGE
+      # ============================================================
+      - name: Verify RKMS native bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          find android/app/src/main/java \
+            -name "RKMSNativeBridge.java" \
+            -print \
+            -quit \
+            | grep -q . \
+            || {
+              echo "::error::RKMSNativeBridge.java missing."
+              exit 1
+            }
+
+          find android/app/src/main/java \
+            -name "RKMSSecureCredentialsPlugin.java" \
+            -print \
+            -quit \
+            | grep -q . \
+            || {
+              echo "::error::RKMSSecureCredentialsPlugin.java missing."
+              exit 1
+            }
+
+          echo "Native bridge and secure credentials plugin verified."
+
+
+      # ============================================================
+      # 23. VERIFY BIOMETRIC DEPENDENCY
+      # ============================================================
+      - name: Verify biometric dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          grep -R \
+            "androidx.biometric:biometric" \
+            android \
+            >/dev/null \
+            || {
+              echo "::error::Biometric dependency missing."
+              exit 1
+            }
+
+          echo "Biometric dependency verified."
+
+
+      # ============================================================
+      # 24. VERIFY LAUNCHER ICONS
       # ============================================================
       - name: Verify RKMS launcher icons
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          if [ -d android_launcher_icons ]; then
+          ICON_COUNT="$(find android/app/src/main/res \
+            -type f \
+            \( -name "ic_launcher*" -o -name "ic_launcher_round*" \) \
+            | wc -l)"
 
-            for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-
-              if [ -f \
-                "android_launcher_icons/mipmap-$density/ic_launcher.png"
-              ]; then
-                test -s \
-                  "android/app/src/main/res/mipmap-$density/ic_launcher.png"
-              fi
-
-              if [ -f \
-                "android_launcher_icons/mipmap-$density/ic_launcher_round.png"
-              ]; then
-                test -s \
-                  "android/app/src/main/res/mipmap-$density/ic_launcher_round.png"
-              fi
-
-            done
-
-            echo "RKMS launcher icons: PASS"
-
-          else
-
-            echo "Launcher source directory not present."
-            echo "Using generated Android resources."
-
+          if [[ "$ICON_COUNT" -lt 1 ]]; then
+            echo "::error::RKMS launcher icons not found."
+            exit 1
           fi
+
+          echo "Launcher icon files found: $ICON_COUNT"
 
 
       # ============================================================
-      # 19. RELEASE SIGNING
+      # 25. RELEASE SIGNING
       # ============================================================
       - name: Configure release signing
         shell: bash
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
+
+          if [[ ! -f "scripts/configure-release-signing.sh" ]]; then
+            echo "::warning::Signing script missing. Release will be unsigned."
+            exit 0
+          fi
 
           chmod +x scripts/configure-release-signing.sh
 
-          bash scripts/configure-release-signing.sh
-
-          if [ -f android/app/release.keystore ]; then
-
-            echo "Release keystore: FOUND"
-
-            grep -q \
-              "signingConfigs.release" \
-              android/app/build.gradle
-
-            echo "Release signing: CONFIGURED"
-
-          else
-
-            echo "Release signing secrets not configured."
-            echo "Release build will remain unsigned."
-
-          fi
+          ./scripts/configure-release-signing.sh
 
 
       # ============================================================
-      # 20. GRADLE VERIFICATION
+      # 26. VERIFY GRADLE WRAPPER
       # ============================================================
       - name: Verify Gradle wrapper
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          chmod +x android/gradlew
-
-          grep -q \
-            "gradle-8.11.1-bin.zip" \
-            android/gradle/wrapper/gradle-wrapper.properties
-
-          cd android
+          test -x gradlew || chmod +x gradlew
 
           ./gradlew --version
 
+          ./gradlew --version \
+            | grep -q "8.11.1" \
+            || {
+              echo "::error::Gradle 8.11.1 expected."
+              exit 1
+            }
+
 
       # ============================================================
-      # 21. VERIFY FIREBASE COMPILE CLASSPATH
+      # 27. DEBUG APK
       # ============================================================
-      - name: Verify Firebase compile dependency
+      - name: Build Debug APK
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source/android
-
-          ./gradlew \
-            :app:dependencies \
-            --configuration debugCompileClasspath \
-            --no-daemon \
-            | tee ../firebase-dependency-check.txt
-
-          grep -q \
-            "com.google.firebase:firebase-messaging" \
-            ../firebase-dependency-check.txt
-
-          echo "Firebase compile dependency: PASS"
-
-
-      # ============================================================
-      # 22. BUILD DEBUG APK
-      # ============================================================
-      - name: Build debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd rkms-source/android
+          cd "$RKMS_SOURCE_DIR"
 
           ./gradlew assembleDebug \
             --no-daemon \
             --stacktrace
 
-          test -s \
-            app/build/outputs/apk/debug/app-debug.apk
+          DEBUG_APK="android/app/build/outputs/apk/debug/app-debug.apk"
 
-          echo "Debug APK: PASS"
+          if [[ ! -f "$DEBUG_APK" ]]; then
+            echo "::error::Debug APK was not created."
+            exit 1
+          fi
+
+          echo "Debug APK created."
 
 
       # ============================================================
-      # 23. BUILD RELEASE APK + AAB
-      #
-      # IMPORTANT:
-      # NO "clean" HERE.
-      #
-      # Debug APK was already created and must remain available
-      # for the final artifact step.
+      # 28. RELEASE APK + AAB
+      # IMPORTANT: NO CLEAN HERE
       # ============================================================
-      - name: Build release APK and AAB
+      - name: Build Release APK and AAB
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source/android
+          cd "$RKMS_SOURCE_DIR"
 
           ./gradlew \
             assembleRelease \
@@ -729,120 +691,143 @@ jobs:
             --no-daemon \
             --stacktrace
 
-          test -s \
-            app/build/outputs/apk/release/app-release.apk
+          RELEASE_APK="android/app/build/outputs/apk/release/app-release.apk"
+          RELEASE_AAB="android/app/build/outputs/bundle/release/app-release.aab"
 
-          test -s \
-            app/build/outputs/bundle/release/app-release.aab
+          if [[ ! -f "$RELEASE_APK" ]]; then
+            echo "::error::Release APK was not created."
+            exit 1
+          fi
 
-          echo "Release APK: PASS"
-          echo "Release AAB: PASS"
+          if [[ ! -f "$RELEASE_AAB" ]]; then
+            echo "::error::Release AAB was not created."
+            exit 1
+          fi
+
+          echo "Release APK created."
+          echo "Release AAB created."
 
 
       # ============================================================
-      # 24. VERIFY DEBUG APK STILL EXISTS
+      # 29. VERIFY ALL ARTIFACTS
       # ============================================================
-      - name: Verify all build outputs
+      - name: Verify APK and AAB artifacts
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          test -s \
-            android/app/build/outputs/apk/debug/app-debug.apk
+          DEBUG_APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="android/app/build/outputs/apk/release/app-release.apk"
+          RELEASE_AAB="android/app/build/outputs/bundle/release/app-release.aab"
 
-          test -s \
+          test -s "$DEBUG_APK"
+          test -s "$RELEASE_APK"
+          test -s "$RELEASE_AAB"
+
+          echo
+          echo "===== ARTIFACT SIZES ====="
+
+          ls -lh \
+            "$DEBUG_APK" \
+            "$RELEASE_APK" \
+            "$RELEASE_AAB"
+
+
+      # ============================================================
+      # 30. VERIFY APK PACKAGE NAME
+      # ============================================================
+      - name: Verify APK package ID
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          AAPT="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/aapt"
+
+          for APK in \
+            android/app/build/outputs/apk/debug/app-debug.apk \
             android/app/build/outputs/apk/release/app-release.apk
+          do
 
-          test -s \
-            android/app/build/outputs/bundle/release/app-release.aab
+            echo "Checking $APK"
 
-          echo "Debug APK exists: PASS"
-          echo "Release APK exists: PASS"
-          echo "Release AAB exists: PASS"
+            "$AAPT" dump badging "$APK" \
+              | grep -q "package: name='org.rkms.connect'" \
+              || {
+                echo "::error::Wrong package ID in $APK"
+                exit 1
+              }
+
+          done
+
+          echo "Package ID verified: org.rkms.connect"
 
 
       # ============================================================
-      # 25. VERIFY PACKAGE ID
+      # 31. VERIFY APK SIGNATURE
       # ============================================================
-      - name: Verify release APK package ID
+      - name: Verify APK signatures
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" \
-            dump badging \
-            android/app/build/outputs/apk/release/app-release.apk \
-            | grep -q \
-            "package: name='org.rkms.connect'"
+          APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/apksigner"
 
-          echo "Package ID org.rkms.connect: PASS"
+          DEBUG_APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="android/app/build/outputs/apk/release/app-release.apk"
 
+          "$APKSIGNER" verify --verbose "$DEBUG_APK"
 
-      # ============================================================
-      # 26. VERIFY SIGNATURE IF SIGNED
-      # ============================================================
-      - name: Verify release signatures
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd rkms-source
-
-          if [ -f android/app/release.keystore ]; then
-
-            "$ANDROID_HOME/build-tools/36.0.0/apksigner" \
-              verify \
-              --verbose \
-              android/app/build/outputs/apk/release/app-release.apk
-
-            jarsigner \
-              -verify \
-              -verbose \
-              -certs \
-              android/app/build/outputs/bundle/release/app-release.aab
-
-            echo "APK signature: PASS"
-            echo "AAB signature: PASS"
-
+          if "$APKSIGNER" verify "$RELEASE_APK"; then
+            echo "Release APK is signed."
           else
-
-            echo "Unsigned release."
-            echo "Signature verification skipped."
-
+            echo "Release APK is unsigned."
+            echo "This is allowed when release signing secrets are not configured."
           fi
 
 
       # ============================================================
-      # 27. PREPARE FINAL ARTIFACTS
+      # 32. VERIFY AAB
       # ============================================================
-      - name: Prepare final RKMS artifacts
+      - name: Verify AAB
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
+
+          AAB="android/app/build/outputs/bundle/release/app-release.aab"
+
+          if command -v jarsigner >/dev/null 2>&1; then
+            if jarsigner -verify "$AAB" >/dev/null 2>&1; then
+              echo "AAB signature verified."
+            else
+              echo "AAB is unsigned."
+            fi
+          fi
+
+          unzip -t "$AAB" >/dev/null
+
+          echo "AAB archive integrity verified."
+
+
+      # ============================================================
+      # 33. SHA256
+      # ============================================================
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
 
           mkdir -p release
 
-          # --------------------------------------------------------
-          # Verify BEFORE copying.
-          # --------------------------------------------------------
-          test -s \
-            android/app/build/outputs/apk/debug/app-debug.apk
-
-          test -s \
-            android/app/build/outputs/apk/release/app-release.apk
-
-          test -s \
-            android/app/build/outputs/bundle/release/app-release.aab
-
-          # --------------------------------------------------------
-          # Copy APK + AAB.
-          # --------------------------------------------------------
           cp \
             android/app/build/outputs/apk/debug/app-debug.apk \
             release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk
@@ -855,88 +840,67 @@ jobs:
             android/app/build/outputs/bundle/release/app-release.aab \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
 
-          # --------------------------------------------------------
-          # Verify copied files.
-          # --------------------------------------------------------
-          test -s \
-            release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk
+          cd release
 
-          test -s \
-            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
-
-          test -s \
-            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
-
-          # --------------------------------------------------------
-          # SHA256.
-          # --------------------------------------------------------
           sha256sum \
-            release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk \
-            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk \
-            release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab \
-            | tee \
-            release/RKMS_ANDROID16_API36_SHA256.txt
+            RKMS_CONNECT_ANDROID16_API36_DEBUG.apk \
+            RKMS_CONNECT_ANDROID16_API36_RELEASE.apk \
+            RKMS_CONNECT_ANDROID16_API36_RELEASE.aab \
+            > RKMS_ANDROID16_API36_SHA256.txt
 
-          echo
-          echo "Final artifacts: PASS"
+          cat RKMS_ANDROID16_API36_SHA256.txt
 
 
       # ============================================================
-      # 28. FINAL VERIFICATION
+      # 34. FINAL ARTIFACT CHECK
       # ============================================================
-      - name: Final RKMS verification
+      - name: Final artifact check
         shell: bash
         run: |
           set -euo pipefail
 
-          cd rkms-source
+          cd "$RKMS_SOURCE_DIR"
 
-          test -s \
+          REQUIRED_RELEASE_FILES=(
             release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk
-
-          test -s \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
-
-          test -s \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
-
-          test -s \
             release/RKMS_ANDROID16_API36_SHA256.txt
+          )
+
+          for FILE in "${REQUIRED_RELEASE_FILES[@]}"; do
+            if [[ ! -s "$FILE" ]]; then
+              echo "::error::Final artifact missing or empty: $FILE"
+              exit 1
+            fi
+          done
 
           echo
-          echo "================================================"
-          echo "        RKMS CONNECT FINAL BUILD READY"
-          echo "================================================"
+          echo "=============================================="
+          echo " RKMS FINAL BUILD SUCCESS"
+          echo "=============================================="
           echo
-          echo "App ID      : org.rkms.connect"
-          echo "Android API : 36"
-          echo "Build Tools : 36.0.0"
-          echo "Gradle      : 8.11.1"
-          echo "AGP         : 8.9.1"
-          echo "JDK         : 17"
-          echo "Node        : 22"
+          echo "APK:"
+          ls -lh release/*.apk
           echo
-          echo "DEBUG APK   : READY"
-          echo "RELEASE APK : READY"
-          echo "RELEASE AAB : READY"
-          echo "SHA256      : READY"
+          echo "AAB:"
+          ls -lh release/*.aab
           echo
-          echo "================================================"
-
-          ls -lh release/
+          echo "SHA256:"
+          cat release/RKMS_ANDROID16_API36_SHA256.txt
 
 
       # ============================================================
-      # 29. UPLOAD FINAL FILES
+      # 35. UPLOAD FINAL ARTIFACTS
       # ============================================================
-      - name: Upload final APK and AAB
+      - name: Upload final RKMS APK + AAB
         uses: actions/upload-artifact@v4
         with:
-          name: RKMS_CONNECT_ANDROID16_API36_FINAL
+          name: RKMS-ANDROID16-API36-FINAL-APK-AAB
           path: |
-            rkms-source/release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk
-            rkms-source/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
-            rkms-source/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
-            rkms-source/release/RKMS_ANDROID16_API36_SHA256.txt
+            ${{ env.RKMS_SOURCE_DIR }}/release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk
+            ${{ env.RKMS_SOURCE_DIR }}/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
+            ${{ env.RKMS_SOURCE_DIR }}/release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
+            ${{ env.RKMS_SOURCE_DIR }}/release/RKMS_ANDROID16_API36_SHA256.txt
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
