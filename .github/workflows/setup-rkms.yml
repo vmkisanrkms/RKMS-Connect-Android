@@ -10,7 +10,6 @@ jobs:
   android-release:
 
     name: RKMS Final Android 16 API 36 APK + AAB
-
     runs-on: ubuntu-latest
 
     env:
@@ -31,24 +30,24 @@ jobs:
 
 
       # ============================================================
-      # 2. LOCATE EXACT AUDITED RKMS ZIP
+      # 2. LOCATE EXACT RKMS SOURCE ZIP
       # ============================================================
       - name: Locate RKMS source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "================================================"
-          echo " RKMS SOURCE ZIP VERIFICATION"
-          echo "================================================"
-
           ZIP_FILE="RKMS_CONNECT_FINAL_MERGED_DEEP_AUDIT_CHAT_WHATSAPP_PDA_PASSWORD_20260919.zip"
 
+          echo "=============================================="
+          echo " RKMS SOURCE ZIP VERIFICATION"
+          echo "=============================================="
+
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: Required RKMS source ZIP not found:"
+            echo "ERROR: RKMS source ZIP not found:"
             echo "$ZIP_FILE"
             echo
-            echo "ZIP files currently present:"
+            echo "Available ZIP files:"
             find . \
               -type f \
               -iname "*.zip" \
@@ -73,10 +72,12 @@ jobs:
           )
 
           echo
-          echo "Checking exact ZIP entries..."
+          echo "Checking ZIP contents..."
+
+          ZIP_LIST="$(unzip -Z1 "$ZIP_FILE")"
 
           for file in "${required_files[@]}"; do
-            if unzip -Z1 "$ZIP_FILE" | grep -Fxq "$file"; then
+            if printf '%s\n' "$ZIP_LIST" | grep -Fxq "$file"; then
               echo "FOUND: $file"
             else
               echo "MISSING: $file"
@@ -118,28 +119,28 @@ jobs:
 
           cd rkms-source
 
-          echo "================================================"
-          echo " RKMS SOURCE"
-          echo "================================================"
+          echo "=============================================="
+          echo " RKMS SOURCE VERIFICATION"
+          echo "=============================================="
 
           node --version
           npm --version
 
-          node --check app.js
-
           test -s package.json
           test -s package-lock.json
-          test -s index.html
           test -s app.js
+          test -s index.html
           test -s styles.css
           test -s capacitor.config.json
           test -s google-services.json
 
-          echo "RKMS source verification: PASS"
+          node --check app.js
+
+          echo "RKMS source: PASS"
 
 
       # ============================================================
-      # 5. PACKAGE / CAPACITOR CONFIG
+      # 5. VERIFY PACKAGE + CAPACITOR
       # ============================================================
       - name: Verify package and Capacitor configuration
         shell: bash
@@ -200,21 +201,23 @@ jobs:
             );
           }
 
-          if (deps["@capacitor/push-notifications"] !== "6.0.3") {
+          if (
+            deps["@capacitor/push-notifications"] !== "6.0.3"
+          ) {
             throw new Error(
               `Unexpected @capacitor/push-notifications: ${deps["@capacitor/push-notifications"]}`
             );
           }
 
-          console.log("Package: PASS");
-          console.log("Capacitor: PASS");
+          console.log("package.json: PASS");
+          console.log("capacitor.config.json: PASS");
           console.log("App ID: org.rkms.connect");
           console.log("WebDir: dist");
           NODE
 
 
       # ============================================================
-      # 6. INSTALL NPM
+      # 6. NPM INSTALL
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -291,7 +294,7 @@ jobs:
 
 
       # ============================================================
-      # 10. ACCEPT SDK LICENSES
+      # 10. ANDROID LICENSES
       # ============================================================
       - name: Accept Android SDK licenses
         shell: bash
@@ -307,7 +310,7 @@ jobs:
 
 
       # ============================================================
-      # 11. ANDROID API 36
+      # 11. ANDROID 16 / API 36
       # ============================================================
       - name: Install Android 16 API 36
         shell: bash
@@ -328,7 +331,7 @@ jobs:
 
 
       # ============================================================
-      # 12. CAPACITOR ANDROID PROJECT
+      # 12. GENERATE CAPACITOR ANDROID
       # ============================================================
       - name: Generate Capacitor Android project
         shell: bash
@@ -348,7 +351,7 @@ jobs:
 
 
       # ============================================================
-      # 13. ANDROID 16 CONFIGURATION
+      # 13. CONFIGURE ANDROID 16
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
@@ -361,10 +364,12 @@ jobs:
 
           bash scripts/configure-android-16.sh
 
-          grep -q "compileSdkVersion = 36" \
+          grep -q \
+            "compileSdkVersion = 36" \
             android/variables.gradle
 
-          grep -q "targetSdkVersion = 36" \
+          grep -q \
+            "targetSdkVersion = 36" \
             android/variables.gradle
 
           grep -q \
@@ -412,21 +417,14 @@ jobs:
 
           test -s android/app/google-services.json
 
-          echo "Original RKMS native setup: PASS"
+          echo "RKMS native setup: PASS"
 
 
       # ============================================================
-      # 16. FIX FIREBASE SDK DEPENDENCY
+      # 16. ENSURE FIREBASE SDK
       #
-      # MainActivity.java calls:
-      #
-      # com.google.firebase.FirebaseApp.initializeApp(this)
-      #
-      # FirebaseApp must therefore be supplied by the Firebase
-      # Messaging SDK.
-      #
-      # Use Firebase BOM so all Firebase components use one
-      # compatible version.
+      # MainActivity.java uses FirebaseApp.initializeApp(this).
+      # FirebaseApp must therefore be available at compile time.
       # ============================================================
       - name: Ensure Firebase SDK dependency
         shell: bash
@@ -439,92 +437,73 @@ jobs:
           from pathlib import Path
           import re
 
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
+          path = Path("android/app/build.gradle")
+          text = path.read_text()
 
-          bom = (
+          firebase_bom = (
               "implementation platform("
               "'com.google.firebase:firebase-bom:33.9.0'"
               ")"
           )
 
-          messaging = (
+          firebase_messaging = (
               "implementation "
               "'com.google.firebase:firebase-messaging'"
           )
 
-          # --------------------------------------------------------
-          # Find the existing dependencies block.
-          # --------------------------------------------------------
           match = re.search(
               r'(?m)^[ \t]*dependencies[ \t]*\{',
-              s
+              text
           )
 
           if not match:
               raise SystemExit(
-                  "ERROR: android/app/build.gradle "
-                  "dependencies block not found"
+                  "ERROR: dependencies block not found"
               )
 
           start = match.end()
 
           depth = 1
-          i = start
+          pos = start
 
-          while i < len(s) and depth > 0:
-
-              if s[i] == "{":
+          while pos < len(text) and depth:
+              if text[pos] == "{":
                   depth += 1
-
-              elif s[i] == "}":
+              elif text[pos] == "}":
                   depth -= 1
-
-              i += 1
+              pos += 1
 
           if depth != 0:
               raise SystemExit(
-                  "ERROR: dependencies block is malformed"
+                  "ERROR: dependencies block malformed"
               )
 
-          end = i
+          end = pos - 1
 
-          block = s[start:end-1]
+          block = text[start:end]
 
-          # --------------------------------------------------------
-          # Add Firebase BOM once.
-          # --------------------------------------------------------
           if "com.google.firebase:firebase-bom:" not in block:
-
               block = (
                   "\n"
                   "    // RKMS Firebase BOM\n"
-                  f"    {bom}\n"
+                  f"    {firebase_bom}\n"
                   + block
               )
 
-          # --------------------------------------------------------
-          # Add Firebase Messaging once.
-          # --------------------------------------------------------
-          if (
-              "com.google.firebase:firebase-messaging"
-              not in block
-          ):
-
+          if "com.google.firebase:firebase-messaging" not in block:
               block += (
                   "\n"
-                  "    // RKMS Firebase Messaging / FirebaseApp\n"
-                  f"    {messaging}\n"
+                  "    // RKMS Firebase Messaging\n"
+                  f"    {firebase_messaging}\n"
               )
 
-          s = s[:start] + block + s[end-1:]
+          text = text[:start] + block + text[end:]
 
-          p.write_text(s)
+          path.write_text(text)
+
+          print("Firebase dependencies ensured.")
           PY
 
-          # --------------------------------------------------------
-          # Verify dependencies.
-          # --------------------------------------------------------
           grep -q \
             "com.google.firebase:firebase-bom:33.9.0" \
             android/app/build.gradle
@@ -533,12 +512,11 @@ jobs:
             "com.google.firebase:firebase-messaging" \
             android/app/build.gradle
 
-          echo "Firebase BOM: PASS"
-          echo "Firebase Messaging SDK: PASS"
+          echo "Firebase SDK dependency: PASS"
 
 
       # ============================================================
-      # 17. VERIFY FIREBASE CONFIGURATION
+      # 17. VERIFY FIREBASE
       # ============================================================
       - name: Verify Firebase configuration
         shell: bash
@@ -555,33 +533,28 @@ jobs:
           import json
           from pathlib import Path
 
-          p = Path("android/app/google-services.json")
+          path = Path("android/app/google-services.json")
 
-          data = json.loads(p.read_text())
+          data = json.loads(path.read_text())
 
           packages = []
 
           for client in data.get("client", []):
-
-              package_name = (
+              packages.append(
                   client
                   .get("client_info", {})
                   .get("android_client_info", {})
                   .get("package_name")
               )
 
-              packages.append(package_name)
-
           if "org.rkms.connect" not in packages:
               raise SystemExit(
-                  "ERROR: google-services.json does not contain "
-                  "org.rkms.connect"
+                  "ERROR: org.rkms.connect missing from "
+                  "google-services.json"
               )
 
-          print(
-              "google-services.json package "
-              "org.rkms.connect: PASS"
-          )
+          print("Firebase package: org.rkms.connect")
+          print("Firebase configuration: PASS")
           PY
 
           if grep -Rqs \
@@ -597,11 +570,9 @@ jobs:
 
           fi
 
-          echo "Firebase configuration: PASS"
-
 
       # ============================================================
-      # 18. VERIFY LAUNCHER ICONS
+      # 18. LAUNCHER ICONS
       # ============================================================
       - name: Verify RKMS launcher icons
         shell: bash
@@ -617,19 +588,15 @@ jobs:
               if [ -f \
                 "android_launcher_icons/mipmap-$density/ic_launcher.png"
               ]; then
-
                 test -s \
                   "android/app/src/main/res/mipmap-$density/ic_launcher.png"
-
               fi
 
               if [ -f \
                 "android_launcher_icons/mipmap-$density/ic_launcher_round.png"
               ]; then
-
                 test -s \
                   "android/app/src/main/res/mipmap-$density/ic_launcher_round.png"
-
               fi
 
             done
@@ -638,17 +605,14 @@ jobs:
 
           else
 
-            echo "Launcher source directory not found."
-            echo "Continuing with generated Capacitor resources."
+            echo "Launcher source directory not present."
+            echo "Using generated Android resources."
 
           fi
 
 
       # ============================================================
       # 19. RELEASE SIGNING
-      #
-      # Preserve audited source behavior:
-      # if secrets are absent, release build remains unsigned.
       # ============================================================
       - name: Configure release signing
         shell: bash
@@ -673,8 +637,8 @@ jobs:
 
           else
 
-            echo "Release signing secrets not supplied."
-            echo "Release APK/AAB will be unsigned."
+            echo "Release signing secrets not configured."
+            echo "Release build will remain unsigned."
 
           fi
 
@@ -701,11 +665,9 @@ jobs:
 
 
       # ============================================================
-      # 21. FIREBASE COMPILE PRECHECK
-      #
-      # This catches the exact previous error before full build.
+      # 21. VERIFY FIREBASE COMPILE CLASSPATH
       # ============================================================
-      - name: Verify Firebase Java dependency before build
+      - name: Verify Firebase compile dependency
         shell: bash
         run: |
           set -euo pipefail
@@ -722,7 +684,7 @@ jobs:
             "com.google.firebase:firebase-messaging" \
             ../firebase-dependency-check.txt
 
-          echo "Firebase Java dependency compile classpath: PASS"
+          echo "Firebase compile dependency: PASS"
 
 
       # ============================================================
@@ -747,6 +709,12 @@ jobs:
 
       # ============================================================
       # 23. BUILD RELEASE APK + AAB
+      #
+      # IMPORTANT:
+      # NO "clean" HERE.
+      #
+      # Debug APK was already created and must remain available
+      # for the final artifact step.
       # ============================================================
       - name: Build release APK and AAB
         shell: bash
@@ -755,7 +723,7 @@ jobs:
 
           cd rkms-source/android
 
-          ./gradlew clean \
+          ./gradlew \
             assembleRelease \
             bundleRelease \
             --no-daemon \
@@ -772,9 +740,33 @@ jobs:
 
 
       # ============================================================
-      # 24. VERIFY PACKAGE ID
+      # 24. VERIFY DEBUG APK STILL EXISTS
       # ============================================================
-      - name: Verify final APK package ID
+      - name: Verify all build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd rkms-source
+
+          test -s \
+            android/app/build/outputs/apk/debug/app-debug.apk
+
+          test -s \
+            android/app/build/outputs/apk/release/app-release.apk
+
+          test -s \
+            android/app/build/outputs/bundle/release/app-release.aab
+
+          echo "Debug APK exists: PASS"
+          echo "Release APK exists: PASS"
+          echo "Release AAB exists: PASS"
+
+
+      # ============================================================
+      # 25. VERIFY PACKAGE ID
+      # ============================================================
+      - name: Verify release APK package ID
         shell: bash
         run: |
           set -euo pipefail
@@ -791,7 +783,7 @@ jobs:
 
 
       # ============================================================
-      # 25. VERIFY SIGNATURE IF SIGNED
+      # 26. VERIFY SIGNATURE IF SIGNED
       # ============================================================
       - name: Verify release signatures
         shell: bash
@@ -818,14 +810,14 @@ jobs:
 
           else
 
-            echo "Unsigned release detected."
+            echo "Unsigned release."
             echo "Signature verification skipped."
 
           fi
 
 
       # ============================================================
-      # 26. PREPARE ARTIFACTS
+      # 27. PREPARE FINAL ARTIFACTS
       # ============================================================
       - name: Prepare final RKMS artifacts
         shell: bash
@@ -836,6 +828,21 @@ jobs:
 
           mkdir -p release
 
+          # --------------------------------------------------------
+          # Verify BEFORE copying.
+          # --------------------------------------------------------
+          test -s \
+            android/app/build/outputs/apk/debug/app-debug.apk
+
+          test -s \
+            android/app/build/outputs/apk/release/app-release.apk
+
+          test -s \
+            android/app/build/outputs/bundle/release/app-release.aab
+
+          # --------------------------------------------------------
+          # Copy APK + AAB.
+          # --------------------------------------------------------
           cp \
             android/app/build/outputs/apk/debug/app-debug.apk \
             release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk
@@ -848,6 +855,9 @@ jobs:
             android/app/build/outputs/bundle/release/app-release.aab \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
 
+          # --------------------------------------------------------
+          # Verify copied files.
+          # --------------------------------------------------------
           test -s \
             release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk
 
@@ -857,6 +867,9 @@ jobs:
           test -s \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
 
+          # --------------------------------------------------------
+          # SHA256.
+          # --------------------------------------------------------
           sha256sum \
             release/RKMS_CONNECT_ANDROID16_API36_DEBUG.apk \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk \
@@ -864,9 +877,12 @@ jobs:
             | tee \
             release/RKMS_ANDROID16_API36_SHA256.txt
 
+          echo
+          echo "Final artifacts: PASS"
+
 
       # ============================================================
-      # 27. FINAL VERIFICATION
+      # 28. FINAL VERIFICATION
       # ============================================================
       - name: Final RKMS verification
         shell: bash
@@ -884,9 +900,12 @@ jobs:
           test -s \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.aab
 
+          test -s \
+            release/RKMS_ANDROID16_API36_SHA256.txt
+
           echo
           echo "================================================"
-          echo " RKMS CONNECT FINAL BUILD READY"
+          echo "        RKMS CONNECT FINAL BUILD READY"
           echo "================================================"
           echo
           echo "App ID      : org.rkms.connect"
@@ -900,6 +919,7 @@ jobs:
           echo "DEBUG APK   : READY"
           echo "RELEASE APK : READY"
           echo "RELEASE AAB : READY"
+          echo "SHA256      : READY"
           echo
           echo "================================================"
 
@@ -907,7 +927,7 @@ jobs:
 
 
       # ============================================================
-      # 28. UPLOAD FINAL ARTIFACTS
+      # 29. UPLOAD FINAL FILES
       # ============================================================
       - name: Upload final APK and AAB
         uses: actions/upload-artifact@v4
