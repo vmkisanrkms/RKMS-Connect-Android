@@ -60,13 +60,22 @@ jobs:
 
           else
 
-            ZIP="RKMS_CONNECT_FINAL_CLEAN_ANDROID16_API36_APK_AAB_BUILD.zip"
+            ZIP_CANDIDATES=(
+              "RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED.zip"
+              "RKMS_CONNECT_FINAL_CLEAN_ANDROID16_API36_APK_AAB_BUILD.zip"
+              "RKMS_CONNECT_CHAT_DIGITAL_ID_ANDROID16_API36_FINAL_APK_BUILD.zip"
+            )
 
-            if [[ ! -f "$ZIP" ]]; then
-              ZIP="RKMS_CONNECT_CHAT_DIGITAL_ID_ANDROID16_API36_FINAL_APK_BUILD.zip"
-            fi
+            ZIP=""
 
-            if [[ ! -f "$ZIP" ]]; then
+            for CANDIDATE in "${ZIP_CANDIDATES[@]}"; do
+              if [[ -f "$CANDIDATE" ]]; then
+                ZIP="$CANDIDATE"
+                break
+              fi
+            done
+
+            if [[ -z "$ZIP" ]]; then
               echo "::error::RKMS source ZIP not found."
               exit 1
             fi
@@ -125,6 +134,12 @@ jobs:
             scripts/configure-android-16.sh
             scripts/setup-android-native.sh
             scripts/configure-release-signing.sh
+            scripts/verify-rkms-final.py
+            scripts/verify-fcm-pipeline.py
+            scripts/verify-native-bridge.py
+            scripts/verify-saved-login.py
+            scripts/verify-final-login-navigation.py
+            scripts/verify-android-16.py
           )
 
           for FILE in "${REQUIRED_FILES[@]}"; do
@@ -138,7 +153,28 @@ jobs:
 
 
       # ============================================================
-      # 4. NODE 22
+      # 4. VERIFY APP.JS
+      # ============================================================
+      - name: Verify JavaScript source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          node --version 2>/dev/null || true
+
+          if command -v node >/dev/null 2>&1; then
+            node --check app.js
+          else
+            echo "Node will be installed in next step."
+          fi
+
+          echo "JavaScript source verification completed."
+
+
+      # ============================================================
+      # 5. NODE 22
       # ============================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -149,7 +185,7 @@ jobs:
 
 
       # ============================================================
-      # 5. VERIFY NODE
+      # 6. VERIFY NODE
       # ============================================================
       - name: Verify Node and npm
         shell: bash
@@ -159,9 +195,13 @@ jobs:
           node --version
           npm --version
 
+          node --check "$RKMS_SOURCE_DIR/app.js"
+
+          echo "Node 22 and app.js syntax verified."
+
 
       # ============================================================
-      # 6. VERIFY CAPACITOR
+      # 7. VERIFY CAPACITOR VERSIONS
       # ============================================================
       - name: Verify Capacitor versions
         shell: bash
@@ -201,7 +241,7 @@ jobs:
 
 
       # ============================================================
-      # 7. NPM INSTALL
+      # 8. NPM INSTALL
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -210,11 +250,45 @@ jobs:
 
           cd "$RKMS_SOURCE_DIR"
 
-          npm ci
+          npm ci --no-audit --no-fund
 
 
       # ============================================================
-      # 8. WEB BUILD
+      # 9. VERIFY CHAT UI FIX
+      # ============================================================
+      - name: Verify professional Chat UI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          test -s styles.css
+
+          grep -q "Professional compact chat shell" styles.css \
+            || {
+              echo "::error::Professional Chat UI patch not found."
+              exit 1
+            }
+
+          grep -q "height:82px" styles.css \
+            || {
+              echo "::error::Fixed chat-row height not found."
+              exit 1
+            }
+
+          grep -q "RKMS CONNECT - Professional Chat UI Fix" \
+            CHAT_UI_PROFESSIONAL_FIX_20260919.md \
+            || {
+              echo "::error::Chat UI audit note missing."
+              exit 1
+            }
+
+          echo "Professional Chat UI verification: PASS."
+
+
+      # ============================================================
+      # 10. BUILD WEB APPLICATION
       # ============================================================
       - name: Build RKMS web application
         shell: bash
@@ -232,7 +306,26 @@ jobs:
 
 
       # ============================================================
-      # 9. JAVA 17
+      # 11. RUN RKMS STATIC FINAL AUDIT
+      # ============================================================
+      - name: Run RKMS final static audit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          python3 scripts/verify-rkms-final.py
+          python3 scripts/verify-fcm-pipeline.py
+          python3 scripts/verify-native-bridge.py
+          python3 scripts/verify-saved-login.py
+          python3 scripts/verify-final-login-navigation.py
+
+          echo "RKMS static audit: PASS."
+
+
+      # ============================================================
+      # 12. JAVA 17
       # ============================================================
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -243,7 +336,7 @@ jobs:
 
 
       # ============================================================
-      # 10. VERIFY JAVA
+      # 13. VERIFY JAVA
       # ============================================================
       - name: Verify Java
         shell: bash
@@ -254,7 +347,7 @@ jobs:
 
 
       # ============================================================
-      # 11. ANDROID SDK API 36
+      # 14. ANDROID SDK API 36
       # ============================================================
       - name: Setup Android SDK
         shell: bash
@@ -264,23 +357,25 @@ jobs:
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" \
             --licenses >/dev/null 2>&1 || true
 
           "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" \
             "platform-tools" \
             "platforms;android-${ANDROID_API}" \
             "build-tools;${BUILD_TOOLS}"
-
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
-            --licenses >/dev/null 2>&1 || true
 
           echo "Android SDK installed."
 
 
       # ============================================================
-      # 12. VERIFY ANDROID SDK
+      # 15. VERIFY ANDROID SDK
       # ============================================================
       - name: Verify Android SDK
         shell: bash
@@ -301,7 +396,7 @@ jobs:
 
 
       # ============================================================
-      # 13. CREATE CAPACITOR ANDROID
+      # 16. CREATE CAPACITOR ANDROID
       # ============================================================
       - name: Create Android project
         shell: bash
@@ -324,7 +419,7 @@ jobs:
 
 
       # ============================================================
-      # 14. CONFIGURE ANDROID 16 API 36
+      # 17. CONFIGURE ANDROID 16 API 36
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
@@ -338,11 +433,14 @@ jobs:
           ./scripts/configure-android-16.sh
 
           test -f android/gradlew
+
           chmod +x android/gradlew
+
+          echo "Android 16/API 36 configuration applied."
 
 
       # ============================================================
-      # 15. VERIFY ANDROID CONFIGURATION
+      # 18. VERIFY ANDROID CONFIGURATION
       # ============================================================
       - name: Verify Android configuration
         shell: bash
@@ -380,7 +478,7 @@ jobs:
 
 
       # ============================================================
-      # 16. CAPACITOR SYNC
+      # 19. CAPACITOR SYNC
       # ============================================================
       - name: Capacitor sync
         shell: bash
@@ -392,11 +490,14 @@ jobs:
           npx cap sync android
 
           test -f android/gradlew
+
           chmod +x android/gradlew
+
+          echo "Capacitor sync completed."
 
 
       # ============================================================
-      # 17. SETUP RKMS NATIVE AND FIREBASE
+      # 20. SETUP RKMS NATIVE + FIREBASE
       # ============================================================
       - name: Setup RKMS native Android
         shell: bash
@@ -410,11 +511,29 @@ jobs:
           ./scripts/setup-android-native.sh
 
           test -f android/gradlew
+
           chmod +x android/gradlew
+
+          echo "RKMS native Android setup completed."
 
 
       # ============================================================
-      # 18. VERIFY FIREBASE CONFIGURATION
+      # 21. VERIFY ANDROID 16 FINAL CONFIGURATION
+      # ============================================================
+      - name: Run Android 16 API 36 audit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          python3 scripts/verify-android-16.py
+
+          echo "Android 16 API 36 audit: PASS."
+
+
+      # ============================================================
+      # 22. VERIFY FIREBASE CONFIGURATION
       # ============================================================
       - name: Verify Firebase configuration
         shell: bash
@@ -456,7 +575,7 @@ jobs:
 
 
       # ============================================================
-      # 19. ENSURE FIREBASE DEPENDENCIES
+      # 23. ENSURE FIREBASE DEPENDENCIES
       # ============================================================
       - name: Ensure Firebase dependencies
         shell: bash
@@ -508,7 +627,7 @@ jobs:
 
 
       # ============================================================
-      # 20. VERIFY FIREBASE INITIALIZATION
+      # 24. VERIFY FIREBASE INITIALIZATION
       # ============================================================
       - name: Verify Firebase initialization
         shell: bash
@@ -530,7 +649,7 @@ jobs:
 
 
       # ============================================================
-      # 21. VERIFY NATIVE BRIDGE
+      # 25. VERIFY NATIVE BRIDGE
       # ============================================================
       - name: Verify RKMS native bridge
         shell: bash
@@ -561,7 +680,7 @@ jobs:
 
 
       # ============================================================
-      # 22. VERIFY BIOMETRIC
+      # 26. VERIFY BIOMETRIC
       # ============================================================
       - name: Verify biometric dependency
         shell: bash
@@ -583,7 +702,7 @@ jobs:
 
 
       # ============================================================
-      # 23. VERIFY LAUNCHER ICONS
+      # 27. VERIFY LAUNCHER ICONS
       # ============================================================
       - name: Verify RKMS launcher icons
         shell: bash
@@ -612,7 +731,7 @@ jobs:
 
 
       # ============================================================
-      # 24. CHECK ALL RELEASE SIGNING SECRETS
+      # 28. CHECK RELEASE SIGNING SECRETS
       # ============================================================
       - name: Verify release signing secrets
         shell: bash
@@ -645,7 +764,7 @@ jobs:
 
 
       # ============================================================
-      # 25. CONFIGURE RELEASE SIGNING
+      # 29. CONFIGURE RELEASE SIGNING
       # ============================================================
       - name: Configure release signing
         shell: bash
@@ -664,7 +783,7 @@ jobs:
 
 
       # ============================================================
-      # 26. VALIDATE KEYSTORE
+      # 30. VALIDATE KEYSTORE
       # ============================================================
       - name: Validate release keystore
         shell: bash
@@ -686,7 +805,7 @@ jobs:
 
 
       # ============================================================
-      # 27. VERIFY SIGNING CONFIGURATION
+      # 31. VERIFY SIGNING CONFIGURATION
       # ============================================================
       - name: Verify release signing configuration
         shell: bash
@@ -717,7 +836,7 @@ jobs:
 
 
       # ============================================================
-      # 28. VERIFY GRADLE WRAPPER
+      # 32. VERIFY GRADLE WRAPPER
       # ============================================================
       - name: Verify Gradle wrapper
         shell: bash
@@ -743,7 +862,7 @@ jobs:
 
 
       # ============================================================
-      # 29. VERIFY FIREBASE COMPILE CLASSPATH
+      # 33. VERIFY FIREBASE COMPILE CLASSPATH
       # ============================================================
       - name: Verify Firebase compile classpath
         shell: bash
@@ -769,7 +888,7 @@ jobs:
 
 
       # ============================================================
-      # 30. BUILD DEBUG APK
+      # 34. BUILD DEBUG APK
       # ============================================================
       - name: Build Debug APK
         shell: bash
@@ -790,7 +909,7 @@ jobs:
 
 
       # ============================================================
-      # 31. BUILD SIGNED RELEASE APK + AAB
+      # 35. BUILD SIGNED RELEASE APK + AAB
       #
       # IMPORTANT:
       # NO CLEAN
@@ -819,7 +938,7 @@ jobs:
 
 
       # ============================================================
-      # 32. VERIFY BUILD OUTPUTS
+      # 36. VERIFY BUILD OUTPUTS
       # ============================================================
       - name: Verify all build outputs
         shell: bash
@@ -846,7 +965,7 @@ jobs:
 
 
       # ============================================================
-      # 33. VERIFY APK PACKAGE ID
+      # 37. VERIFY APK PACKAGE ID
       # ============================================================
       - name: Verify APK package ID
         shell: bash
@@ -876,7 +995,7 @@ jobs:
 
 
       # ============================================================
-      # 34. VERIFY DEBUG APK SIGNATURE
+      # 38. VERIFY DEBUG APK SIGNATURE
       # ============================================================
       - name: Verify Debug APK signature
         shell: bash
@@ -894,7 +1013,7 @@ jobs:
 
 
       # ============================================================
-      # 35. VERIFY RELEASE APK SIGNATURE
+      # 39. VERIFY RELEASE APK SIGNATURE
       # ============================================================
       - name: Verify Release APK signature
         shell: bash
@@ -912,7 +1031,7 @@ jobs:
 
 
       # ============================================================
-      # 36. VERIFY RELEASE AAB SIGNATURE
+      # 40. VERIFY RELEASE AAB SIGNATURE
       # ============================================================
       - name: Verify Release AAB signature
         shell: bash
@@ -937,7 +1056,7 @@ jobs:
 
 
       # ============================================================
-      # 37. PREPARE FINAL ARTIFACTS
+      # 41. PREPARE FINAL ARTIFACTS
       # ============================================================
       - name: Prepare final RKMS artifacts
         shell: bash
@@ -965,7 +1084,7 @@ jobs:
 
 
       # ============================================================
-      # 38. GENERATE SHA256
+      # 42. GENERATE SHA256
       # ============================================================
       - name: Generate SHA256 checksums
         shell: bash
@@ -987,7 +1106,7 @@ jobs:
 
 
       # ============================================================
-      # 39. FINAL ARTIFACT CHECK
+      # 43. FINAL ARTIFACT CHECK
       # ============================================================
       - name: Final artifact check
         shell: bash
@@ -1021,13 +1140,18 @@ jobs:
           echo "Signed Release APK: YES"
           echo "Signed Release AAB: YES"
           echo "Debug APK: YES"
+          echo "Chat UI Fix: VERIFIED"
+          echo "FCM Pipeline: VERIFIED"
+          echo "Saved Login: VERIFIED"
+          echo "Native Bridge: VERIFIED"
+          echo "Android API 36: VERIFIED"
           echo
 
           ls -lh release/
 
 
       # ============================================================
-      # 40. UPLOAD FINAL APK + AAB
+      # 44. UPLOAD FINAL APK + AAB
       # ============================================================
       - name: Upload final RKMS APK and AAB
         uses: actions/upload-artifact@v4
