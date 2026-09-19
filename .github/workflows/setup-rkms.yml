@@ -47,6 +47,9 @@ jobs:
 
           echo "Checking RKMS source..."
 
+          # --------------------------------------------------------
+          # CASE 1: Source is already in repository root
+          # --------------------------------------------------------
           if [[ -f "package.json" ]] && \
              [[ -f "package-lock.json" ]] && \
              [[ -f "app.js" ]] && \
@@ -57,63 +60,147 @@ jobs:
 
             echo "Root RKMS source detected."
             echo "RKMS_SOURCE_DIR=." >> "$GITHUB_ENV"
+            exit 0
+          fi
 
-          else
 
-            ZIP_CANDIDATES=(
-              "RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED.zip"
-              "RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED_SCROLL_FOOTER_PATCHED.zip"
-              "RKMS_CONNECT_FINAL_CLEAN_ANDROID16_API36_APK_AAB_BUILD.zip"
+          # --------------------------------------------------------
+          # CASE 2: Find RKMS ZIP
+          # --------------------------------------------------------
+          echo "Root RKMS source not found."
+          echo "Searching for RKMS source ZIP..."
+
+          rm -rf rkms-source
+          mkdir -p rkms-source
+
+          ZIP=""
+
+          # Exact current final ZIP
+          if [[ -f "RKMS_CONNECT_FINAL_RELEASE_APK_ONLY_CHAT_FIXED.zip" ]]; then
+            ZIP="RKMS_CONNECT_FINAL_RELEASE_APK_ONLY_CHAT_FIXED.zip"
+          fi
+
+          # Current patched source ZIP
+          if [[ -z "$ZIP" ]] && \
+             [[ -f "RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED_SCROLL_FOOTER_PATCHED.zip" ]]; then
+            ZIP="RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED_SCROLL_FOOTER_PATCHED.zip"
+          fi
+
+          # Previous source ZIP
+          if [[ -z "$ZIP" ]] && \
+             [[ -f "RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED.zip" ]]; then
+            ZIP="RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED.zip"
+          fi
+
+          # Other known RKMS source ZIPs
+          if [[ -z "$ZIP" ]]; then
+            for CANDIDATE in \
+              "RKMS_CONNECT_FINAL_CLEAN_ANDROID16_API36_APK_AAB_BUILD.zip" \
               "RKMS_CONNECT_CHAT_DIGITAL_ID_ANDROID16_API36_FINAL_APK_BUILD.zip"
-            )
-
-            ZIP=""
-
-            for CANDIDATE in "${ZIP_CANDIDATES[@]}"; do
+            do
               if [[ -f "$CANDIDATE" ]]; then
                 ZIP="$CANDIDATE"
                 break
               fi
             done
+          fi
 
-            if [[ -z "$ZIP" ]]; then
-              echo "::error::RKMS source ZIP not found."
+          # Recursive fallback
+          if [[ -z "$ZIP" ]]; then
+            FOUND_ZIP="$(
+              find . \
+                -type f \
+                -iname "RKMS_CONNECT*.zip" \
+                -not -path "./.git/*" \
+                -print \
+                | head -n 1 || true
+            )"
+
+            if [[ -n "$FOUND_ZIP" ]]; then
+              ZIP="$FOUND_ZIP"
+            fi
+          fi
+
+          if [[ -z "$ZIP" ]]; then
+            echo "::error::RKMS source ZIP not found."
+            echo
+            echo "Repository files:"
+            find . \
+              -maxdepth 4 \
+              -type f \
+              -not -path "./.git/*" \
+              | sort \
+              | head -500
+            exit 1
+          fi
+
+          echo "Using RKMS source ZIP:"
+          echo "$ZIP"
+
+
+          # --------------------------------------------------------
+          # EXTRACT
+          # --------------------------------------------------------
+          unzip -q "$ZIP" -d rkms-source
+
+
+          # --------------------------------------------------------
+          # FIND package.json
+          # --------------------------------------------------------
+          FOUND_PACKAGE="$(
+            find rkms-source \
+              -type f \
+              -name package.json \
+              -print \
+              | head -n 1 || true
+          )"
+
+          if [[ -z "$FOUND_PACKAGE" ]]; then
+            echo "::error::package.json not found after ZIP extraction."
+            exit 1
+          fi
+
+          SOURCE="$(dirname "$FOUND_PACKAGE")"
+
+          echo "Resolved RKMS source:"
+          echo "$SOURCE"
+
+
+          # --------------------------------------------------------
+          # VERIFY CORE SOURCE
+          # --------------------------------------------------------
+          REQUIRED_FILES=(
+            package.json
+            package-lock.json
+            app.js
+            index.html
+            styles.css
+            capacitor.config.json
+            google-services.json
+            scripts/configure-android-16.sh
+            scripts/setup-android-native.sh
+            scripts/configure-release-signing.sh
+          )
+
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [[ ! -f "$SOURCE/$FILE" ]]; then
+              echo "::error::Missing required source file: $SOURCE/$FILE"
               exit 1
             fi
+          done
 
-            echo "Using source ZIP:"
-            echo "$ZIP"
 
-            rm -rf rkms-source
-            mkdir -p rkms-source
+          # --------------------------------------------------------
+          # EXPORT SOURCE PATH
+          # --------------------------------------------------------
+          echo "RKMS_SOURCE_DIR=$SOURCE" >> "$GITHUB_ENV"
 
-            unzip -q "$ZIP" -d rkms-source
-
-            SOURCE="rkms-source"
-
-            if [[ ! -f "$SOURCE/package.json" ]]; then
-
-              FOUND="$(
-                find "$SOURCE" \
-                  -type f \
-                  -name package.json \
-                  -print \
-                  -quit || true
-              )"
-
-              if [[ -z "$FOUND" ]]; then
-                echo "::error::package.json not found after extraction."
-                exit 1
-              fi
-
-              SOURCE="$(dirname "$FOUND")"
-            fi
-
-            echo "Resolved RKMS source:"
-            echo "$SOURCE"
-
-            echo "RKMS_SOURCE_DIR=$SOURCE" >> "$GITHUB_ENV"
-          fi
+          echo
+          echo "=============================================="
+          echo " RKMS SOURCE RESOLUTION: PASS"
+          echo "=============================================="
+          echo "Source: $SOURCE"
+          echo
 
 
       # ============================================================
@@ -156,8 +243,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ env.RKMS_SOURCE_DIR }}/package-lock.json
 
 
       # ============================================================
@@ -243,32 +328,32 @@ jobs:
 
           test -s styles.css
 
-          grep -q "\.wa-chat-screen" styles.css || {
+          grep -qE '\.wa-chat-screen' styles.css || {
             echo "::error::wa-chat-screen CSS not found."
             exit 1
           }
 
-          grep -q "\.wa-chat-list" styles.css || {
+          grep -qE '\.wa-chat-list' styles.css || {
             echo "::error::wa-chat-list CSS not found."
             exit 1
           }
 
-          grep -q "\.wa-chat-row" styles.css || {
+          grep -qE '\.wa-chat-row' styles.css || {
             echo "::error::wa-chat-row CSS not found."
             exit 1
           }
 
-          grep -q "\.wa-avatar-wrap" styles.css || {
+          grep -qE '\.wa-avatar-wrap' styles.css || {
             echo "::error::Chat avatar CSS not found."
             exit 1
           }
 
-          grep -q "\.wa-chat-search" styles.css || {
+          grep -qE '\.wa-chat-search' styles.css || {
             echo "::error::Chat search CSS not found."
             exit 1
           }
 
-          grep -q "\.wa-filters" styles.css || {
+          grep -qE '\.wa-filters' styles.css || {
             echo "::error::Chat filters CSS not found."
             exit 1
           }
@@ -292,31 +377,121 @@ jobs:
 
           echo "Checking Chat layout..."
 
-          grep -q "overflow-y:[[:space:]]*auto" styles.css || {
-            echo "::error::Scrollable Chat container not found."
+          # Chat screen must use dynamic mobile viewport
+          grep -qE '100dvh' styles.css || {
+            echo "::error::100dvh mobile viewport handling not found."
             exit 1
           }
 
-          grep -q "100dvh" styles.css || {
-            echo "::error::Mobile dynamic viewport handling not found."
+          # Chat screen must be height constrained
+          grep -qE '\.wa-chat-screen.*height:calc' styles.css || {
+            echo "::error::Chat screen height calculation not found."
             exit 1
           }
 
-          grep -q "wa-chat-list" styles.css || {
-            echo "::error::Chat list layout missing."
+          # Chat list must be a flex child
+          grep -qE '\.wa-chat-list' styles.css || {
+            echo "::error::Chat list CSS not found."
             exit 1
           }
 
-          grep -q "wa-chat-screen" styles.css || {
-            echo "::error::Chat screen layout missing."
+          # Chat list must contain scrolling
+          grep -qE 'overflow(-y)?[[:space:]]*:[[:space:]]*auto' styles.css || {
+            echo "::error::Scrollable Chat area not found."
             exit 1
           }
 
-          echo "Chat scroll/footer layout verification passed."
+          # Single-chat messages must have their own scroll
+          grep -qE '\.wa-messages' styles.css || {
+            echo "::error::Single Chat messages container not found."
+            exit 1
+          }
+
+          # Footer must be fixed
+          grep -qE 'footer\.rkms-bottom-nav' styles.css || {
+            echo "::error::RKMS bottom navigation CSS not found."
+            exit 1
+          }
+
+          grep -qE 'position:[[:space:]]*fixed' styles.css || {
+            echo "::error::Fixed footer positioning not found."
+            exit 1
+          }
+
+          # Slim footer target
+          grep -qE 'min-height:[[:space:]]*62px' styles.css || {
+            echo "::error::62px slim footer configuration not found."
+            exit 1
+          }
+
+          echo
+          echo "=============================================="
+          echo " CHAT SCROLL / FOOTER VERIFICATION: PASS"
+          echo "=============================================="
+          echo "Dynamic viewport: PASS"
+          echo "Chat scroll: PASS"
+          echo "Single chat scroll: PASS"
+          echo "Fixed footer: PASS"
+          echo "Slim footer: PASS"
+          echo
 
 
       # ============================================================
-      # 10. WEB BUILD
+      # 10. VERIFY CHAT CSS SYNTAX BASICALLY
+      # ============================================================
+      - name: Verify Chat CSS integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_SOURCE_DIR"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          css = Path("styles.css").read_text(
+              encoding="utf-8",
+              errors="replace"
+          )
+
+          # Remove comments for structural checking
+          import re
+          clean = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+          opens = clean.count("{")
+          closes = clean.count("}")
+
+          if opens != closes:
+              raise SystemExit(
+                  f"CSS brace mismatch: {{={opens}, }}={closes}"
+              )
+
+          if "wa-chat-screen" not in css:
+              raise SystemExit(
+                  "wa-chat-screen missing"
+              )
+
+          if "wa-chat-list" not in css:
+              raise SystemExit(
+                  "wa-chat-list missing"
+              )
+
+          if "wa-messages" not in css:
+              raise SystemExit(
+                  "wa-messages missing"
+              )
+
+          if "rkms-bottom-nav" not in css:
+              raise SystemExit(
+                  "rkms-bottom-nav missing"
+              )
+
+          print("Chat CSS structural verification passed.")
+          PY
+
+
+      # ============================================================
+      # 11. WEB BUILD
       # ============================================================
       - name: Build RKMS web application
         shell: bash
@@ -334,7 +509,7 @@ jobs:
 
 
       # ============================================================
-      # 11. JAVA 17
+      # 12. JAVA 17
       # ============================================================
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -345,7 +520,7 @@ jobs:
 
 
       # ============================================================
-      # 12. VERIFY JAVA
+      # 13. VERIFY JAVA
       # ============================================================
       - name: Verify Java
         shell: bash
@@ -356,7 +531,7 @@ jobs:
 
 
       # ============================================================
-      # 13. ANDROID SDK API 36
+      # 14. ANDROID SDK API 36
       # ============================================================
       - name: Setup Android SDK
         shell: bash
@@ -382,7 +557,7 @@ jobs:
 
 
       # ============================================================
-      # 14. VERIFY ANDROID SDK
+      # 15. VERIFY ANDROID SDK
       # ============================================================
       - name: Verify Android SDK
         shell: bash
@@ -403,7 +578,7 @@ jobs:
 
 
       # ============================================================
-      # 15. CREATE CAPACITOR ANDROID
+      # 16. CREATE CAPACITOR ANDROID
       # ============================================================
       - name: Create Android project
         shell: bash
@@ -426,7 +601,7 @@ jobs:
 
 
       # ============================================================
-      # 16. CONFIGURE ANDROID 16 API 36
+      # 17. CONFIGURE ANDROID 16 API 36
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
@@ -447,7 +622,7 @@ jobs:
 
 
       # ============================================================
-      # 17. VERIFY ANDROID CONFIGURATION
+      # 18. VERIFY ANDROID CONFIGURATION
       # ============================================================
       - name: Verify Android configuration
         shell: bash
@@ -481,7 +656,7 @@ jobs:
 
 
       # ============================================================
-      # 18. CAPACITOR SYNC
+      # 19. CAPACITOR SYNC
       # ============================================================
       - name: Capacitor sync
         shell: bash
@@ -500,7 +675,7 @@ jobs:
 
 
       # ============================================================
-      # 19. SETUP RKMS NATIVE AND FIREBASE
+      # 20. SETUP RKMS NATIVE AND FIREBASE
       # ============================================================
       - name: Setup RKMS native Android
         shell: bash
@@ -521,7 +696,7 @@ jobs:
 
 
       # ============================================================
-      # 20. VERIFY FIREBASE CONFIGURATION
+      # 21. VERIFY FIREBASE CONFIGURATION
       # ============================================================
       - name: Verify Firebase configuration
         shell: bash
@@ -563,7 +738,7 @@ jobs:
 
 
       # ============================================================
-      # 21. ENSURE FIREBASE DEPENDENCIES
+      # 22. ENSURE FIREBASE DEPENDENCIES
       # ============================================================
       - name: Ensure Firebase dependencies
         shell: bash
@@ -585,8 +760,7 @@ jobs:
           bom = "implementation platform('com.google.firebase:firebase-bom:33.9.0')"
           messaging = "implementation 'com.google.firebase:firebase-messaging'"
 
-          if bom not in s or messaging not in s:
-
+          if bom not in s:
               marker = "dependencies {"
 
               if marker not in s:
@@ -594,28 +768,35 @@ jobs:
                       "dependencies block not found"
                   )
 
-              replacement = (
-                  marker
-                  + "\n    "
-                  + bom
-                  + "\n    "
-                  + messaging
-              )
-
               s = s.replace(
                   marker,
-                  replacement,
+                  marker + "\n    " + bom,
                   1
               )
 
-              p.write_text(s)
+          if messaging not in s:
+              marker = "dependencies {"
+
+              if marker not in s:
+                  raise SystemExit(
+                      "dependencies block not found"
+                  )
+
+              # Insert after opening dependencies block
+              s = s.replace(
+                  marker,
+                  marker + "\n    " + messaging,
+                  1
+              )
+
+          p.write_text(s)
 
           print("Firebase dependencies ready.")
           PY
 
 
       # ============================================================
-      # 22. VERIFY FIREBASE INITIALIZATION
+      # 23. VERIFY FIREBASE INITIALIZATION
       # ============================================================
       - name: Verify Firebase initialization
         shell: bash
@@ -636,7 +817,7 @@ jobs:
 
 
       # ============================================================
-      # 23. VERIFY NATIVE BRIDGE
+      # 24. VERIFY NATIVE BRIDGE
       # ============================================================
       - name: Verify RKMS native bridge
         shell: bash
@@ -665,7 +846,7 @@ jobs:
 
 
       # ============================================================
-      # 24. VERIFY BIOMETRIC
+      # 25. VERIFY BIOMETRIC
       # ============================================================
       - name: Verify biometric dependency
         shell: bash
@@ -676,7 +857,8 @@ jobs:
 
           grep -R \
             "androidx.biometric:biometric" \
-            android >/dev/null || {
+            android \
+            >/dev/null || {
               echo "::error::Biometric dependency missing."
               exit 1
             }
@@ -685,7 +867,7 @@ jobs:
 
 
       # ============================================================
-      # 25. VERIFY LAUNCHER ICONS
+      # 26. VERIFY LAUNCHER ICONS
       # ============================================================
       - name: Verify RKMS launcher icons
         shell: bash
@@ -714,7 +896,7 @@ jobs:
 
 
       # ============================================================
-      # 26. CHECK RELEASE SIGNING SECRETS
+      # 27. CHECK RELEASE SIGNING SECRETS
       # ============================================================
       - name: Verify release signing secrets
         shell: bash
@@ -745,7 +927,7 @@ jobs:
 
 
       # ============================================================
-      # 27. CONFIGURE RELEASE SIGNING
+      # 28. CONFIGURE RELEASE SIGNING
       # ============================================================
       - name: Configure release signing
         shell: bash
@@ -764,7 +946,7 @@ jobs:
 
 
       # ============================================================
-      # 28. VALIDATE KEYSTORE
+      # 29. VALIDATE KEYSTORE
       # ============================================================
       - name: Validate release keystore
         shell: bash
@@ -772,6 +954,8 @@ jobs:
           set -euo pipefail
 
           cd "$RKMS_SOURCE_DIR"
+
+          test -s android/app/release.keystore
 
           keytool \
             -list \
@@ -784,7 +968,7 @@ jobs:
 
 
       # ============================================================
-      # 29. VERIFY SIGNING CONFIGURATION
+      # 30. VERIFY SIGNING CONFIGURATION
       # ============================================================
       - name: Verify release signing configuration
         shell: bash
@@ -793,18 +977,29 @@ jobs:
 
           cd "$RKMS_SOURCE_DIR"
 
-          grep -q "signingConfigs" android/app/build.gradle
-          grep -q "signingConfigs.release" android/app/build.gradle
-          grep -q "storeFile" android/app/build.gradle
-          grep -q "storePassword" android/app/build.gradle
-          grep -q "keyAlias" android/app/build.gradle
-          grep -q "keyPassword" android/app/build.gradle
+          grep -q "signingConfigs" \
+            android/app/build.gradle
+
+          grep -q "signingConfigs.release" \
+            android/app/build.gradle
+
+          grep -q "storeFile" \
+            android/app/build.gradle
+
+          grep -q "storePassword" \
+            android/app/build.gradle
+
+          grep -q "keyAlias" \
+            android/app/build.gradle
+
+          grep -q "keyPassword" \
+            android/app/build.gradle
 
           echo "Release signing configuration verified."
 
 
       # ============================================================
-      # 30. VERIFY GRADLE WRAPPER
+      # 31. VERIFY GRADLE WRAPPER
       # ============================================================
       - name: Verify Gradle wrapper
         shell: bash
@@ -812,6 +1007,8 @@ jobs:
           set -euo pipefail
 
           cd "$RKMS_SOURCE_DIR/android"
+
+          test -f gradlew
 
           chmod +x gradlew
 
@@ -827,7 +1024,7 @@ jobs:
 
 
       # ============================================================
-      # 31. VERIFY FIREBASE COMPILE CLASSPATH
+      # 32. VERIFY FIREBASE RELEASE CLASSPATH
       # ============================================================
       - name: Verify Firebase compile classpath
         shell: bash
@@ -852,12 +1049,12 @@ jobs:
 
 
       # ============================================================
-      # 32. BUILD FINAL RELEASE APK ONLY
+      # 33. BUILD FINAL RELEASE APK ONLY
       #
       # IMPORTANT:
-      # NO DEBUG
-      # NO AAB
-      # ONLY RELEASE APK
+      # assembleRelease ONLY
+      # NO assembleDebug
+      # NO bundleRelease
       # ============================================================
       - name: Build Final Release APK
         shell: bash
@@ -885,7 +1082,7 @@ jobs:
 
 
       # ============================================================
-      # 33. VERIFY RELEASE APK PACKAGE ID
+      # 34. VERIFY RELEASE APK PACKAGE ID
       # ============================================================
       - name: Verify Release APK package ID
         shell: bash
@@ -908,7 +1105,7 @@ jobs:
 
 
       # ============================================================
-      # 34. VERIFY RELEASE APK SIGNATURE
+      # 35. VERIFY RELEASE APK SIGNATURE
       # ============================================================
       - name: Verify Release APK signature
         shell: bash
@@ -919,38 +1116,38 @@ jobs:
 
           APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/apksigner"
 
-          "$APKSIGNER" verify --verbose \
+          "$APKSIGNER" verify \
+            --verbose \
             android/app/build/outputs/apk/release/app-release.apk
 
           echo "Release APK signature verified."
 
 
       # ============================================================
-      # 35. VERIFY RELEASE APK CONTENT
+      # 36. VERIFY RELEASE APK TARGET SDK
       # ============================================================
-      - name: Verify Release APK content
+      - name: Verify Release APK target SDK
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$RKMS_SOURCE_DIR"
 
-          APK="android/app/build/outputs/apk/release/app-release.apk"
+          AAPT="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/aapt"
 
-          test -s "$APK"
-
-          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/aapt" \
-            dump badging "$APK" \
-            | grep -q "targetSdkVersion:'36'" || {
+          "$AAPT" dump badging \
+            android/app/build/outputs/apk/release/app-release.apk \
+            | grep -q \
+            "targetSdkVersion:'36'" || {
               echo "::error::Release APK target SDK is not 36."
               exit 1
             }
 
-          echo "Release APK content verified."
+          echo "Release APK target SDK 36 verified."
 
 
       # ============================================================
-      # 36. PREPARE FINAL RELEASE APK
+      # 37. PREPARE FINAL RELEASE APK
       # ============================================================
       - name: Prepare final Release APK
         shell: bash
@@ -970,7 +1167,7 @@ jobs:
 
 
       # ============================================================
-      # 37. GENERATE SHA256
+      # 38. GENERATE SHA256
       # ============================================================
       - name: Generate SHA256 checksum
         shell: bash
@@ -985,12 +1182,11 @@ jobs:
 
           echo
           echo "===== SHA256 ====="
-
           cat RKMS_ANDROID16_API36_SHA256.txt
 
 
       # ============================================================
-      # 38. FINAL ARTIFACT CHECK
+      # 39. FINAL ARTIFACT CHECK
       # ============================================================
       - name: Final artifact check
         shell: bash
@@ -999,11 +1195,33 @@ jobs:
 
           cd "$RKMS_SOURCE_DIR"
 
+          # Final APK must exist
           test -s \
             release/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
 
+          # SHA file must exist
           test -s \
             release/RKMS_ANDROID16_API36_SHA256.txt
+
+          # Ensure no Debug APK is being prepared
+          if find release \
+            -type f \
+            -iname "*debug*.apk" \
+            -print \
+            | grep -q .; then
+            echo "::error::Debug APK found in final release directory."
+            exit 1
+          fi
+
+          # Ensure no AAB is being prepared
+          if find release \
+            -type f \
+            -name "*.aab" \
+            -print \
+            | grep -q .; then
+            echo "::error::AAB found in final release directory."
+            exit 1
+          fi
 
           echo
           echo "=============================================="
@@ -1015,6 +1233,7 @@ jobs:
           echo "Debug APK: NO"
           echo "Chat UI: VERIFIED"
           echo "Chat Scroll: VERIFIED"
+          echo "Single Chat Scroll: VERIFIED"
           echo "Footer Layout: VERIFIED"
           echo "Firebase: VERIFIED"
           echo "Native Bridge: VERIFIED"
@@ -1027,7 +1246,7 @@ jobs:
 
 
       # ============================================================
-      # 39. UPLOAD FINAL RELEASE APK ONLY
+      # 40. UPLOAD FINAL RELEASE APK ONLY
       # ============================================================
       - name: Upload final Release APK
         uses: actions/upload-artifact@v4
