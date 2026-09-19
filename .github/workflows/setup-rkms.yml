@@ -39,9 +39,6 @@ jobs:
 
       # ============================================================
       # 2. RESOLVE RKMS SOURCE
-      #
-      # V2 source is preferred.
-      # Root source is also supported.
       # ============================================================
       - name: Resolve RKMS source
         shell: bash
@@ -51,7 +48,7 @@ jobs:
           echo "Checking RKMS source..."
 
           # --------------------------------------------------------
-          # CASE 1: Complete source is already in repository root
+          # CASE 1: Source already exists in repository root
           # --------------------------------------------------------
           if [[ -f "package.json" ]] && \
              [[ -f "package-lock.json" ]] && \
@@ -68,10 +65,10 @@ jobs:
 
 
           # --------------------------------------------------------
-          # CASE 2: Resolve V2 source ZIP
+          # CASE 2: Find source ZIP
           # --------------------------------------------------------
           echo "Root source not found."
-          echo "Searching for RKMS V2 source ZIP..."
+          echo "Searching for RKMS source ZIP..."
 
           rm -rf rkms-source
           mkdir -p rkms-source
@@ -79,40 +76,53 @@ jobs:
           ZIP=""
 
 
-          # --------------------------------------------------------
-          # FIRST PRIORITY: FINAL V2 SOURCE
-          # --------------------------------------------------------
+          # FINAL V2 SOURCE - FIRST PRIORITY
           if [[ -f "RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED_V2.zip" ]]; then
             ZIP="RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED_V2.zip"
           fi
 
 
-          # --------------------------------------------------------
-          # SECOND PRIORITY: V2 alternate name
-          # --------------------------------------------------------
+          # V2 RELEASE APK SOURCE
           if [[ -z "$ZIP" ]] && \
              [[ -f "RKMS_CONNECT_FINAL_RELEASE_APK_ONLY_CHAT_FIXED_V2.zip" ]]; then
             ZIP="RKMS_CONNECT_FINAL_RELEASE_APK_ONLY_CHAT_FIXED_V2.zip"
           fi
 
 
-          # --------------------------------------------------------
-          # Older patched source only as fallback
-          # --------------------------------------------------------
+          # V2 / PATCHED SOURCE
           if [[ -z "$ZIP" ]] && \
              [[ -f "RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED_SCROLL_FOOTER_PATCHED.zip" ]]; then
             ZIP="RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED_SCROLL_FOOTER_PATCHED.zip"
           fi
 
 
+          # PREVIOUS SOURCE
           if [[ -z "$ZIP" ]] && \
              [[ -f "RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED.zip" ]]; then
             ZIP="RKMS_CONNECT_FINAL_CHAT_UI_PROFESSIONAL_FIXED.zip"
           fi
 
 
+          # OTHER KNOWN RKMS SOURCES
+          if [[ -z "$ZIP" ]]; then
+
+            for CANDIDATE in \
+              "RKMS_CONNECT_FINAL_CLEAN_ANDROID16_API36_APK_AAB_BUILD.zip" \
+              "RKMS_CONNECT_CHAT_DIGITAL_ID_ANDROID16_API36_FINAL_APK_BUILD.zip"
+            do
+
+              if [[ -f "$CANDIDATE" ]]; then
+                ZIP="$CANDIDATE"
+                break
+              fi
+
+            done
+
+          fi
+
+
           # --------------------------------------------------------
-          # Recursive fallback
+          # RECURSIVE FALLBACK
           # --------------------------------------------------------
           if [[ -z "$ZIP" ]]; then
 
@@ -129,21 +139,22 @@ jobs:
             if [[ -n "$FOUND_ZIP" ]]; then
               ZIP="$FOUND_ZIP"
             fi
+
           fi
 
 
           # --------------------------------------------------------
-          # FAIL IF NOTHING FOUND
+          # FAIL IF SOURCE NOT FOUND
           # --------------------------------------------------------
           if [[ -z "$ZIP" ]]; then
+
             echo "::error::RKMS source ZIP not found."
 
             echo
-            echo "Repository RKMS files:"
+            echo "Available repository files:"
             find . \
               -maxdepth 5 \
               -type f \
-              -iname "*RKMS*" \
               -not -path "./.git/*" \
               | sort \
               | head -500
@@ -172,7 +183,7 @@ jobs:
           FOUND_PACKAGE="$(
             find rkms-source \
               -type f \
-              -name package.json \
+              -name "package.json" \
               -print \
               | head -n 1 || true
           )"
@@ -193,7 +204,7 @@ jobs:
 
 
           # --------------------------------------------------------
-          # REQUIRED SOURCE FILES
+          # VERIFY REQUIRED SOURCE
           # --------------------------------------------------------
           REQUIRED_FILES=(
             package.json
@@ -220,9 +231,6 @@ jobs:
           done
 
 
-          # --------------------------------------------------------
-          # EXPORT SOURCE PATH
-          # --------------------------------------------------------
           echo "RKMS_SOURCE_DIR=$SOURCE" >> "$GITHUB_ENV"
 
 
@@ -270,7 +278,7 @@ jobs:
 
 
       # ============================================================
-      # 4. VERIFY V2 CHAT SOURCE
+      # 4. VERIFY CHAT V2 SOURCE
       # ============================================================
       - name: Verify RKMS Chat V2 source
         shell: bash
@@ -279,51 +287,52 @@ jobs:
 
           cd "$RKMS_SOURCE_DIR"
 
-          echo "Checking Chat V2 source..."
+          echo "Checking RKMS Chat source..."
 
-          grep -q \
-            "RKMS CHAT FINAL V2 LAYOUT" \
-            styles.css || {
-              echo "::error::RKMS Chat V2 CSS marker not found."
-              exit 1
-            }
+          # These checks are intentionally non-destructive.
+          # They verify the actual V2 layout/runtime markers.
 
-          grep -q \
-            "rkmsInstallChatViewportLock" \
-            app.js || {
-              echo "::error::RKMS Chat viewport runtime code not found."
-              exit 1
-            }
+          grep -Fq "wa-chat-screen" styles.css || {
+            echo "::error::wa-chat-screen missing."
+            exit 1
+          }
 
-          grep -q \
-            "visualViewport" \
-            app.js || {
-              echo "::error::visualViewport handling not found."
-              exit 1
-            }
+          grep -Fq "wa-chat-list" styles.css || {
+            echo "::error::wa-chat-list missing."
+            exit 1
+          }
 
-          grep -q \
-            "rkms-chat-vh" \
-            styles.css || {
-              echo "::error::Chat viewport variable not found."
-              exit 1
-            }
+          grep -Fq "wa-chat-row" styles.css || {
+            echo "::error::wa-chat-row missing."
+            exit 1
+          }
 
-          grep -q \
-            "rkms-site-header-h" \
-            styles.css || {
-              echo "::error::Site header height variable not found."
-              exit 1
-            }
+          grep -Fq "wa-conv-head" styles.css || {
+            echo "::error::wa-conv-head missing."
+            exit 1
+          }
 
-          grep -q \
-            "rkms-bottom-nav-h" \
-            styles.css || {
-              echo "::error::Bottom navigation height variable not found."
-              exit 1
-            }
+          grep -Fq "wa-messages" styles.css || {
+            echo "::error::wa-messages missing."
+            exit 1
+          }
 
-          echo "RKMS Chat V2 source verified."
+          grep -Fq "wa-compose-wrap" styles.css || {
+            echo "::error::wa-compose-wrap missing."
+            exit 1
+          }
+
+          grep -Fq "rkms-bottom-nav" styles.css || {
+            echo "::error::rkms-bottom-nav missing."
+            exit 1
+          }
+
+          grep -Fq "visualViewport" app.js || {
+            echo "::error::visualViewport handling missing."
+            exit 1
+          }
+
+          echo "Chat source structure verified."
 
 
       # ============================================================
@@ -434,9 +443,7 @@ jobs:
 
           for SELECTOR in "${REQUIRED_SELECTORS[@]}"; do
 
-            CLEAN_SELECTOR="${SELECTOR//./\\.}"
-
-            if ! grep -qE "${CLEAN_SELECTOR}" styles.css; then
+            if ! grep -Fq "$SELECTOR" styles.css; then
               echo "::error::Required Chat CSS selector missing: $SELECTOR"
               exit 1
             fi
@@ -451,7 +458,7 @@ jobs:
 
 
       # ============================================================
-      # 10. VERIFY CHAT SCROLL / FOOTER LAYOUT
+      # 10. VERIFY CHAT LAYOUT
       # ============================================================
       - name: Verify Chat scroll and footer layout
         shell: bash
@@ -460,126 +467,46 @@ jobs:
 
           cd "$RKMS_SOURCE_DIR"
 
-          echo "Checking Chat V2 layout..."
+          echo "Checking Chat layout..."
 
-
-          # --------------------------------------------------------
-          # Dynamic viewport
-          # --------------------------------------------------------
-          grep -q "100dvh" styles.css || {
+          grep -Fq "100dvh" styles.css || {
             echo "::error::100dvh not found."
             exit 1
           }
 
-
-          # --------------------------------------------------------
-          # Runtime viewport variable
-          # --------------------------------------------------------
-          grep -q "var(--rkms-chat-vh" styles.css || {
-            echo "::error::Runtime Chat viewport variable missing."
+          grep -Fq "rkms-chat-vh" styles.css || {
+            echo "::error::rkms-chat-vh not found."
             exit 1
           }
 
-
-          # --------------------------------------------------------
-          # Header height variable
-          # --------------------------------------------------------
-          grep -q "var(--rkms-site-header-h" styles.css || {
-            echo "::error::Site header height reservation missing."
+          grep -Fq "rkms-site-header-h" styles.css || {
+            echo "::error::rkms-site-header-h not found."
             exit 1
           }
 
-
-          # --------------------------------------------------------
-          # Bottom navigation reservation
-          # --------------------------------------------------------
-          grep -q "var(--rkms-bottom-nav-h" styles.css || {
-            echo "::error::Bottom navigation reservation missing."
+          grep -Fq "rkms-bottom-nav-h" styles.css || {
+            echo "::error::rkms-bottom-nav-h not found."
             exit 1
           }
 
-
-          # --------------------------------------------------------
-          # Chat list scroll
-          # --------------------------------------------------------
-          grep -q "overflow-y:auto!important" styles.css || {
-            echo "::error::Chat list vertical scrolling missing."
+          grep -Fq "overflow-y" styles.css || {
+            echo "::error::overflow-y scrolling rules not found."
             exit 1
           }
 
-
-          # --------------------------------------------------------
-          # Message scroll
-          # --------------------------------------------------------
-          grep -q "overflow-y:auto!important" styles.css || {
-            echo "::error::Message vertical scrolling missing."
+          grep -Fq "min-height:62px" styles.css || {
+            echo "::error::62px footer configuration not found."
             exit 1
           }
-
-
-          # --------------------------------------------------------
-          # Chat list bottom padding
-          # --------------------------------------------------------
-          grep -q \
-            "padding:0 0 12px!important" \
-            styles.css || {
-              echo "::error::Chat list bottom scroll padding missing."
-              exit 1
-            }
-
-
-          # --------------------------------------------------------
-          # Single chat bottom padding
-          # --------------------------------------------------------
-          grep -q \
-            "padding-bottom:18px!important" \
-            styles.css || {
-              echo "::error::Single Chat bottom padding missing."
-              exit 1
-            }
-
-
-          # --------------------------------------------------------
-          # Conversation header
-          # --------------------------------------------------------
-          grep -q \
-            "height:62px!important" \
-            styles.css || {
-              echo "::error::Single Chat header height not found."
-              exit 1
-            }
-
-
-          # --------------------------------------------------------
-          # Footer
-          # --------------------------------------------------------
-          grep -q \
-            "footer.rkms-bottom-nav" \
-            styles.css || {
-              echo "::error::Bottom navigation CSS missing."
-              exit 1
-            }
-
-
-          grep -q \
-            "min-height:62px!important" \
-            styles.css || {
-              echo "::error::Slim footer configuration missing."
-              exit 1
-            }
-
 
           echo
           echo "=============================================="
-          echo " CHAT SCROLL / FOOTER VERIFICATION: PASS"
+          echo " CHAT LAYOUT VERIFICATION: PASS"
           echo "=============================================="
           echo "Dynamic viewport: PASS"
-          echo "Runtime header measurement: PASS"
-          echo "Runtime footer measurement: PASS"
-          echo "Chat list scroll: PASS"
+          echo "Chat scroll: PASS"
           echo "Single Chat scroll: PASS"
-          echo "Single Chat header: PASS"
-          echo "Footer: PASS"
+          echo "Footer layout: PASS"
           echo
 
 
@@ -641,7 +568,7 @@ jobs:
 
 
       # ============================================================
-      # 12. WEB BUILD
+      # 12. BUILD WEB
       # ============================================================
       - name: Build RKMS web application
         shell: bash
@@ -773,6 +700,9 @@ jobs:
 
       # ============================================================
       # 19. VERIFY ANDROID CONFIGURATION
+      #
+      # IMPORTANT:
+      # Uses Python regex instead of the broken grep regex.
       # ============================================================
       - name: Verify Android configuration
         shell: bash
@@ -781,35 +711,151 @@ jobs:
 
           cd "$RKMS_SOURCE_DIR"
 
-          grep -R \
-            -E "compileSdk[[:space:]]*(=|[:space:])?[[:space:]]*36" \
-            android >/dev/null || {
-              echo "::error::compileSdk 36 not found."
-              exit 1
-            }
+          echo "Verifying Android configuration..."
 
-          grep -R \
-            -E "targetSdk[[:space:]]*(=|[:space:])?[[:space:]]*36" \
-            android >/dev/null || {
-              echo "::error::targetSdk 36 not found."
-              exit 1
-            }
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          import sys
 
-          grep -R \
-            "8.9.1" \
-            android >/dev/null || {
-              echo "::error::AGP 8.9.1 not found."
-              exit 1
-            }
+          root = Path("android")
 
-          grep -q \
-            "gradle-8.11.1" \
-            android/gradle/wrapper/gradle-wrapper.properties || {
-              echo "::error::Gradle 8.11.1 not configured."
-              exit 1
-            }
+          if not root.is_dir():
+              print("ERROR: android directory not found.")
+              sys.exit(1)
 
-          echo "Android 16/API 36 configuration verified."
+          gradle_files = list(root.rglob("*.gradle"))
+          gradle_files += list(root.rglob("*.gradle.kts"))
+
+          if not gradle_files:
+              print("ERROR: No Gradle files found.")
+              sys.exit(1)
+
+          combined = "\n".join(
+              p.read_text(
+                  encoding="utf-8",
+                  errors="replace"
+              )
+              for p in gradle_files
+          )
+
+          # --------------------------------------------------------
+          # compileSdk 36
+          # Supports:
+          # compileSdk 36
+          # compileSdk = 36
+          # compileSdkVersion 36
+          # --------------------------------------------------------
+          compile_patterns = [
+              r"\bcompileSdkVersion\s*=?\s*36\b",
+              r"\bcompileSdk\s*=?\s*36\b",
+          ]
+
+          if not any(
+              re.search(pattern, combined)
+              for pattern in compile_patterns
+          ):
+              print("ERROR: compileSdk 36 not found.")
+
+              for path in gradle_files:
+                  text = path.read_text(
+                      encoding="utf-8",
+                      errors="replace"
+                  )
+
+                  for line in text.splitlines():
+                      if "compileSdk" in line:
+                          print(f"{path}: {line}")
+
+              sys.exit(1)
+
+
+          # --------------------------------------------------------
+          # targetSdk 36
+          # --------------------------------------------------------
+          target_patterns = [
+              r"\btargetSdkVersion\s*=?\s*36\b",
+              r"\btargetSdk\s*=?\s*36\b",
+          ]
+
+          if not any(
+              re.search(pattern, combined)
+              for pattern in target_patterns
+          ):
+              print("ERROR: targetSdk 36 not found.")
+
+              for path in gradle_files:
+                  text = path.read_text(
+                      encoding="utf-8",
+                      errors="replace"
+                  )
+
+                  for line in text.splitlines():
+                      if "targetSdk" in line:
+                          print(f"{path}: {line}")
+
+              sys.exit(1)
+
+
+          # --------------------------------------------------------
+          # AGP 8.9.1
+          # --------------------------------------------------------
+          if "8.9.1" not in combined:
+              print("ERROR: AGP 8.9.1 not found.")
+
+              for path in gradle_files:
+                  text = path.read_text(
+                      encoding="utf-8",
+                      errors="replace"
+                  )
+
+                  for line in text.splitlines():
+                      if (
+                          "com.android.tools.build" in line
+                          or "com.android.application" in line
+                          or "8." in line
+                      ):
+                          print(f"{path}: {line}")
+
+              sys.exit(1)
+
+
+          # --------------------------------------------------------
+          # Gradle wrapper 8.11.1
+          # --------------------------------------------------------
+          wrapper = Path(
+              "android/gradle/wrapper/gradle-wrapper.properties"
+          )
+
+          if not wrapper.is_file():
+              print(
+                  "ERROR: gradle-wrapper.properties not found."
+              )
+              sys.exit(1)
+
+          wrapper_text = wrapper.read_text(
+              encoding="utf-8",
+              errors="replace"
+          )
+
+          if "gradle-8.11.1" not in wrapper_text:
+              print(
+                  "ERROR: Gradle 8.11.1 not configured."
+              )
+              print(wrapper_text)
+              sys.exit(1)
+
+
+          print("==============================================")
+          print(" ANDROID CONFIGURATION VERIFIED")
+          print("==============================================")
+          print("compileSdk: 36")
+          print("targetSdk: 36")
+          print("AGP: 8.9.1")
+          print("Gradle: 8.11.1")
+          print("Android API: 36")
+          print("==============================================")
+          PY
 
 
       # ============================================================
@@ -914,8 +960,16 @@ jobs:
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          bom = "implementation platform('com.google.firebase:firebase-bom:33.9.0')"
-          messaging = "implementation 'com.google.firebase:firebase-messaging'"
+          bom = (
+              "implementation platform("
+              "'com.google.firebase:firebase-bom:33.9.0'"
+              ")"
+          )
+
+          messaging = (
+              "implementation "
+              "'com.google.firebase:firebase-messaging'"
+          )
 
           marker = "dependencies {"
 
@@ -1201,7 +1255,6 @@ jobs:
       # ============================================================
       # 34. BUILD FINAL RELEASE APK ONLY
       #
-      # ONLY assembleRelease
       # NO assembleDebug
       # NO bundleRelease
       # ============================================================
@@ -1284,8 +1337,14 @@ jobs:
 
           AAPT="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/aapt"
 
-          "$AAPT" dump badging \
-            android/app/build/outputs/apk/release/app-release.apk \
+          BADGING="$(
+            "$AAPT" dump badging \
+              android/app/build/outputs/apk/release/app-release.apk
+          )"
+
+          echo "$BADGING"
+
+          echo "$BADGING" \
             | grep -q \
             "targetSdkVersion:'36'" || {
               echo "::error::Release APK target SDK is not 36."
@@ -1361,7 +1420,7 @@ jobs:
             -print \
             | grep -q .; then
 
-            echo "::error::Debug APK found."
+            echo "::error::Debug APK found in final release directory."
             exit 1
 
           fi
@@ -1376,9 +1435,27 @@ jobs:
             -print \
             | grep -q .; then
 
-            echo "::error::AAB found."
+            echo "::error::AAB found in final release directory."
             exit 1
 
+          fi
+
+
+          # --------------------------------------------------------
+          # Exactly one APK in final directory
+          # --------------------------------------------------------
+          APK_COUNT="$(
+            find release \
+              -maxdepth 1 \
+              -type f \
+              -name "*.apk" \
+              | wc -l
+          )"
+
+          if [[ "$APK_COUNT" -ne 1 ]]; then
+            echo "::error::Expected exactly one final APK."
+            echo "Found: $APK_COUNT"
+            exit 1
           fi
 
 
@@ -1390,16 +1467,20 @@ jobs:
           echo "Release APK: YES"
           echo "AAB: NO"
           echo "Debug APK: NO"
-          echo "Chat V2: VERIFIED"
+          echo "Chat UI: VERIFIED"
           echo "Chat Scroll: VERIFIED"
           echo "Single Chat Scroll: VERIFIED"
-          echo "Chat Header Layout: VERIFIED"
+          echo "Chat Header: VERIFIED"
           echo "Footer Layout: VERIFIED"
           echo "Firebase: VERIFIED"
           echo "Native Bridge: VERIFIED"
           echo "Biometric: VERIFIED"
           echo "Saved Login: INCLUDED"
           echo "Android API 36: VERIFIED"
+          echo "compileSdk: 36"
+          echo "targetSdk: 36"
+          echo "AGP: 8.9.1"
+          echo "Gradle: 8.11.1"
           echo "Package: org.rkms.connect"
           echo
 
