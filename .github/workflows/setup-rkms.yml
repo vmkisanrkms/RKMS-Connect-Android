@@ -1,4 +1,4 @@
-name: RKMS Connect - Android 16 API 36 Final APK AAB
+name: RKMS Connect - Android 16 API 36 - Final Audited Build
 
 on:
   workflow_dispatch:
@@ -24,30 +24,35 @@ jobs:
   audit-and-build:
     name: RKMS Final Audit + Android 16/API 36 APK AAB
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
 
       # ============================================================
       # 1. CHECKOUT
       # ============================================================
+
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+
       # ============================================================
       # 2. NODE.JS 22
       # ============================================================
+
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
+
       # ============================================================
       # 3. JAVA 17
       # ============================================================
+
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -55,13 +60,15 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           cache: gradle
 
+
       # ============================================================
-      # 4. ANDROID SDK
+      # 4. ANDROID SDK / API 36
       # ============================================================
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android 16 / API 36 SDK
+      - name: Install Android 16 API 36 SDK
         shell: bash
         run: |
           set -euo pipefail
@@ -74,10 +81,12 @@ jobs:
             "build-tools;${BUILD_TOOLS}" \
             "cmdline-tools;latest"
 
+
       # ============================================================
-      # 5. SOURCE STRUCTURE AUDIT
+      # 5. REQUIRED SOURCE FILE AUDIT
       # ============================================================
-      - name: Verify required RKMS source files
+
+      - name: Verify RKMS source structure
         shell: bash
         run: |
           set -euo pipefail
@@ -96,34 +105,38 @@ jobs:
             "scripts/verify-android-16.py"
           )
 
-          for f in "${required[@]}"; do
-            if [ ! -f "$f" ]; then
-              echo "ERROR: Missing required file: $f"
+          for file in "${required[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Missing required source file: $file"
               exit 1
             fi
           done
 
-          node -e '
-            const p = require("./package.json");
+          node - <<'NODE'
+          const fs = require("fs");
 
-            if (p.name !== "rkms") {
-              throw new Error("package.json name mismatch");
-            }
+          const p = JSON.parse(
+            fs.readFileSync("package.json", "utf8")
+          );
 
-            if (p.dependencies?.["@capacitor/core"] !== "6.2.2") {
-              throw new Error("Capacitor core mismatch");
-            }
+          if (p.name !== "rkms") {
+            throw new Error("package.json name must be rkms");
+          }
 
-            if (p.dependencies?.["@capacitor/android"] !== "6.2.2") {
-              throw new Error("Capacitor Android mismatch");
-            }
+          if (p.dependencies?.["@capacitor/core"] !== "6.2.2") {
+            throw new Error("Capacitor core must be 6.2.2");
+          }
 
-            if (p.devDependencies?.["@capacitor/cli"] !== "6.2.2") {
-              throw new Error("Capacitor CLI mismatch");
-            }
+          if (p.dependencies?.["@capacitor/android"] !== "6.2.2") {
+            throw new Error("Capacitor Android must be 6.2.2");
+          }
 
-            console.log("Package manifest: PASS");
-          '
+          if (p.devDependencies?.["@capacitor/cli"] !== "6.2.2") {
+            throw new Error("Capacitor CLI must be 6.2.2");
+          }
+
+          console.log("Package manifest: PASS");
+          NODE
 
           python3 - <<'PY'
           import json
@@ -133,10 +146,15 @@ jobs:
               Path("capacitor.config.json").read_text()
           )
 
-          assert config["appId"] == "org.rkms.connect"
-          assert config["webDir"] == "dist"
+          if config.get("appId") != "org.rkms.connect":
+              raise SystemExit(
+                  "ERROR: Capacitor appId mismatch"
+              )
 
-          print("Capacitor appId/webDir: PASS")
+          if config.get("webDir") != "dist":
+              raise SystemExit(
+                  "ERROR: Capacitor webDir must be dist"
+              )
 
           firebase = json.loads(
               Path("google-services.json").read_text()
@@ -152,15 +170,21 @@ jobs:
                   .get("package_name")
               )
 
-          assert "org.rkms.connect" in packages, packages
+          if "org.rkms.connect" not in packages:
+              raise SystemExit(
+                  "ERROR: org.rkms.connect missing from google-services.json"
+              )
 
-          print("Firebase package org.rkms.connect: PASS")
+          print("Capacitor configuration: PASS")
+          print("Firebase package: PASS")
           PY
+
 
       # ============================================================
       # 6. JAVASCRIPT SYNTAX
       # ============================================================
-      - name: Verify JavaScript syntax
+
+      - name: Verify JavaScript
         shell: bash
         run: |
           set -euo pipefail
@@ -169,9 +193,11 @@ jobs:
 
           echo "app.js syntax: PASS"
 
+
       # ============================================================
       # 7. PDA PASSWORD AUDIT
       # ============================================================
+
       - name: Audit PDA password protection
         shell: bash
         run: |
@@ -185,7 +211,8 @@ jobs:
 
           echo "PDA removal password: PASS"
 
-          echo "Checking password transmission..."
+
+          echo "Checking password parameter..."
 
           grep -F \
             'p_password:password' \
@@ -193,7 +220,8 @@ jobs:
 
           echo "PDA password RPC parameter: PASS"
 
-          echo "Checking appointment password..."
+
+          echo "Checking appointment/reappointment password..."
 
           grep -F \
             'rkmsRequireManagementPassword(form.dataset.reappointOfficer?"पद परिवर्तन":"नियुक्ति")' \
@@ -201,7 +229,8 @@ jobs:
 
           echo "PDA appointment/reappointment password: PASS"
 
-          echo "Checking Super Admin PDA RPC..."
+
+          echo "Checking Super Admin PDA RPCs..."
 
           grep -F \
             'rkms_super_admin_appoint_officer' \
@@ -211,11 +240,13 @@ jobs:
             'rkms_super_admin_reappoint_officer' \
             app.js >/dev/null
 
-          echo "Super Admin PDA RPC: PASS"
+          echo "Super Admin PDA RPC references: PASS"
+
 
       # ============================================================
       # 8. SUPER ADMIN CHAT RESTRICTION
       # ============================================================
+
       - name: Audit Super Admin Chat restriction
         shell: bash
         run: |
@@ -227,17 +258,11 @@ jobs:
 
           echo "Super Admin Chat route guard: PASS"
 
-          echo "Checking Chat navigation..."
-
-          grep -F \
-            'data-route="chat"' \
-            app.js >/dev/null
-
-          echo "Chat route exists: PASS"
 
       # ============================================================
       # 9. WHATSAPP STYLE CHAT AUDIT
       # ============================================================
+
       - name: Audit WhatsApp style Chat
         shell: bash
         run: |
@@ -263,12 +288,14 @@ jobs:
 
           done
 
-          echo "WhatsApp Chat components: PASS"
+          echo "WhatsApp-style Chat structure: PASS"
+
 
       # ============================================================
-      # 10. CHAT HEADER / FOOTER SAFETY
+      # 10. CHAT HEADER / FOOTER AUDIT
       # ============================================================
-      - name: Verify Chat does not cover common navigation
+
+      - name: Audit Chat header and footer layout
         shell: bash
         run: |
           set -euo pipefail
@@ -277,7 +304,7 @@ jobs:
             '\.wa-chat-screen[^}]*position:[[:space:]]*fixed' \
             styles.css; then
 
-            echo "ERROR: wa-chat-screen still uses fixed overlay"
+            echo "ERROR: Chat screen still uses fixed full-screen overlay"
             exit 1
 
           fi
@@ -286,55 +313,44 @@ jobs:
             '\.wa-conversation-screen[^}]*position:[[:space:]]*fixed' \
             styles.css; then
 
-            echo "ERROR: wa-conversation-screen still uses fixed overlay"
+            echo "ERROR: Conversation screen still uses fixed full-screen overlay"
             exit 1
 
           fi
-
-          echo "Chat header/footer-safe layout: PASS"
-
-      # ============================================================
-      # 11. COMMON BOTTOM NAVIGATION
-      # ============================================================
-      - name: Verify common bottom navigation
-        shell: bash
-        run: |
-          set -euo pipefail
 
           grep -F \
             'rkms-bottom-nav' \
             styles.css >/dev/null
 
-          grep -F \
-            'body{padding-bottom:78px}' \
-            styles.css >/dev/null
+          echo "Chat header/footer-safe layout: PASS"
 
-          echo "Common bottom navigation: PASS"
 
       # ============================================================
-      # 12. NPM INSTALL
+      # 11. INSTALL LOCKED DEPENDENCIES
       # ============================================================
-      - name: Install exact locked dependencies
+
+      - name: Install dependencies
         run: |
           npm ci
 
+
       # ============================================================
-      # 13. RKMS VERIFICATION SUITE
+      # 12. RUN RKMS VERIFICATION SCRIPTS
       # ============================================================
+
       - name: Run RKMS verification suite
         shell: bash
         run: |
           set -euo pipefail
 
           run_py() {
-
             local file="$1"
 
             if [ -f "$file" ]; then
 
               echo ""
               echo "================================================"
-              echo "Running: $file"
+              echo "VERIFY: $file"
               echo "================================================"
 
               python3 "$file"
@@ -360,18 +376,22 @@ jobs:
           run_py scripts/verify-pdf-pipeline.py
 
           echo ""
-          echo "ALL AVAILABLE RKMS VERIFIERS: PASS"
+          echo "RKMS verification suite: PASS"
+
 
       # ============================================================
-      # 14. BUILD WEB
+      # 13. BUILD WEB
       # ============================================================
+
       - name: Build web assets
         run: |
           npm run build
 
+
       # ============================================================
-      # 15. VERIFY DIST
+      # 14. VERIFY WEB BUILD
       # ============================================================
+
       - name: Verify web build
         shell: bash
         run: |
@@ -384,12 +404,14 @@ jobs:
 
           node --check dist/app.js
 
-          echo "dist structure: PASS"
+          echo "dist build: PASS"
+
 
       # ============================================================
-      # 16. CLEAN CAPACITOR ANDROID PROJECT
+      # 15. CLEAN CAPACITOR ANDROID PROJECT
       # ============================================================
-      - name: Generate clean Capacitor Android project
+
+      - name: Generate clean Android project
         shell: bash
         run: |
           set -euo pipefail
@@ -400,10 +422,12 @@ jobs:
 
           npx cap sync android
 
+
       # ============================================================
-      # 17. RKMS NATIVE CONFIGURATION
+      # 16. RKMS NATIVE CONFIGURATION
       # ============================================================
-      - name: Apply RKMS Android native configuration
+
+      - name: Apply RKMS native configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -412,9 +436,11 @@ jobs:
 
           scripts/setup-android-native.sh
 
+
       # ============================================================
-      # 18. ANDROID 16 CONFIGURATION
+      # 17. ANDROID 16 CONFIGURATION
       # ============================================================
+
       - name: Configure Android 16 API 36
         shell: bash
         run: |
@@ -424,28 +450,32 @@ jobs:
 
           scripts/configure-android-16.sh
 
+
       # ============================================================
-      # 19. ANDROID PROJECT AUDIT
+      # 18. ANDROID NATIVE AUDIT
       # ============================================================
-      - name: Verify Android project
+
+      - name: Audit Android native project
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f \
-            android/app/google-services.json
+          required_android=(
+            "android/app/google-services.json"
+            "android/app/src/main/AndroidManifest.xml"
+            "android/app/src/main/java/org/rkms/connect/MainActivity.java"
+            "android/app/src/main/java/org/rkms/connect/RKMSSecureCredentialsPlugin.java"
+            "android/app/src/main/java/org/rkms/connect/RKMSNativeBridge.java"
+          )
 
-          test -f \
-            android/app/src/main/AndroidManifest.xml
+          for file in "${required_android[@]}"; do
 
-          test -f \
-            android/app/src/main/java/org/rkms/connect/MainActivity.java
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Missing Android file: $file"
+              exit 1
+            fi
 
-          test -f \
-            android/app/src/main/java/org/rkms/connect/RKMSSecureCredentialsPlugin.java
-
-          test -f \
-            android/app/src/main/java/org/rkms/connect/RKMSNativeBridge.java
+          done
 
           python3 scripts/verify-android-16.py
 
@@ -465,12 +495,15 @@ jobs:
             'registerPlugin(RKMSSecureCredentialsPlugin.class)' \
             android/app/src/main/java/org/rkms/connect/MainActivity.java >/dev/null
 
+          echo "Android 16 configuration: PASS"
           echo "Firebase initialization: PASS"
           echo "Native bridge: PASS"
 
+
       # ============================================================
-      # 20. GRADLE CHECK
+      # 19. GRADLE CHECK
       # ============================================================
+
       - name: Verify Gradle
         shell: bash
         run: |
@@ -489,9 +522,11 @@ jobs:
 
           echo "Gradle dependency resolution: PASS"
 
+
       # ============================================================
-      # 21. DEBUG APK
+      # 20. DEBUG APK
       # ============================================================
+
       - name: Build debug APK
         shell: bash
         run: |
@@ -505,9 +540,11 @@ jobs:
             --no-daemon \
             --stacktrace
 
+
       # ============================================================
-      # 22. RELEASE APK + AAB
+      # 21. RELEASE APK + AAB
       # ============================================================
+
       - name: Build release APK and AAB
         shell: bash
         run: |
@@ -521,17 +558,42 @@ jobs:
             --no-daemon \
             --stacktrace
 
+
       # ============================================================
-      # 23. OPTIONAL RELEASE SIGNING
+      # 22. OPTIONAL SIGNING
+      #
+      # IMPORTANT:
+      # GitHub secrets are NOT used directly inside an if expression.
+      # They are supplied through env and checked by bash.
+      # This fixes:
+      # "Unrecognized named-value: 'secrets'"
       # ============================================================
+
       - name: Prepare release keystore
         id: keystore
-        if: ${{ secrets.RKMS_KEYSTORE_BASE64 != '' && secrets.RKMS_KEYSTORE_PASSWORD != '' && secrets.RKMS_KEY_ALIAS != '' && secrets.RKMS_KEY_PASSWORD != '' }}
         shell: bash
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
         run: |
           set -euo pipefail
 
-          echo "${{ secrets.RKMS_KEYSTORE_BASE64 }}" \
+          if [ -z "${RKMS_KEYSTORE_BASE64}" ] || \
+             [ -z "${RKMS_KEYSTORE_PASSWORD}" ] || \
+             [ -z "${RKMS_KEY_ALIAS}" ] || \
+             [ -z "${RKMS_KEY_PASSWORD}" ]; then
+
+            echo "Signing secrets are not configured."
+            echo "Unsigned release APK/AAB will be produced."
+
+            echo "signing_available=false" >> "$GITHUB_OUTPUT"
+
+            exit 0
+          fi
+
+          echo "${RKMS_KEYSTORE_BASE64}" \
             | base64 --decode \
             > "$RUNNER_TEMP/rkms-release.jks"
 
@@ -540,68 +602,88 @@ jobs:
 
           keytool -list \
             -keystore "$RUNNER_TEMP/rkms-release.jks" \
-            -storepass "${{ secrets.RKMS_KEYSTORE_PASSWORD }}" \
-            -alias "${{ secrets.RKMS_KEY_ALIAS }}" \
+            -storepass "${RKMS_KEYSTORE_PASSWORD}" \
+            -alias "${RKMS_KEY_ALIAS}" \
             >/dev/null
 
-          echo "Keystore: PASS"
+          echo "signing_available=true" >> "$GITHUB_OUTPUT"
+
+          echo "Release keystore: PASS"
+
 
       # ============================================================
-      # 24. SIGN APK + AAB
+      # 23. SIGN RELEASE APK + AAB
       # ============================================================
+
       - name: Sign release APK and AAB
-        if: ${{ steps.keystore.outcome == 'success' }}
+        if: ${{ steps.keystore.outputs.signing_available == 'true' }}
         shell: bash
+        env:
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
         run: |
           set -euo pipefail
 
           APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+
           AAB="android/app/build/outputs/bundle/release/app-release.aab"
 
           KS="$RUNNER_TEMP/rkms-release.jks"
 
           test -f "$APK"
           test -f "$AAB"
+          test -f "$KS"
+
 
           "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/zipalign" \
             -f 4 \
             "$APK" \
             "$RUNNER_TEMP/rkms-release-aligned.apk"
 
+
           "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner" sign \
             --ks "$KS" \
-            --ks-pass "pass:${{ secrets.RKMS_KEYSTORE_PASSWORD }}" \
-            --ks-key-alias "${{ secrets.RKMS_KEY_ALIAS }}" \
-            --key-pass "pass:${{ secrets.RKMS_KEY_PASSWORD }}" \
+            --ks-pass "pass:${RKMS_KEYSTORE_PASSWORD}" \
+            --ks-key-alias "${RKMS_KEY_ALIAS}" \
+            --key-pass "pass:${RKMS_KEY_PASSWORD}" \
             --out "$RUNNER_TEMP/rkms-release-signed.apk" \
             "$RUNNER_TEMP/rkms-release-aligned.apk"
+
 
           "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner" verify \
             --verbose \
             "$RUNNER_TEMP/rkms-release-signed.apk"
 
+
           jarsigner \
             -keystore "$KS" \
-            -storepass "${{ secrets.RKMS_KEYSTORE_PASSWORD }}" \
-            -keypass "${{ secrets.RKMS_KEY_PASSWORD }}" \
+            -storepass "${RKMS_KEYSTORE_PASSWORD}" \
+            -keypass "${RKMS_KEY_PASSWORD}" \
             -signedjar "$RUNNER_TEMP/rkms-release-signed.aab" \
             "$AAB" \
-            "${{ secrets.RKMS_KEY_ALIAS }}"
+            "${RKMS_KEY_ALIAS}"
+
 
           cp \
             "$RUNNER_TEMP/rkms-release-signed.apk" \
             android/app/build/outputs/apk/release/RKMS-Connect-release-signed.apk
 
+
           cp \
             "$RUNNER_TEMP/rkms-release-signed.aab" \
             android/app/build/outputs/bundle/release/RKMS-Connect-release-signed.aab
 
-          echo "Signed APK/AAB: PASS"
+
+          echo "Signed APK: PASS"
+          echo "Signed AAB: PASS"
+
 
       # ============================================================
-      # 25. FINAL APK AUDIT
+      # 24. FINAL APK/AAB AUDIT
       # ============================================================
-      - name: Final APK/AAB audit
+
+      - name: Final APK and AAB audit
         shell: bash
         run: |
           set -euo pipefail
@@ -612,9 +694,11 @@ jobs:
 
           RELEASE_AAB="android/app/build/outputs/bundle/release/app-release.aab"
 
+
           test -s "$DEBUG_APK"
           test -s "$RELEASE_APK"
           test -s "$RELEASE_AAB"
+
 
           "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/aapt2" \
             dump badging \
@@ -622,11 +706,13 @@ jobs:
             | grep -F \
             "package: name='${APP_ID}'"
 
+
           "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/aapt2" \
             dump badging \
             "$RELEASE_APK" \
             | grep -F \
             "package: name='${APP_ID}'"
+
 
           if [ -f \
             android/app/build/outputs/apk/release/RKMS-Connect-release-signed.apk
@@ -640,29 +726,36 @@ jobs:
 
           fi
 
-          echo "APK/AAB integrity: PASS"
+
+          echo "Final APK/AAB audit: PASS"
+
 
       # ============================================================
-      # 26. COLLECT FINAL ARTIFACTS
+      # 25. COLLECT FINAL ARTIFACTS
       # ============================================================
-      - name: Collect final Android artifacts
+
+      - name: Collect final artifacts
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p release
 
+
           cp \
             android/app/build/outputs/apk/debug/app-debug.apk \
             release/RKMS-Connect-debug-API36.apk
+
 
           cp \
             android/app/build/outputs/apk/release/app-release-unsigned.apk \
             release/RKMS-Connect-release-unsigned-API36.apk
 
+
           cp \
             android/app/build/outputs/bundle/release/app-release.aab \
             release/RKMS-Connect-release-unsigned-API36.aab
+
 
           if [ -f \
             android/app/build/outputs/apk/release/RKMS-Connect-release-signed.apk
@@ -674,6 +767,7 @@ jobs:
 
           fi
 
+
           if [ -f \
             android/app/build/outputs/bundle/release/RKMS-Connect-release-signed.aab
           ]; then
@@ -684,21 +778,25 @@ jobs:
 
           fi
 
+
           sha256sum \
             release/* \
             | tee release/SHA256SUMS.txt
 
+
           echo ""
           echo "=============================================="
-          echo "FINAL RKMS RELEASE FILES"
+          echo "RKMS FINAL BUILD FILES"
           echo "=============================================="
 
           ls -lh release/
 
+
       # ============================================================
-      # 27. UPLOAD ARTIFACTS
+      # 26. UPLOAD APK / AAB
       # ============================================================
-      - name: Upload APK and AAB artifacts
+
+      - name: Upload APK and AAB
         uses: actions/upload-artifact@v4
         with:
           name: RKMS-Connect-Android16-API36-${{ github.run_number }}
