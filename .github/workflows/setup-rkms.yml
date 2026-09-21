@@ -17,6 +17,7 @@ env:
   SOURCE_ZIP_NAME: "RKMS_CONNECT_GROUP_PHOTO_SCHEMA_FIXED_FINAL_20260920.zip"
 
 jobs:
+
   build-release-apk:
 
     runs-on: ubuntu-latest
@@ -26,24 +27,33 @@ jobs:
       # ============================================================
       # 1. CHECKOUT
       # ============================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
 
       # ============================================================
       # 2. LIST ZIP FILES
       # ============================================================
+
       - name: List repository ZIP files
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Available ZIP files:"
-          find . -type f \( -iname "*.zip" -o -iname "*.ZIP" \) \
+          echo "=========================================="
+          echo "Available RKMS ZIP files"
+          echo "=========================================="
+
+          find . -type f \
+            \( -iname "*.zip" -o -iname "*.ZIP" \) \
             -print | sort || true
+
 
       # ============================================================
       # 3. VERIFY EXACT SOURCE ZIP
       # ============================================================
+
       - name: Verify exact RKMS source ZIP
         shell: bash
         run: |
@@ -51,20 +61,24 @@ jobs:
 
           REQUIRED_SOURCE_ZIP="${SOURCE_ZIP_NAME}"
 
-          echo "Required source ZIP:"
+          echo "Required source:"
           echo "$REQUIRED_SOURCE_ZIP"
 
-          if [ -f "./$REQUIRED_SOURCE_ZIP" ]; then
-            SOURCE_ZIP="./$REQUIRED_SOURCE_ZIP"
-          else
+          if [ ! -f "./$REQUIRED_SOURCE_ZIP" ]; then
+
             echo ""
             echo "ERROR: Required RKMS source ZIP not found."
             echo ""
+
             echo "Available ZIP files:"
-            find . -type f \( -iname "*.zip" -o -iname "*.ZIP" \) \
+            find . -type f \
+              \( -iname "*.zip" -o -iname "*.ZIP" \) \
               -print | sort || true
+
             exit 1
           fi
+
+          SOURCE_ZIP="./$REQUIRED_SOURCE_ZIP"
 
           echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
 
@@ -74,35 +88,45 @@ jobs:
 
           ls -lh "$SOURCE_ZIP"
 
+
       # ============================================================
       # 4. SOURCE ZIP SHA256
       # ============================================================
+
       - name: Generate source ZIP SHA256
         shell: bash
         run: |
           set -euo pipefail
 
-          sha256sum "$SOURCE_ZIP" | tee rkms-source-zip.sha256
+          sha256sum "$SOURCE_ZIP" \
+            | tee rkms-source-zip.sha256
+
 
       # ============================================================
-      # 5. EXTRACT SOURCE
+      # 5. EXTRACT SOURCE ZIP
       # ============================================================
+
       - name: Extract RKMS source
         shell: bash
         run: |
           set -euo pipefail
 
           rm -rf rkms-source
+
           mkdir -p rkms-source
 
           unzip -q "$SOURCE_ZIP" -d rkms-source
 
-          echo "Extracted source:"
-          find rkms-source -maxdepth 3 -type f | head -200
+          echo ""
+          echo "Extracted RKMS source:"
+          find rkms-source -maxdepth 3 -type f \
+            | head -250
+
 
       # ============================================================
       # 6. DETECT PROJECT ROOT
       # ============================================================
+
       - name: Detect RKMS project root
         shell: bash
         run: |
@@ -111,16 +135,22 @@ jobs:
           PROJECT_ROOT=""
 
           if [ -f "rkms-source/package.json" ]; then
+
             PROJECT_ROOT="rkms-source"
+
           else
-            FOUND_PACKAGE="$(find rkms-source \
-              -type f \
-              -name package.json \
-              -print -quit || true)"
+
+            FOUND_PACKAGE="$(
+              find rkms-source \
+                -type f \
+                -name package.json \
+                -print -quit || true
+            )"
 
             if [ -n "$FOUND_PACKAGE" ]; then
               PROJECT_ROOT="$(dirname "$FOUND_PACKAGE")"
             fi
+
           fi
 
           if [ -z "$PROJECT_ROOT" ]; then
@@ -130,14 +160,17 @@ jobs:
 
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
+          echo ""
           echo "Project root:"
           echo "$PROJECT_ROOT"
 
           test -f "$PROJECT_ROOT/package.json"
 
+
       # ============================================================
       # 7. VALIDATE SOURCE
       # ============================================================
+
       - name: Validate RKMS source
         shell: bash
         run: |
@@ -147,23 +180,27 @@ jobs:
 
           test -f package.json
 
+          echo "package.json: OK"
+
           if [ -f app.js ]; then
-            echo "app.js found."
+            echo "app.js: OK"
           elif [ -f src/app.js ]; then
-            echo "src/app.js found."
+            echo "src/app.js: OK"
           else
             echo "WARNING: app.js not found."
           fi
 
           if [ -d supabase ]; then
-            echo "supabase directory found."
+            echo "supabase directory: OK"
           else
             echo "WARNING: supabase directory not found."
           fi
 
+
       # ============================================================
       # 8. NODE 22
       # ============================================================
+
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -171,23 +208,25 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ env.PROJECT_ROOT }}/package-lock.json
 
+
       # ============================================================
       # 9. JAVA 17
       # ============================================================
+
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
+
       # ============================================================
       # 10. ANDROID SDK BASE SETUP
       #
       # IMPORTANT:
-      # Do NOT request "tools".
-      # It is obsolete and causes:
-      # Failed to find package 'tools'
+      # Do NOT use "tools".
       # ============================================================
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -196,27 +235,40 @@ jobs:
           log-accepted-android-sdk-licenses: true
           packages: "platform-tools"
 
+
       # ============================================================
-      # 11. INSTALL REQUIRED SDK PACKAGES
+      # 11. INSTALL API 36 + BUILD TOOLS
       # ============================================================
-      - name: Install Android API 36 and Build Tools 36
+
+      - name: Install Android API 36 and Build Tools
         shell: bash
         run: |
           set -euo pipefail
 
-          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          SDKMANAGER=""
 
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "${ANDROID_SDK_ROOT}/cmdline-tools" \
-              -type f \
-              -path "*/bin/sdkmanager" \
-              -print -quit || true)"
+          if [ -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(
+              find "${ANDROID_SDK_ROOT}/cmdline-tools" \
+                -type f \
+                -path "*/bin/sdkmanager" \
+                -print -quit 2>/dev/null || true
+            )"
           fi
 
           if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+
             echo "ERROR: sdkmanager not found."
-            find "${ANDROID_SDK_ROOT}" -maxdepth 5 \
-              -name sdkmanager -type f -print || true
+
+            find "${ANDROID_SDK_ROOT}" \
+              -name sdkmanager \
+              -type f \
+              -print || true
+
             exit 1
           fi
 
@@ -230,26 +282,38 @@ jobs:
             "platforms;android-${ANDROID_API}" \
             "build-tools;${BUILD_TOOLS}"
 
+
       # ============================================================
       # 12. VERIFY ANDROID SDK
       # ============================================================
+
       - name: Verify Android SDK
         shell: bash
         run: |
           set -euo pipefail
 
-          test -d "${ANDROID_SDK_ROOT}/platforms/android-${ANDROID_API}"
-          test -d "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS}"
+          PLATFORM_DIR="${ANDROID_SDK_ROOT}/platforms/android-${ANDROID_API}"
+          BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS}"
 
+          test -d "$PLATFORM_DIR"
+          test -d "$BUILD_TOOLS_DIR"
+
+          echo ""
           echo "Android platform:"
-          ls -ld "${ANDROID_SDK_ROOT}/platforms/android-${ANDROID_API}"
+          ls -ld "$PLATFORM_DIR"
 
+          echo ""
           echo "Android build tools:"
-          ls -ld "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS}"
+          ls -ld "$BUILD_TOOLS_DIR"
+
+          echo ""
+          echo "Android SDK verification PASSED."
+
 
       # ============================================================
       # 13. INSTALL NPM DEPENDENCIES
       # ============================================================
+
       - name: Install npm dependencies
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -262,9 +326,11 @@ jobs:
             npm install
           fi
 
+
       # ============================================================
-      # 14. VERIFY CAPACITOR
+      # 14. VERIFY CAPACITOR VERSIONS
       # ============================================================
+
       - name: Verify Capacitor versions
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -294,6 +360,7 @@ jobs:
           let failed = false;
 
           for (const [name, version] of Object.entries(required)) {
+
             const actual = deps[name];
 
             console.log(
@@ -306,15 +373,23 @@ jobs:
           }
 
           if (failed) {
+            console.error(
+              "ERROR: Required Capacitor dependency is missing."
+            );
+
             process.exit(1);
           }
 
-          console.log("Capacitor verification passed.");
+          console.log(
+            "Capacitor dependency verification PASSED."
+          );
           NODE
 
+
       # ============================================================
-      # 15. BUILD WEB APP
+      # 15. BUILD WEB APPLICATION
       # ============================================================
+
       - name: Build web application
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -322,14 +397,21 @@ jobs:
           set -euo pipefail
 
           if npm run | grep -qE '^[[:space:]]+build'; then
+
             npm run build
+
           else
-            echo "No build script found."
+
+            echo "No npm build script found."
+            echo "Continuing with existing web assets."
+
           fi
 
+
       # ============================================================
-      # 16. CAPACITOR ANDROID
+      # 16. SETUP CAPACITOR ANDROID
       # ============================================================
+
       - name: Setup Capacitor Android
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -342,9 +424,11 @@ jobs:
 
           npx cap sync android
 
+
       # ============================================================
       # 17. VERIFY ANDROID PROJECT
       # ============================================================
+
       - name: Verify Android project
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -354,83 +438,268 @@ jobs:
           test -d android
           test -f android/app/build.gradle
 
+          echo "Android project verified."
+
+
       # ============================================================
-      # 18. FORCE COMPILE SDK / TARGET SDK
+      # 18. FORCE ANDROID API 36
+      #
+      # Handles all of these:
+      #
+      # compileSdk 35
+      # compileSdk rootProject.ext.compileSdkVersion
+      # compileSdkVersion rootProject.ext.compileSdkVersion
+      #
+      # and variables.gradle.
       # ============================================================
+
       - name: Configure Android API 36
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
 
+          echo "=========================================="
+          echo "Configuring Android API 36"
+          echo "=========================================="
+
+          VARIABLES_FILE="android/variables.gradle"
+          APP_GRADLE="android/app/build.gradle"
+
+          test -f "$APP_GRADLE"
+
+          # --------------------------------------------------------
+          # Create or fix variables.gradle
+          # --------------------------------------------------------
+
+          if [ ! -f "$VARIABLES_FILE" ]; then
+
+            cat > "$VARIABLES_FILE" <<'EOF'
+ext {
+    minSdkVersion = 23
+    compileSdkVersion = 36
+    targetSdkVersion = 36
+}
+EOF
+
+          else
+
+            python3 <<'PY'
+from pathlib import Path
+import re
+
+p = Path("android/variables.gradle")
+s = p.read_text()
+
+# compileSdkVersion
+if re.search(r'\bcompileSdkVersion\s*=\s*\d+', s):
+    s = re.sub(
+        r'\bcompileSdkVersion\s*=\s*\d+',
+        'compileSdkVersion = 36',
+        s
+    )
+else:
+    if 'compileSdkVersion = 36' not in s:
+        if 'ext {' in s:
+            s = s.replace(
+                'ext {',
+                'ext {\n    compileSdkVersion = 36',
+                1
+            )
+
+# minSdkVersion
+if re.search(r'\bminSdkVersion\s*=\s*\d+', s):
+    s = re.sub(
+        r'\bminSdkVersion\s*=\s*\d+',
+        'minSdkVersion = 23',
+        s
+    )
+else:
+    if 'minSdkVersion = 23' not in s:
+        if 'ext {' in s:
+            s = s.replace(
+                'ext {',
+                'ext {\n    minSdkVersion = 23',
+                1
+            )
+
+# targetSdkVersion
+if re.search(r'\btargetSdkVersion\s*=\s*\d+', s):
+    s = re.sub(
+        r'\btargetSdkVersion\s*=\s*\d+',
+        'targetSdkVersion = 36',
+        s
+    )
+else:
+    if 'targetSdkVersion = 36' not in s:
+        if 'ext {' in s:
+            s = s.replace(
+                'ext {',
+                'ext {\n    targetSdkVersion = 36',
+                1
+            )
+
+p.write_text(s)
+PY
+
+          fi
+
+
+          # --------------------------------------------------------
+          # Force compileSdk 36 in app/build.gradle
+          # regardless of previous value/reference.
+          # --------------------------------------------------------
+
           python3 <<'PY'
-          from pathlib import Path
-          import re
+from pathlib import Path
+import re
 
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
+p = Path("android/app/build.gradle")
+s = p.read_text()
 
-          if "android {" not in s:
-              raise SystemExit("android block not found")
+if "android {" not in s:
+    raise SystemExit("ERROR: android { block not found.")
 
-          if re.search(r'\bcompileSdk\s+\d+', s):
-              s = re.sub(
-                  r'\bcompileSdk\s+\d+',
-                  'compileSdk 36',
-                  s,
-                  count=1
-              )
-          else:
-              s = s.replace(
-                  "android {",
-                  "android {\n    compileSdk 36",
-                  1
-              )
+# ------------------------------------------------------------
+# compileSdk / compileSdkVersion
+# ------------------------------------------------------------
 
-          if re.search(r'\bminSdk\s+\d+', s):
-              s = re.sub(
-                  r'\bminSdk\s+\d+',
-                  'minSdk 23',
-                  s,
-                  count=1
-              )
+compile_patterns = [
+    r'^(\s*)compileSdk\s+.*$',
+    r'^(\s*)compileSdkVersion\s+.*$'
+]
 
-          if re.search(r'\btargetSdk\s+\d+', s):
-              s = re.sub(
-                  r'\btargetSdk\s+\d+',
-                  'targetSdk 36',
-                  s,
-                  count=1
-              )
+compile_found = False
 
-          p.write_text(s)
-          PY
+for pattern in compile_patterns:
 
-          echo "Android SDK settings:"
-          grep -nE "compileSdk|minSdk|targetSdk" \
+    if re.search(pattern, s, flags=re.MULTILINE):
+
+        s = re.sub(
+            pattern,
+            r'\g<1>compileSdk 36',
+            s,
+            count=1,
+            flags=re.MULTILINE
+        )
+
+        compile_found = True
+        break
+
+if not compile_found:
+
+    s = s.replace(
+        'android {',
+        'android {\n    compileSdk 36',
+        1
+    )
+
+
+# ------------------------------------------------------------
+# minSdk
+# ------------------------------------------------------------
+
+min_patterns = [
+    r'^(\s*)minSdk\s+.*$',
+    r'^(\s*)minSdkVersion\s+.*$'
+]
+
+for pattern in min_patterns:
+
+    if re.search(pattern, s, flags=re.MULTILINE):
+
+        s = re.sub(
+            pattern,
+            r'\g<1>minSdk 23',
+            s,
+            count=1,
+            flags=re.MULTILINE
+        )
+
+        break
+
+
+# ------------------------------------------------------------
+# targetSdk
+# ------------------------------------------------------------
+
+target_patterns = [
+    r'^(\s*)targetSdk\s+.*$',
+    r'^(\s*)targetSdkVersion\s+.*$'
+]
+
+for pattern in target_patterns:
+
+    if re.search(pattern, s, flags=re.MULTILINE):
+
+        s = re.sub(
+            pattern,
+            r'\g<1>targetSdk 36',
+            s,
+            count=1,
+            flags=re.MULTILINE
+        )
+
+        break
+
+
+p.write_text(s)
+PY
+
+
+          # --------------------------------------------------------
+          # Verify files
+          # --------------------------------------------------------
+
+          echo ""
+          echo "=========================================="
+          echo "variables.gradle"
+          echo "=========================================="
+
+          cat android/variables.gradle
+
+
+          echo ""
+          echo "=========================================="
+          echo "app/build.gradle SDK configuration"
+          echo "=========================================="
+
+          grep -nE \
+            "compileSdk|compileSdkVersion|minSdk|minSdkVersion|targetSdk|targetSdkVersion" \
             android/app/build.gradle || true
 
-          grep -q "compileSdk 36" android/app/build.gradle
-          grep -q "targetSdk 36" android/app/build.gradle
+
+          echo ""
+          echo "Android API 36 source configuration prepared."
+
 
       # ============================================================
       # 19. VERIFY APPLICATION ID
       # ============================================================
+
       - name: Verify application ID
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
 
-          grep -q \
+          if ! grep -q \
             'applicationId[[:space:]]*["'\'']org\.rkms\.connect["'\'']' \
             android/app/build.gradle
+          then
 
-          echo "Application ID verified."
+            echo "ERROR: org.rkms.connect applicationId not found."
+
+            exit 1
+          fi
+
+          echo "Application ID verified: org.rkms.connect"
+
 
       # ============================================================
-      # 20. FIREBASE
+      # 20. FIREBASE CONFIGURATION
       # ============================================================
+
       - name: Verify Firebase configuration
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -438,17 +707,31 @@ jobs:
           set -euo pipefail
 
           if [ -f android/app/google-services.json ]; then
-            grep -q "org.rkms.connect" \
+
+            echo "google-services.json found."
+
+            if ! grep -q "org.rkms.connect" \
               android/app/google-services.json
+            then
+
+              echo "ERROR: google-services.json does not contain org.rkms.connect."
+
+              exit 1
+            fi
 
             echo "Firebase configuration verified."
+
           else
+
             echo "WARNING: google-services.json not found."
+
           fi
 
+
       # ============================================================
-      # 21. VERIFY RELEASE SECRETS
+      # 21. VERIFY RELEASE SIGNING SECRETS
       # ============================================================
+
       - name: Verify release signing secrets
         shell: bash
         env:
@@ -459,31 +742,33 @@ jobs:
         run: |
           set -euo pipefail
 
-          [ -n "$KEYSTORE_BASE64" ] || {
-            echo "ERROR: ANDROID_KEYSTORE_BASE64 missing"
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 missing."
             exit 1
-          }
+          fi
 
-          [ -n "$KEYSTORE_PASSWORD" ] || {
-            echo "ERROR: ANDROID_KEYSTORE_PASSWORD missing"
+          if [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "ERROR: ANDROID_KEYSTORE_PASSWORD missing."
             exit 1
-          }
+          fi
 
-          [ -n "$KEY_ALIAS" ] || {
-            echo "ERROR: ANDROID_KEY_ALIAS missing"
+          if [ -z "$KEY_ALIAS" ]; then
+            echo "ERROR: ANDROID_KEY_ALIAS missing."
             exit 1
-          }
+          fi
 
-          [ -n "$KEY_PASSWORD" ] || {
-            echo "ERROR: ANDROID_KEY_PASSWORD missing"
+          if [ -z "$KEY_PASSWORD" ]; then
+            echo "ERROR: ANDROID_KEY_PASSWORD missing."
             exit 1
-          }
+          fi
 
           echo "Release signing secrets verified."
+
 
       # ============================================================
       # 22. CREATE RELEASE KEYSTORE
       # ============================================================
+
       - name: Configure release keystore
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -495,7 +780,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "$KEYSTORE_BASE64" | base64 --decode \
+          echo "$KEYSTORE_BASE64" \
+            | base64 --decode \
             > android/rkms-release.keystore
 
           test -s android/rkms-release.keystore
@@ -503,150 +789,342 @@ jobs:
           keytool -list \
             -keystore android/rkms-release.keystore \
             -storepass "$KEYSTORE_PASSWORD" \
-            -alias "$KEY_ALIAS" >/dev/null
+            -alias "$KEY_ALIAS" \
+            >/dev/null
 
           cat >> android/gradle.properties <<EOF
 
-          RKMS_RELEASE_STORE_FILE=../rkms-release.keystore
-          RKMS_RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD
-          RKMS_RELEASE_KEY_ALIAS=$KEY_ALIAS
-          RKMS_RELEASE_KEY_PASSWORD=$KEY_PASSWORD
-          EOF
+RKMS_RELEASE_STORE_FILE=../rkms-release.keystore
+RKMS_RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD
+RKMS_RELEASE_KEY_ALIAS=$KEY_ALIAS
+RKMS_RELEASE_KEY_PASSWORD=$KEY_PASSWORD
+EOF
 
-          echo "Release keystore verified."
+          echo "Release keystore configured and verified."
+
 
       # ============================================================
-      # 23. CONFIGURE RELEASE SIGNING SAFELY
+      # 23. CONFIGURE RELEASE SIGNING
+      #
+      # Safely handles existing signingConfigs/buildTypes.
       # ============================================================
-      - name: Configure release signing
+
+      - name: Configure Android release signing
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
 
           python3 <<'PY'
-          from pathlib import Path
-          import re
+from pathlib import Path
+import re
 
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
+p = Path("android/app/build.gradle")
+s = p.read_text()
 
-          signing = """
-              signingConfigs {
-                  release {
-                      storeFile file(project.findProperty("RKMS_RELEASE_STORE_FILE"))
-                      storePassword project.findProperty("RKMS_RELEASE_STORE_PASSWORD")
-                      keyAlias project.findProperty("RKMS_RELEASE_KEY_ALIAS")
-                      keyPassword project.findProperty("RKMS_RELEASE_KEY_PASSWORD")
-                  }
-              }
-          """
+# ------------------------------------------------------------
+# Find android block
+# ------------------------------------------------------------
 
-          if "signingConfigs {" not in s:
-              s = s.replace(
-                  "android {",
-                  "android {" + signing,
-                  1
-              )
-          elif "signingConfigs.release" not in s:
-              raise SystemExit(
-                  "Existing signingConfigs found but release signing configuration "
-                  "could not be safely detected."
-              )
+android_match = re.search(
+    r'\bandroid\s*\{',
+    s
+)
 
-          if "buildTypes {" not in s:
-              raise SystemExit("buildTypes block not found.")
+if not android_match:
+    raise SystemExit("ERROR: android block not found.")
 
-          # Remove an existing release signingConfig line so we can insert
-          # exactly one deterministic line.
-          s = re.sub(
-              r'^\s*signingConfig\s+signingConfigs\.release\s*$',
-              '',
-              s,
-              flags=re.MULTILINE
-          )
 
-          match = re.search(
-              r'buildTypes\s*\{',
-              s
-          )
+# ------------------------------------------------------------
+# Check whether signingConfigs exists
+# ------------------------------------------------------------
 
-          if not match:
-              raise SystemExit("buildTypes block not found.")
+has_signing_configs = re.search(
+    r'\bsigningConfigs\s*\{',
+    s
+) is not None
 
-          start = match.end()
 
-          # Find release block.
-          release_match = re.search(
-              r'\brelease\s*\{',
-              s[start:]
-          )
+# ------------------------------------------------------------
+# Add signingConfigs only when absent
+# ------------------------------------------------------------
 
-          if not release_match:
-              insert = """
-                  release {
-                      signingConfig signingConfigs.release
-                  }
-              """
+if not has_signing_configs:
 
-              s = s[:start] + insert + s[start:]
-          else:
-              release_start = start + release_match.end()
+    signing_block = """
+    signingConfigs {
+        release {
+            storeFile file(project.findProperty("RKMS_RELEASE_STORE_FILE"))
+            storePassword project.findProperty("RKMS_RELEASE_STORE_PASSWORD")
+            keyAlias project.findProperty("RKMS_RELEASE_KEY_ALIAS")
+            keyPassword project.findProperty("RKMS_RELEASE_KEY_PASSWORD")
+        }
+    }
+"""
 
-              s = (
-                  s[:release_start]
-                  + "\n        signingConfig signingConfigs.release\n"
-                  + s[release_start:]
-              )
+    insert_pos = android_match.end()
 
-          p.write_text(s)
-          PY
+    s = (
+        s[:insert_pos]
+        + signing_block
+        + s[insert_pos:]
+    )
 
-          echo "Release signing configured."
+
+# ------------------------------------------------------------
+# Find buildTypes
+# ------------------------------------------------------------
+
+build_types_match = re.search(
+    r'\bbuildTypes\s*\{',
+    s
+)
+
+if not build_types_match:
+    raise SystemExit("ERROR: buildTypes block not found.")
+
+
+# ------------------------------------------------------------
+# Find release block inside buildTypes
+# ------------------------------------------------------------
+
+bt_start = build_types_match.end()
+
+release_match = re.search(
+    r'\brelease\s*\{',
+    s[bt_start:]
+)
+
+
+# ------------------------------------------------------------
+# If release block exists:
+# add signingConfig only if absent.
+# ------------------------------------------------------------
+
+if release_match:
+
+    release_start = (
+        bt_start
+        + release_match.end()
+    )
+
+    # Determine the approximate release block
+    # using brace counting.
+
+    depth = 1
+    i = release_start
+
+    while i < len(s) and depth > 0:
+
+        if s[i] == '{':
+            depth += 1
+
+        elif s[i] == '}':
+            depth -= 1
+
+        i += 1
+
+    release_body = s[release_start:i-1]
+
+    if "signingConfig" not in release_body:
+
+        s = (
+            s[:release_start]
+            + """
+        signingConfig signingConfigs.release
+"""
+            + s[release_start:]
+        )
+
+else:
+
+    # ----------------------------------------------------------
+    # No release block: create one.
+    # ----------------------------------------------------------
+
+    insert_pos = build_types_match.end()
+
+    release_block = """
+        release {
+            signingConfig signingConfigs.release
+        }
+"""
+
+    s = (
+        s[:insert_pos]
+        + release_block
+        + s[insert_pos:]
+    )
+
+
+p.write_text(s)
+
+print("Release signing configuration prepared.")
+PY
+
 
       # ============================================================
-      # 24. GRADLE WRAPPER
+      # 24. FORCE GRADLE 8.11.1
       # ============================================================
-      - name: Verify Gradle wrapper
+
+      - name: Configure Gradle 8.11.1
+        shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          set -euo pipefail
+
+          WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
+
+          test -f "$WRAPPER"
+
+          python3 <<'PY'
+from pathlib import Path
+import re
+
+p = Path("android/gradle/wrapper/gradle-wrapper.properties")
+s = p.read_text()
+
+url = (
+    "https://services.gradle.org/distributions/"
+    "gradle-8.11.1-bin.zip"
+)
+
+if "distributionUrl=" in s:
+
+    s = re.sub(
+        r'^distributionUrl=.*$',
+        f'distributionUrl={url}',
+        s,
+        flags=re.MULTILINE
+    )
+
+else:
+
+    s += f"\ndistributionUrl={url}\n"
+
+p.write_text(s)
+PY
+
+          echo "Gradle wrapper:"
+          grep "distributionUrl" \
+            android/gradle/wrapper/gradle-wrapper.properties
+
+
+      # ============================================================
+      # 25. VERIFY GRADLE / ANDROID CONFIGURATION
+      #
+      # IMPORTANT:
+      # Do NOT verify only with grep for "compileSdk 36".
+      # The project may use rootProject.ext variables.
+      # Gradle itself is the authority.
+      # ============================================================
+
+      - name: Verify Gradle and Android configuration
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}/android
         run: |
           set -euo pipefail
 
-          test -f gradlew
           chmod +x gradlew
+
+          echo "=========================================="
+          echo "Gradle version"
+          echo "=========================================="
 
           ./gradlew --version
 
+
+          echo ""
+          echo "=========================================="
+          echo "Android Gradle configuration test"
+          echo "=========================================="
+
+          ./gradlew \
+            :app:tasks \
+            --no-daemon \
+            --stacktrace
+
+          echo ""
+          echo "Gradle Android configuration PASSED."
+
+
       # ============================================================
-      # 25. CLEAN
+      # 26. FINAL SDK VARIABLE CHECK
       # ============================================================
+
+      - name: Verify final Android SDK variables
+        shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          set -euo pipefail
+
+          echo "Checking variables.gradle..."
+
+          grep -q \
+            "minSdkVersion = 23" \
+            android/variables.gradle
+
+          grep -q \
+            "compileSdkVersion = 36" \
+            android/variables.gradle
+
+          grep -q \
+            "targetSdkVersion = 36" \
+            android/variables.gradle
+
+          echo ""
+          echo "variables.gradle verified."
+
+          cat android/variables.gradle
+
+
+      # ============================================================
+      # 27. CLEAN
+      # ============================================================
+
       - name: Clean Android build
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}/android
         run: |
           set -euo pipefail
 
-          ./gradlew clean --no-daemon
+          ./gradlew \
+            clean \
+            --no-daemon \
+            --stacktrace
+
 
       # ============================================================
-      # 26. BUILD FINAL SIGNED RELEASE APK ONLY
+      # 28. BUILD FINAL SIGNED RELEASE APK ONLY
+      #
+      # NO DEBUG APK
+      # NO AAB
       # ============================================================
+
       - name: Build Final Signed Release APK
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}/android
         run: |
           set -euo pipefail
 
+          echo "=========================================="
+          echo "Building FINAL SIGNED RELEASE APK"
+          echo "=========================================="
+
           ./gradlew \
             :app:assembleRelease \
             --no-daemon \
             --stacktrace
 
+          echo ""
+          echo "Release APK build command completed."
+
+
       # ============================================================
-      # 27. VERIFY APK
+      # 29. VERIFY APK EXISTS
       # ============================================================
-      - name: Verify release APK
+
+      - name: Verify final release APK
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
@@ -655,17 +1133,31 @@ jobs:
           APK="android/app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ERROR: Release APK not generated."
-            find android/app/build/outputs -type f -print || true
+
+            echo "ERROR: Release APK was not generated."
+
+            echo ""
+            echo "Available build outputs:"
+
+            find android/app/build/outputs \
+              -type f \
+              -print || true
+
             exit 1
           fi
 
-          echo "Final APK:"
+          echo ""
+          echo "=========================================="
+          echo "FINAL APK"
+          echo "=========================================="
+
           ls -lh "$APK"
 
+
       # ============================================================
-      # 28. VERIFY APK SIGNATURE
+      # 30. VERIFY APK SIGNATURE
       # ============================================================
+
       - name: Verify APK signature
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -674,13 +1166,18 @@ jobs:
 
           APK="android/app/build/outputs/apk/release/app-release.apk"
 
-          apksigner verify --verbose "$APK"
+          apksigner verify \
+            --verbose \
+            "$APK"
 
+          echo ""
           echo "APK signature verification PASSED."
 
+
       # ============================================================
-      # 29. VERIFY APK PACKAGE
+      # 31. VERIFY PACKAGE NAME
       # ============================================================
+
       - name: Verify APK package
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -690,14 +1187,23 @@ jobs:
           APK="android/app/build/outputs/apk/release/app-release.apk"
 
           if command -v aapt >/dev/null 2>&1; then
-            aapt dump badging "$APK" | grep \
-              "package: name='org.rkms.connect'"
+
+            aapt dump badging "$APK" \
+              | grep \
+                "package: name='org.rkms.connect'"
+
+          else
+
+            echo "aapt not available; package check skipped."
+
           fi
 
+
       # ============================================================
-      # 30. APK SHA256
+      # 32. APK SHA256
       # ============================================================
-      - name: Generate APK SHA256
+
+      - name: Generate final APK SHA256
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
@@ -708,9 +1214,11 @@ jobs:
           sha256sum "$APK" \
             | tee RKMS_FINAL_RELEASE_APK_SHA256.txt
 
+
       # ============================================================
-      # 31. PREPARE FINAL APK
+      # 33. PREPARE FINAL RELEASE
       # ============================================================
+
       - name: Prepare final release artifact
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -732,12 +1240,14 @@ jobs:
             final-release/
 
           echo ""
-          echo "Final release:"
+          echo "Final release files:"
           ls -lh final-release
 
+
       # ============================================================
-      # 32. UPLOAD FINAL APK
+      # 34. UPLOAD FINAL SIGNED RELEASE APK
       # ============================================================
+
       - name: Upload Final Signed Release APK
         uses: actions/upload-artifact@v4
         with:
@@ -749,9 +1259,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+
       # ============================================================
-      # 33. FINAL SUMMARY
+      # 35. FINAL SUMMARY
       # ============================================================
+
       - name: Final build summary
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -777,7 +1289,7 @@ jobs:
           echo "Android API:"
           echo "$ANDROID_API"
           echo ""
-          echo "Build tools:"
+          echo "Build Tools:"
           echo "$BUILD_TOOLS"
           echo ""
           echo "Node:"
@@ -786,10 +1298,16 @@ jobs:
           echo "Java:"
           echo "$JAVA_VERSION"
           echo ""
+          echo "AGP:"
+          echo "$AGP_VERSION"
+          echo ""
+          echo "Gradle:"
+          echo "$GRADLE_VERSION"
+          echo ""
           echo "Release APK:"
           ls -lh "$APK"
           echo ""
-          echo "SHA256:"
+          echo "APK SHA256:"
           sha256sum "$APK"
           echo ""
           echo "Debug APK: NOT BUILT"
