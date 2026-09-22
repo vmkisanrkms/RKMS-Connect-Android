@@ -81,16 +81,52 @@ jobs:
       # ANDROID SDK
       #
       # IMPORTANT:
-      # Do NOT install/request the deprecated "tools" package.
+      # Do NOT pass API 36 packages through the setup-android
+      # multiline packages input.
+      #
+      # setup-android installs command-line tools and platform-tools.
+      # API 36 and Build Tools are installed separately with sdkmanager.
       # ============================================================
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: |
-            platform-tools
-            platforms;android-36
-            build-tools;36.0.0
+          packages: ''
+
+      - name: Install Android API 36 SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "ANDROID_HOME=${ANDROID_HOME:-not-set}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-not-set}"
+
+          test -n "${ANDROID_HOME:-}"
+          test -d "$ANDROID_HOME"
+
+          echo "Installing Android Platform 36..."
+          echo "Installing Android Build Tools 36.0.0..."
+
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+          echo "Checking installed packages..."
+
+          test -d \
+            "$ANDROID_HOME/platforms/android-36"
+
+          test -d \
+            "$ANDROID_HOME/build-tools/36.0.0"
+
+          test -x \
+            "$ANDROID_HOME/build-tools/36.0.0/aapt"
+
+          test -x \
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+
+          echo "ANDROID PLATFORM 36: PASS"
+          echo "BUILD TOOLS 36.0.0: PASS"
 
 
       # ============================================================
@@ -166,7 +202,6 @@ jobs:
           set -euo pipefail
 
           rm -rf rkms-build
-
           mkdir -p rkms-build
 
           unzip -q \
@@ -255,7 +290,6 @@ jobs:
       # ============================================================
       # VERIFY PACKAGE.JSON
       #
-      # IMPORTANT:
       # Do NOT compare the build script as an exact string.
       # ============================================================
 
@@ -354,9 +388,6 @@ jobs:
 
       # ============================================================
       # REPAIR KNOWN MALFORMED NATIVE SETUP BLOCK
-      #
-      # The ZIP contains the known malformed nested heredoc.
-      # We repair only that block.
       # ============================================================
 
       - name: Repair known malformed native setup block
@@ -419,10 +450,6 @@ jobs:
           # Stable FCM notification icon + Android manifest requirements.
           # ------------------------------------------------------------------
 
-          RECORD_AUDIO_PERMISSION="android.permission.RECORD_AUDIO"
-          POST_NOTIFICATIONS_PERMISSION="android.permission.POST_NOTIFICATIONS"
-          PREDICTIVE_BACK_ATTRIBUTE='android:enableOnBackInvokedCallback="true"'
-
           RES_DIR="android/app/src/main/res"
           VALUES_DIR="$RES_DIR/values"
           DRAWABLE_DIR="$RES_DIR/drawable"
@@ -439,29 +466,9 @@ jobs:
               "$STRINGS"
             then
 
-              python3 - <<'PY3'
-          from pathlib import Path
-
-          p = Path(
-              "android/app/src/main/res/values/strings.xml"
-          )
-
-          s = p.read_text(
-              encoding="utf-8"
-          )
-
-          if "rkms_default_notification_channel_id" not in s:
-
-              s = s.replace(
-                  "</resources>",
-                  '    <string name="rkms_default_notification_channel_id">rkms_notifications_v2</string>\n</resources>'
-              )
-
-              p.write_text(
-                  s,
-                  encoding="utf-8"
-              )
-          PY3
+              sed -i \
+                's#</resources>#    <string name="rkms_default_notification_channel_id">rkms_notifications_v2</string>\n</resources>#' \
+                "$STRINGS"
 
             fi
 
@@ -492,125 +499,72 @@ jobs:
           XML
 
 
-          python3 - <<'PY3'
-          from pathlib import Path
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
 
-          p = Path(
-              "android/app/src/main/AndroidManifest.xml"
-          )
-
-          if not p.exists():
-              raise SystemExit(
-                  "AndroidManifest.xml not found"
-              )
-
-          s = p.read_text(
-              encoding="utf-8"
-          )
-
-          application_pos = s.find(
-              "<application"
-          )
-
-          if application_pos < 0:
-              raise SystemExit(
-                  "AndroidManifest application tag missing"
-              )
+          if [ ! -f "$MANIFEST" ]; then
+            echo "AndroidManifest.xml not found"
+            exit 1
+          fi
 
 
-          if (
-              "android.permission.RECORD_AUDIO"
-              not in s
-          ):
+          if ! grep -Fq \
+            "android.permission.RECORD_AUDIO" \
+            "$MANIFEST"
+          then
 
-              permissions = (
-                  '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
-              )
+            sed -i \
+              '/<application/i\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' \
+              "$MANIFEST"
 
-              s = (
-                  s[:application_pos]
-                  + permissions
-                  + s[application_pos:]
-              )
+          fi
 
 
-          if (
-              "android.permission.POST_NOTIFICATIONS"
-              not in s
-          ):
+          if ! grep -Fq \
+            "android.permission.POST_NOTIFICATIONS" \
+            "$MANIFEST"
+          then
 
-              application_pos = s.find(
-                  "<application"
-              )
+            sed -i \
+              '/<application/i\    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />' \
+              "$MANIFEST"
 
-              permissions = (
-                  '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
-              )
-
-              s = (
-                  s[:application_pos]
-                  + permissions
-                  + s[application_pos:]
-              )
+          fi
 
 
-          if (
-              'android:enableOnBackInvokedCallback="true"'
-              not in s
-          ):
+          if ! grep -Fq \
+            'android:enableOnBackInvokedCallback="true"' \
+            "$MANIFEST"
+          then
 
-              application_pos = s.find(
-                  "<application"
-              )
+            sed -i \
+              's#<application#<application android:enableOnBackInvokedCallback="true"#' \
+              "$MANIFEST"
 
-              end = (
-                  application_pos
-                  + len("<application")
-              )
-
-              s = (
-                  s[:end]
-                  + ' android:enableOnBackInvokedCallback="true"'
-                  + s[end:]
-              )
+          fi
 
 
-          metadata = (
-              '        <meta-data '
-              'android:name="com.google.firebase.messaging.default_notification_channel_id" '
-              'android:value="@string/rkms_default_notification_channel_id" />\n'
-              '        <meta-data '
-              'android:name="com.google.firebase.messaging.default_notification_icon" '
-              'android:resource="@drawable/ic_stat_rkms" />\n'
-          )
+          if ! grep -Fq \
+            "com.google.firebase.messaging.default_notification_channel_id" \
+            "$MANIFEST"
+          then
+
+            sed -i \
+              '/<\/application>/i\        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="@string/rkms_default_notification_channel_id" />' \
+              "$MANIFEST"
+
+          fi
 
 
-          if (
-              "com.google.firebase.messaging.default_notification_channel_id"
-              not in s
-          ):
+          if ! grep -Fq \
+            "com.google.firebase.messaging.default_notification_icon" \
+            "$MANIFEST"
+          then
 
-              closing = s.find(
-                  "</application>"
-              )
+            sed -i \
+              '/<\/application>/i\        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_rkms" />' \
+              "$MANIFEST"
 
-              if closing < 0:
-                  raise SystemExit(
-                      "AndroidManifest application closing tag missing"
-                  )
-
-              s = (
-                  s[:closing]
-                  + metadata
-                  + s[closing:]
-              )
-
-
-          p.write_text(
-              s,
-              encoding="utf-8"
-          )
-          PY3
+          fi
 
           '''
 
@@ -1134,10 +1088,8 @@ jobs:
             'minSdkVersion[[:space:]]*=?[[:space:]]*22([[:space:]]|$)' \
             android
           then
-
             echo "::error::minSdkVersion 22 remains."
             exit 1
-
           fi
 
           echo "FINAL SDK VERSION CONFIGURATION: PASS"
@@ -1439,7 +1391,6 @@ jobs:
           test -n "$SDK_ROOT"
 
           AAPT="$SDK_ROOT/build-tools/$BUILD_TOOLS/aapt"
-
           APKSIGNER="$SDK_ROOT/build-tools/$BUILD_TOOLS/apksigner"
 
           test -x "$AAPT"
@@ -1520,7 +1471,6 @@ jobs:
           test -s \
             "$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256"
 
-
           if find "$RKMS_ROOT/android" \
             -type f \
             -name "*.aab" \
@@ -1533,7 +1483,6 @@ jobs:
 
           fi
 
-
           if find "$RKMS_ROOT/android" \
             -type f \
             -iname "*debug*.apk" \
@@ -1545,7 +1494,6 @@ jobs:
             exit 1
 
           fi
-
 
           SIZE="$(
             stat -c%s "$APK_PATH"
