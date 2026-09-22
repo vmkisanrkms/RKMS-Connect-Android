@@ -24,25 +24,40 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+
+      # ============================================================
+      # 2. NODE 22
+      # ============================================================
+
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Setup Java
+
+      # ============================================================
+      # 3. JAVA 17
+      # ============================================================
+
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
+
       # ============================================================
-      # FIND SOURCE ZIP
+      # 4. FIND SOURCE ZIP
       # ============================================================
 
-      - name: Find source ZIP
+      - name: Find RKMS source ZIP
         shell: bash
         run: |
           set -euo pipefail
@@ -73,30 +88,37 @@ jobs:
 
           echo "SOURCE_ZIP=${SOURCE_ZIP}" >> "${GITHUB_ENV}"
 
-          echo "Using:"
+          echo "=============================================="
+          echo "RKMS SOURCE ZIP"
+          echo "=============================================="
           echo "${SOURCE_ZIP}"
-
-          echo "SHA256:"
+          echo ""
           sha256sum "${SOURCE_ZIP}"
+          echo "=============================================="
+
 
       # ============================================================
-      # EXTRACT
+      # 5. EXTRACT SOURCE
       # ============================================================
 
-      - name: Extract source
+      - name: Extract RKMS source
         shell: bash
         run: |
           set -euo pipefail
 
           rm -rf rkms-build
+
           mkdir -p rkms-build
 
-          unzip -q "${SOURCE_ZIP}" -d rkms-build
+          unzip -q \
+            "${SOURCE_ZIP}" \
+            -d rkms-build
 
           echo "SOURCE EXTRACTION: PASS"
 
+
       # ============================================================
-      # FIND PROJECT ROOT
+      # 6. FIND PROJECT ROOT
       # ============================================================
 
       - name: Find RKMS project root
@@ -109,7 +131,7 @@ jobs:
           if [ -f "rkms-build/package.json" ]; then
             ROOT="rkms-build"
           else
-            FILE="$(
+            PACKAGE_FILE="$(
               find rkms-build \
                 -type f \
                 -name "package.json" \
@@ -118,13 +140,20 @@ jobs:
                 | head -n 1 || true
             )"
 
-            if [ -n "${FILE}" ]; then
-              ROOT="$(dirname "${FILE}")"
+            if [ -n "${PACKAGE_FILE}" ]; then
+              ROOT="$(dirname "${PACKAGE_FILE}")"
             fi
           fi
 
           if [ -z "${ROOT}" ]; then
-            echo "::error::package.json not found."
+            echo "::error::package.json not found inside source ZIP."
+
+            find rkms-build \
+              -maxdepth 5 \
+              -type f \
+              -print \
+              | sort
+
             exit 1
           fi
 
@@ -132,11 +161,12 @@ jobs:
 
           echo "RKMS_ROOT=${ROOT}"
 
+
       # ============================================================
-      # SOURCE CHECK
+      # 7. VERIFY SOURCE
       # ============================================================
 
-      - name: Verify source
+      - name: Verify RKMS source
         shell: bash
         run: |
           set -euo pipefail
@@ -147,10 +177,13 @@ jobs:
           test -s google-services.json
           test -f scripts/setup-android-native.sh
 
-          echo "SOURCE CHECK: PASS"
+          echo "package.json: PASS"
+          echo "google-services.json: PASS"
+          echo "setup-android-native.sh: PASS"
+
 
       # ============================================================
-      # CAPACITOR CHECK
+      # 8. VERIFY CAPACITOR
       # ============================================================
 
       - name: Verify Capacitor versions
@@ -202,6 +235,7 @@ jobs:
               console.error(
                 `${name}: expected ${wanted}, found ${actual}`
               );
+
               failed = true;
             }
           }
@@ -210,11 +244,12 @@ jobs:
             process.exit(1);
           }
 
-          console.log("CAPACITOR CHECK: PASS");
+          console.log("CAPACITOR VERSION CHECK: PASS");
           NODE
 
+
       # ============================================================
-      # NPM
+      # 9. NPM INSTALL
       # ============================================================
 
       - name: Install npm dependencies
@@ -225,15 +260,20 @@ jobs:
           cd "${RKMS_ROOT}"
 
           if [ -f package-lock.json ]; then
-            npm ci --no-audit --no-fund
+            npm ci \
+              --no-audit \
+              --no-fund
           else
-            npm install --no-audit --no-fund
+            npm install \
+              --no-audit \
+              --no-fund
           fi
 
           echo "NPM INSTALL: PASS"
 
+
       # ============================================================
-      # WEB BUILD
+      # 10. WEB BUILD
       # ============================================================
 
       - name: Build web application
@@ -250,12 +290,18 @@ jobs:
 
           echo "WEB BUILD: PASS"
 
+
       # ============================================================
-      # ANDROID SDK
+      # 11. ANDROID SDK
       # ============================================================
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+
+
+      # ============================================================
+      # 12. ANDROID API 36
+      # ============================================================
 
       - name: Install Android API 36
         shell: bash
@@ -286,7 +332,9 @@ jobs:
             exit 1
           fi
 
-          yes | "${SDKMANAGER}" --licenses >/dev/null 2>&1 || true
+          yes | "${SDKMANAGER}" \
+            --licenses \
+            >/dev/null 2>&1 || true
 
           "${SDKMANAGER}" \
             "platform-tools" \
@@ -295,8 +343,9 @@ jobs:
 
           echo "ANDROID API 36: PASS"
 
+
       # ============================================================
-      # CREATE ANDROID
+      # 13. CREATE CAPACITOR ANDROID
       # ============================================================
 
       - name: Create Capacitor Android
@@ -314,10 +363,11 @@ jobs:
           test -f android/app/build.gradle
           test -f android/gradlew
 
-          echo "CAPACITOR ANDROID: PASS"
+          echo "CAPACITOR ANDROID PROJECT: PASS"
+
 
       # ============================================================
-      # ANDROID 16 / API 36
+      # 14. ANDROID 16 / GRADLE
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -328,16 +378,17 @@ jobs:
           cd "${RKMS_ROOT}"
 
           if [ -f scripts/configure-android-16.sh ]; then
-
             chmod +x scripts/configure-android-16.sh
-
             bash -n scripts/configure-android-16.sh
-
             ./scripts/configure-android-16.sh
-
           fi
 
           WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
+
+          if [ ! -f "${WRAPPER}" ]; then
+            echo "::error::Gradle wrapper properties not found."
+            exit 1
+          fi
 
           sed -i \
             -E \
@@ -346,27 +397,49 @@ jobs:
 
           if [ -f android/variables.gradle ]; then
 
-            sed -i \
-              -E \
-              's/(compileSdkVersion[[:space:]]*=[[:space:]]*)[0-9]+/\136/' \
-              android/variables.gradle || true
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-            sed -i \
-              -E \
-              's/(targetSdkVersion[[:space:]]*=[[:space:]]*)[0-9]+/\136/' \
-              android/variables.gradle || true
+          p = Path(
+              "android/variables.gradle"
+          )
 
-            sed -i \
-              -E \
-              's/(minSdkVersion[[:space:]]*=[[:space:]]*)[0-9]+/\123/' \
-              android/variables.gradle || true
+          s = p.read_text(
+              encoding="utf-8"
+          )
+
+          s = re.sub(
+              r"(compileSdkVersion\s*=\s*)\d+",
+              r"\g<1>36",
+              s
+          )
+
+          s = re.sub(
+              r"(targetSdkVersion\s*=\s*)\d+",
+              r"\g<1>36",
+              s
+          )
+
+          s = re.sub(
+              r"(minSdkVersion\s*=\s*)\d+",
+              r"\g<1>23",
+              s
+          )
+
+          p.write_text(
+              s,
+              encoding="utf-8"
+          )
+          PY
 
           fi
 
           echo "ANDROID 16/API 36 CONFIGURATION: PASS"
 
+
       # ============================================================
-      # CAPACITOR SYNC
+      # 15. CAPACITOR SYNC
       # ============================================================
 
       - name: Capacitor sync
@@ -380,12 +453,20 @@ jobs:
 
           echo "CAPACITOR SYNC: PASS"
 
+
       # ============================================================
-      # FIX BROKEN setup-android-native.sh
+      # 16. REPAIR BROKEN setup-android-native.sh
+      #
+      # FIXES BOTH:
+      #
+      # SyntaxError: invalid syntax
+      #
+      # AND:
+      #
+      # PY3: command not found
       #
       # IMPORTANT:
-      # No nested multiline replacement.
-      # Therefore YAML remains valid.
+      # This repair contains NO nested shell heredoc.
       # ============================================================
 
       - name: Repair native setup script
@@ -403,7 +484,9 @@ jobs:
           import sys
           from pathlib import Path
 
-          path = Path(sys.argv[1])
+          path = Path(
+              sys.argv[1]
+          )
 
           text = path.read_text(
               encoding="utf-8"
@@ -416,108 +499,133 @@ jobs:
           )
 
           if start_marker not in text:
+
               print(
-                  "Broken heredoc block not found."
+                  "Known broken Python heredoc was not found."
               )
+
               print(
-                  "Native script already appears repaired."
-              )
-              raise SystemExit(0)
-
-          start = text.index(
-              start_marker
-          )
-
-          end_marker = "\nPY3\n\n\nMAIN="
-
-          end = text.find(
-              end_marker,
-              start
-          )
-
-          if end < 0:
-              raise SystemExit(
-                  "Could not find broken block ending."
+                  "Checking current script instead."
               )
 
-          replacement_lines = [
-              "# Stable white notification icon for FCM system notifications.",
-              'DRAWABLE_DIR="$RES_DIR/drawable"',
-              'mkdir -p "$DRAWABLE_DIR"',
-              "",
-              'cat > "$DRAWABLE_DIR/ic_stat_rkms.xml" <<\'XML\'',
-              '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
-              '    android:width="24dp"',
-              '    android:height="24dp"',
-              '    android:viewportWidth="24"',
-              '    android:viewportHeight="24">',
-              "",
-              '    <path',
-              '        android:fillColor="#FFFFFFFF"',
-              '        android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>',
-              "",
-              "</vector>",
-              "XML",
-              "",
-              "python3 - <<'PY3'",
-              "from pathlib import Path",
-              "",
-              'p=Path("android/app/src/main/AndroidManifest.xml")',
-              "s=p.read_text()",
-              "",
-              "perm=(",
-              '    \'    <uses-permission android:name="android.permission.RECORD_AUDIO" />\\n\'',
-              '    \'    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\\n\'',
-              ")",
-              "",
-              'if "android.permission.RECORD_AUDIO" not in s:',
-              '    pos=s.find("<application")',
-              "    if pos < 0:",
-              '        raise SystemExit("AndroidManifest application tag missing")',
-              "    s=s[:pos]+perm+s[pos:]",
-              "",
-              "meta=(",
-              '    \'    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="@string/rkms_default_notification_channel_id" />\\n\'',
-              '    \'    <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_rkms" />\\n\'',
-              ")",
-              "",
-              'if "com.google.firebase.messaging.default_notification_channel_id" not in s:',
-              '    s=s.replace("<application", \'<application android:enableOnBackInvokedCallback="true"\', 1)',
-              '    s=s.replace("</application>", meta+"</application>", 1)',
-              "",
-              "p.write_text(s)",
-              "PY3",
-              ""
-          ]
+          else:
 
-          replacement = "\n".join(
-              replacement_lines
-          )
+              start = text.index(
+                  start_marker
+              )
 
-          text = (
-              text[:start]
-              + replacement
-              + text[end + 1:]
-          )
+              main_marker = "\nMAIN="
 
-          path.write_text(
-              text,
+              end = text.find(
+                  main_marker,
+                  start
+              )
+
+              if end < 0:
+
+                  raise SystemExit(
+                      "Could not locate MAIN= after broken notification block."
+                  )
+
+              replacement = r'''
+# Stable white notification icon for FCM system notifications.
+
+DRAWABLE_DIR="$RES_DIR/drawable"
+
+mkdir -p "$DRAWABLE_DIR"
+
+python3 -c 'from pathlib import Path; p=Path("android/app/src/main/res/drawable/ic_stat_rkms.xml"); p.parent.mkdir(parents=True, exist_ok=True); p.write_text("""<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>
+</vector>
+""", encoding="utf-8")'
+
+python3 -c 'from pathlib import Path; p=Path("android/app/src/main/AndroidManifest.xml"); s=p.read_text(encoding="utf-8"); perm="    <uses-permission android:name=\"android.permission.RECORD_AUDIO\" />\n    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\" />\n"; pos=s.find("<application"); if pos < 0: raise SystemExit("AndroidManifest application tag missing"); s=s if "android.permission.RECORD_AUDIO" in s else s[:pos]+perm+s[pos:]; meta="    <meta-data android:name=\"com.google.firebase.messaging.default_notification_channel_id\" android:value=\"@string/rkms_default_notification_channel_id\" />\n    <meta-data android:name=\"com.google.firebase.messaging.default_notification_icon\" android:resource=\"@drawable/ic_stat_rkms\" />\n"; s=s if "com.google.firebase.messaging.default_notification_channel_id" in s else s.replace("<application", "<application android:enableOnBackInvokedCallback=\"true\"", 1).replace("</application>", meta+"</application>", 1); p.write_text(s, encoding="utf-8")'
+
+'''
+
+              text = (
+                  text[:start]
+                  + replacement
+                  + text[end:]
+              )
+
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
+              print(
+                  "KNOWN BROKEN BLOCK REPAIRED: PASS"
+              )
+
+          # --------------------------------------------------------
+          # Remove ONLY stray PY3 markers that occur after the
+          # repaired notification section.
+          # Do NOT remove legitimate earlier heredoc markers.
+          # --------------------------------------------------------
+
+          text = path.read_text(
               encoding="utf-8"
           )
 
+          marker = (
+              "# Stable white notification icon"
+          )
+
+          if marker in text:
+
+              start = text.index(
+                  marker
+              )
+
+              before = text[:start]
+              after = text[start:]
+
+              lines = after.splitlines(
+                  keepends=True
+              )
+
+              cleaned = []
+
+              for line in lines:
+
+                  if line.strip() == "PY3":
+                      continue
+
+                  cleaned.append(line)
+
+              text = (
+                  before
+                  + "".join(cleaned)
+              )
+
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
           print(
-              "BROKEN NATIVE SETUP BLOCK REPAIRED: PASS"
+              "STRAY PY3 CLEANUP: PASS"
           )
           PY
 
-          chmod +x "${SCRIPT}"
+          chmod +x \
+            "${SCRIPT}"
 
-          bash -n "${SCRIPT}"
+          bash -n \
+            "${SCRIPT}"
 
-          echo "NATIVE SCRIPT SYNTAX: PASS"
+          echo "NATIVE SCRIPT BASH SYNTAX: PASS"
+
 
       # ============================================================
-      # RUN NATIVE SETUP
+      # 17. RUN NATIVE SETUP
       # ============================================================
 
       - name: Configure RKMS native Android
@@ -527,16 +635,19 @@ jobs:
 
           cd "${RKMS_ROOT}"
 
-          chmod +x scripts/setup-android-native.sh
+          chmod +x \
+            scripts/setup-android-native.sh
 
-          bash -n scripts/setup-android-native.sh
+          bash -n \
+            scripts/setup-android-native.sh
 
           ./scripts/setup-android-native.sh
 
           echo "RKMS NATIVE ANDROID SETUP: PASS"
 
+
       # ============================================================
-      # FIREBASE CONFIG
+      # 18. FIREBASE
       # ============================================================
 
       - name: Configure Firebase
@@ -561,8 +672,9 @@ jobs:
 
           echo "FIREBASE CONFIG: PASS"
 
+
       # ============================================================
-      # FIREBASE DEPENDENCIES
+      # 19. FIREBASE DEPENDENCIES
       # ============================================================
 
       - name: Configure Firebase dependencies
@@ -578,7 +690,9 @@ jobs:
           import sys
           from pathlib import Path
 
-          path = Path(sys.argv[1])
+          path = Path(
+              sys.argv[1]
+          )
 
           s = path.read_text(
               encoding="utf-8"
@@ -605,7 +719,9 @@ jobs:
 
                   s = s.replace(
                       marker,
-                      marker + "\n    " + dep,
+                      marker
+                      + "\n    "
+                      + dep,
                       1
                   )
 
@@ -622,7 +738,7 @@ jobs:
           )
 
           print(
-              "DEPENDENCIES CONFIGURED"
+              "ANDROID DEPENDENCIES CONFIGURED"
           )
           PY
 
@@ -635,13 +751,20 @@ jobs:
             "${APP_GRADLE}"
 
           grep -Fq \
+            "androidx.credentials:credentials-play-services-auth:1.5.0" \
+            "${APP_GRADLE}"
+
+          grep -Fq \
             "androidx.biometric:biometric:1.1.0" \
             "${APP_GRADLE}"
 
           echo "FIREBASE DEPENDENCIES: PASS"
+          echo "CREDENTIAL MANAGER: PASS"
+          echo "BIOMETRIC: PASS"
+
 
       # ============================================================
-      # FIREBASE INITIALIZATION
+      # 20. FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -653,9 +776,10 @@ jobs:
 
           MAIN="$(
             find android/app/src/main \
-              -name MainActivity.java \
+              -type f \
+              -name "MainActivity.java" \
               -print \
-              | head -n 1
+              | head -n 1 || true
           )"
 
           if [ -z "${MAIN}" ]; then
@@ -672,13 +796,17 @@ jobs:
           import sys
           from pathlib import Path
 
-          path = Path(sys.argv[1])
+          path = Path(
+              sys.argv[1]
+          )
 
           s = path.read_text(
               encoding="utf-8"
           )
 
-          marker = "super.onCreate(savedInstanceState);"
+          marker = (
+              "super.onCreate(savedInstanceState);"
+          )
 
           if marker in s:
 
@@ -691,18 +819,18 @@ jobs:
 
           else:
 
-              marker = (
+              class_marker = (
                   "public class MainActivity extends BridgeActivity {"
               )
 
-              if marker not in s:
+              if class_marker not in s:
                   raise SystemExit(
                       "MainActivity class marker missing"
                   )
 
               s = s.replace(
-                  marker,
-                  marker
+                  class_marker,
+                  class_marker
                   + "\n\n"
                   + "    @Override\n"
                   + "    public void onCreate(android.os.Bundle savedInstanceState) {\n"
@@ -726,11 +854,12 @@ jobs:
 
           echo "FIREBASE INITIALIZATION: PASS"
 
+
       # ============================================================
-      # NATIVE BRIDGE CHECK
+      # 21. NATIVE BRIDGE
       # ============================================================
 
-      - name: Verify native bridge
+      - name: Verify RKMS native bridge
         shell: bash
         run: |
           set -euo pipefail
@@ -739,9 +868,10 @@ jobs:
 
           BRIDGE="$(
             find android/app/src/main \
-              -name RKMSNativeBridge.java \
+              -type f \
+              -name "RKMSNativeBridge.java" \
               -print \
-              | head -n 1
+              | head -n 1 || true
           )"
 
           if [ -z "${BRIDGE}" ]; then
@@ -758,12 +888,67 @@ jobs:
             "${BRIDGE}"
 
           echo "RKMS NATIVE BRIDGE: PASS"
+          echo "ANDROID KEYSTORE: PASS"
+          echo "CREDENTIAL MANAGER: PASS"
+
 
       # ============================================================
-      # RELEASE SIGNING SECRETS
+      # 22. MANIFEST CHECK
       # ============================================================
 
-      - name: Verify signing secrets
+      - name: Verify Android permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${RKMS_ROOT}"
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          test -s "${MANIFEST}"
+
+          grep -Fq \
+            "android.permission.RECORD_AUDIO" \
+            "${MANIFEST}"
+
+          grep -Fq \
+            "android.permission.POST_NOTIFICATIONS" \
+            "${MANIFEST}"
+
+          echo "RECORD_AUDIO: PASS"
+          echo "POST_NOTIFICATIONS: PASS"
+
+
+      # ============================================================
+      # 23. FINAL SOURCE CHECK
+      # ============================================================
+
+      - name: Final source validation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${RKMS_ROOT}"
+
+          node --check app.js
+
+          bash -n \
+            scripts/setup-android-native.sh
+
+          test -s \
+            android/app/google-services.json
+
+          test -s \
+            android/app/src/main/AndroidManifest.xml
+
+          echo "FINAL SOURCE VALIDATION: PASS"
+
+
+      # ============================================================
+      # 24. SIGNING SECRETS
+      # ============================================================
+
+      - name: Verify release signing secrets
         shell: bash
         env:
           RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
@@ -774,15 +959,31 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "${RKMS_KEYSTORE_BASE64:-}"
-          test -n "${RKMS_KEYSTORE_PASSWORD:-}"
-          test -n "${RKMS_KEY_ALIAS:-}"
-          test -n "${RKMS_KEY_PASSWORD:-}"
+          if [ -z "${RKMS_KEYSTORE_BASE64:-}" ]; then
+            echo "::error::RKMS_KEYSTORE_BASE64 secret is missing."
+            exit 1
+          fi
 
-          echo "SIGNING SECRETS: PASS"
+          if [ -z "${RKMS_KEYSTORE_PASSWORD:-}" ]; then
+            echo "::error::RKMS_KEYSTORE_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          if [ -z "${RKMS_KEY_ALIAS:-}" ]; then
+            echo "::error::RKMS_KEY_ALIAS secret is missing."
+            exit 1
+          fi
+
+          if [ -z "${RKMS_KEY_PASSWORD:-}" ]; then
+            echo "::error::RKMS_KEY_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          echo "RELEASE SIGNING SECRETS: PASS"
+
 
       # ============================================================
-      # INSTALL KEYSTORE
+      # 25. INSTALL KEYSTORE
       # ============================================================
 
       - name: Install release keystore
@@ -806,10 +1007,11 @@ jobs:
           chmod 600 \
             android/app/release.keystore
 
-          echo "KEYSTORE FILE: PASS"
+          echo "RELEASE KEYSTORE: PASS"
+
 
       # ============================================================
-      # RELEASE SIGNING CONFIG
+      # 26. RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -839,11 +1041,11 @@ jobs:
               }
           }"""
 
-          if "signingConfigs {" in s:
+          start = s.find(
+              "signingConfigs {"
+          )
 
-              start = s.find(
-                  "signingConfigs {"
-              )
+          if start >= 0:
 
               depth = 0
               end = None
@@ -881,7 +1083,7 @@ jobs:
 
               if marker not in s:
                   raise SystemExit(
-                      "buildTypes block missing"
+                      "buildTypes block not found"
                   )
 
               s = s.replace(
@@ -896,6 +1098,11 @@ jobs:
               "buildTypes {"
           )
 
+          if build_start < 0:
+              raise SystemExit(
+                  "buildTypes block not found"
+              )
+
           release_start = s.find(
               "release {",
               build_start
@@ -903,7 +1110,7 @@ jobs:
 
           if release_start < 0:
               raise SystemExit(
-                  "release block missing"
+                  "release block not found"
               )
 
           depth = 0
@@ -930,16 +1137,16 @@ jobs:
                   "Invalid release block"
               )
 
-          block = s[
+          release_block = s[
               release_start:release_end
           ]
 
           if (
               "signingConfig signingConfigs.release"
-              not in block
+              not in release_block
           ):
 
-              block = block.replace(
+              release_block = release_block.replace(
                   "release {",
                   "release {\n"
                   "            signingConfig signingConfigs.release",
@@ -948,7 +1155,7 @@ jobs:
 
           s = (
               s[:release_start]
-              + block
+              + release_block
               + s[release_end:]
           )
 
@@ -958,19 +1165,38 @@ jobs:
           )
 
           print(
-              "RELEASE SIGNING CONFIG: PASS"
+              "RELEASE SIGNING CONFIGURATION: PASS"
           )
           PY
+
+          grep -Fq \
+            'storeFile file("release.keystore")' \
+            android/app/build.gradle
+
+          grep -Fq \
+            'storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")' \
+            android/app/build.gradle
+
+          grep -Fq \
+            'keyAlias System.getenv("RKMS_KEY_ALIAS")' \
+            android/app/build.gradle
+
+          grep -Fq \
+            'keyPassword System.getenv("RKMS_KEY_PASSWORD")' \
+            android/app/build.gradle
 
           grep -Fq \
             "signingConfig signingConfigs.release" \
             android/app/build.gradle
 
+          echo "SIGNING CONFIG CHECK: PASS"
+
+
       # ============================================================
-      # VERIFY KEYSTORE
+      # 27. VERIFY KEYSTORE
       # ============================================================
 
-      - name: Verify keystore
+      - name: Verify release keystore
         shell: bash
         env:
           RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
@@ -990,8 +1216,9 @@ jobs:
 
           echo "KEYSTORE VALIDATION: PASS"
 
+
       # ============================================================
-      # GRADLE
+      # 28. GRADLE
       # ============================================================
 
       - name: Verify Gradle
@@ -1007,13 +1234,14 @@ jobs:
             --version \
             --no-daemon
 
-          echo "GRADLE: PASS"
+          echo "GRADLE VALIDATION: PASS"
+
 
       # ============================================================
-      # CLEAN
+      # 29. CLEAN
       # ============================================================
 
-      - name: Clean Android
+      - name: Clean Android build
         shell: bash
         run: |
           set -euo pipefail
@@ -1024,10 +1252,15 @@ jobs:
             clean \
             --no-daemon
 
-          echo "CLEAN: PASS"
+          echo "ANDROID CLEAN: PASS"
+
 
       # ============================================================
-      # FINAL RELEASE APK ONLY
+      # 30. FINAL SIGNED RELEASE APK
+      #
+      # ONLY RELEASE APK
+      # NO DEBUG APK
+      # NO AAB
       # ============================================================
 
       - name: Build Final Signed Release APK
@@ -1045,11 +1278,12 @@ jobs:
           echo "=============================================="
           echo "RKMS FINAL SIGNED RELEASE APK"
           echo "=============================================="
-          echo "PACKAGE: ${APP_ID}"
-          echo "API: ${ANDROID_API}"
-          echo "TARGET SDK: ${TARGET_SDK}"
-          echo "SIGNED: YES"
-          echo "DEBUG APK: NO"
+          echo "Package: ${APP_ID}"
+          echo "Android API: ${ANDROID_API}"
+          echo "Target SDK: ${TARGET_SDK}"
+          echo "Min SDK: ${MIN_SDK}"
+          echo "Signed: YES"
+          echo "Debug APK: NO"
           echo "AAB: NO"
           echo "=============================================="
 
@@ -1060,7 +1294,18 @@ jobs:
 
           APK="app/build/outputs/apk/release/app-release.apk"
 
-          test -s "${APK}"
+          if [ ! -s "${APK}" ]; then
+
+            echo "::error::Release APK was not created."
+
+            find \
+              app/build/outputs \
+              -type f \
+              -print \
+              || true
+
+            exit 1
+          fi
 
           cp \
             "${APK}" \
@@ -1069,13 +1314,14 @@ jobs:
           echo "APK_PATH=${GITHUB_WORKSPACE}/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk" \
             >> "${GITHUB_ENV}"
 
-          echo "RELEASE APK BUILD: PASS"
+          echo "FINAL RELEASE APK BUILD: PASS"
+
 
       # ============================================================
-      # VERIFY APK
+      # 31. VERIFY APK PACKAGE
       # ============================================================
 
-      - name: Verify APK package and signature
+      - name: Verify APK package
         shell: bash
         run: |
           set -euo pipefail
@@ -1083,15 +1329,18 @@ jobs:
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
           AAPT="${SDK}/build-tools/${BUILD_TOOLS}/aapt"
-          APKSIGNER="${SDK}/build-tools/${BUILD_TOOLS}/apksigner"
 
-          test -x "${AAPT}"
-          test -x "${APKSIGNER}"
+          if [ ! -x "${AAPT}" ]; then
+            echo "::error::aapt not found."
+            exit 1
+          fi
 
           "${AAPT}" \
             dump badging \
             "${APK_PATH}" \
             > apk-badging.txt
+
+          cat apk-badging.txt
 
           grep -Fq \
             "package: name='${APP_ID}'" \
@@ -1101,17 +1350,55 @@ jobs:
             "targetSdkVersion:'36'" \
             apk-badging.txt
 
+          echo "APK PACKAGE: PASS"
+          echo "TARGET SDK 36: PASS"
+
+
+      # ============================================================
+      # 32. VERIFY APK SIGNATURE
+      # ============================================================
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          APKSIGNER="${SDK}/build-tools/${BUILD_TOOLS}/apksigner"
+
+          if [ ! -x "${APKSIGNER}" ]; then
+            echo "::error::apksigner not found."
+            exit 1
+          fi
+
           "${APKSIGNER}" \
             verify \
             --verbose \
             "${APK_PATH}"
 
-          echo "APK PACKAGE: PASS"
-          echo "TARGET SDK: PASS"
           echo "APK SIGNATURE: PASS"
 
+
       # ============================================================
-      # SHA256
+      # 33. SIGNER CERTIFICATE
+      # ============================================================
+
+      - name: Print APK signer certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          "${SDK}/build-tools/${BUILD_TOOLS}/apksigner" \
+            verify \
+            --print-certs \
+            "${APK_PATH}"
+
+
+      # ============================================================
+      # 34. SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1126,8 +1413,14 @@ jobs:
             | tee \
             RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256
 
+          echo ""
+          echo "FINAL APK SHA256:"
+          cat \
+            RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256
+
+
       # ============================================================
-      # FINAL APK ONLY AUDIT
+      # 35. APK ONLY FINAL AUDIT
       # ============================================================
 
       - name: Final APK only audit
@@ -1170,28 +1463,29 @@ jobs:
           )"
 
           if [ "${SIZE}" -lt 1000000 ]; then
-            echo "::error::APK is unexpectedly small."
+            echo "::error::APK size is unexpectedly small."
             exit 1
           fi
 
           echo "=============================================="
-          echo "FINAL APK AUDIT: PASS"
+          echo "RKMS FINAL APK AUDIT: PASS"
           echo "=============================================="
-
           echo "APK: RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
           echo "SIGNED: YES"
           echo "DEBUG: NO"
           echo "AAB: NO"
           echo "SIZE: ${SIZE} bytes"
+          echo "=============================================="
 
           cat \
             RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256
 
+
       # ============================================================
-      # ARTIFACT
+      # 36. UPLOAD ONLY FINAL APK
       # ============================================================
 
-      - name: Upload final signed APK
+      - name: Upload final signed release APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS_ANDROID16_API36_FINAL_SIGNED_RELEASE_APK
