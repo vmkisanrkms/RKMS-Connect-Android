@@ -555,7 +555,6 @@ jobs:
 
           original = text
 
-          # Normal XML form
           def patch_application(match):
               opening = match.group(0)
 
@@ -576,33 +575,6 @@ jobs:
               flags=re.IGNORECASE | re.DOTALL
           )
 
-          # Escaped quote form commonly used inside shell/python strings.
-          if attribute not in text:
-
-              escaped_attribute = (
-                  'android:enableOnBackInvokedCallback=\\"true\\"'
-              )
-
-              def patch_escaped(match):
-                  opening = match.group(0)
-
-                  if escaped_attribute in opening:
-                      return opening
-
-                  return (
-                      opening[:-1]
-                      + " "
-                      + escaped_attribute
-                      + ">"
-                  )
-
-              text = re.sub(
-                  r"<application\b[^>]*>",
-                  patch_escaped,
-                  text,
-                  flags=re.IGNORECASE | re.DOTALL
-              )
-
           if text != original:
               path.write_text(
                   text,
@@ -617,9 +589,6 @@ jobs:
                   "CONFIGURE SCRIPT: no direct XML template changed"
               )
 
-          # Do not fail merely because the script does not contain
-          # literal XML. The generated manifest is repaired again
-          # after configuration.
           print(
               "ANDROID 16 CONFIGURATION SCRIPT: PASS"
           )
@@ -928,7 +897,7 @@ jobs:
 
 
       # ============================================================
-      # 27. REPAIR ALL GENERATED MANIFEST/PATCH SOURCES
+      # 27. REPAIR GENERATED MANIFEST/PATCH SOURCES
       # ============================================================
 
       - name: Repair generated manifest patch
@@ -1117,8 +1086,9 @@ jobs:
           test -s "$APP_GRADLE"
           test -s "$ROOT_GRADLE"
 
+
           # --------------------------------------------------------
-          # Google Services plugin
+          # Google Services classpath
           # --------------------------------------------------------
 
           if ! grep -Fq \
@@ -1126,33 +1096,65 @@ jobs:
             "$ROOT_GRADLE"
           then
 
-            if grep -Fq \
+            if ! grep -Fq \
               "dependencies {" \
               "$ROOT_GRADLE"
             then
 
-              sed -i \
-                '/dependencies {/a\    classpath "com.google.gms:google-services:4.4.4"' \
-                "$ROOT_GRADLE"
-
-            else
-
-              cat >> "$ROOT_GRADLE" <<'GRADLE'
-
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath "com.google.gms:google-services:4.4.4"
-    }
-}
-GRADLE
+              echo "::error::Gradle dependencies block not found."
+              echo "Cannot safely install Google Services plugin."
+              exit 1
 
             fi
 
+            python3 - "$ROOT_GRADLE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          text = path.read_text(
+              encoding="utf-8"
+          )
+
+          marker = "dependencies {"
+
+          addition = (
+              '    classpath "com.google.gms:google-services:4.4.4"\n'
+          )
+
+          if (
+              "com.google.gms:google-services:4.4.4"
+              not in text
+          ):
+              pos = text.find(marker)
+
+              if pos < 0:
+                  raise SystemExit(
+                      "Gradle dependencies block not found"
+                  )
+
+              insert_at = pos + len(marker)
+
+              text = (
+                  text[:insert_at]
+                  + "\n"
+                  + addition
+                  + text[insert_at:]
+              )
+
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+          PY
+
           fi
+
+
+          # --------------------------------------------------------
+          # Google Services application plugin
+          # --------------------------------------------------------
 
           if ! grep -Fq \
             'com.google.gms.google-services' \
@@ -1199,7 +1201,7 @@ GRADLE
 
 
           # --------------------------------------------------------
-          # AndroidX Credential Manager
+          # Credential Manager
           # --------------------------------------------------------
 
           if ! grep -Fq \
@@ -1242,8 +1244,16 @@ GRADLE
 
 
           # --------------------------------------------------------
-          # Verify dependencies were actually inserted
+          # Verify all Firebase dependencies
           # --------------------------------------------------------
+
+          grep -Fq \
+            "com.google.gms:google-services:4.4.4" \
+            "$ROOT_GRADLE"
+
+          grep -Fq \
+            'com.google.gms.google-services' \
+            "$APP_GRADLE"
 
           grep -Fq \
             "com.google.firebase:firebase-bom:34.19.0" \
@@ -1270,16 +1280,6 @@ GRADLE
 
       # ============================================================
       # 30. ROBUST FIREBASE INITIALIZATION
-      #
-      # FIX:
-      # Previous code required exact:
-      # super.onCreate(savedInstanceState);
-      #
-      # This version supports:
-      # Java / Kotlin
-      # Different Bundle parameter names
-      # Different whitespace
-      # Existing or missing onCreate()
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -1331,7 +1331,7 @@ GRADLE
               encoding="utf-8"
           )
 
-          INIT = (
+          INIT_JAVA = (
               "com.google.firebase.FirebaseApp.initializeApp(this);"
           )
 
@@ -1339,9 +1339,10 @@ GRADLE
               "com.google.firebase.FirebaseApp.initializeApp(this)"
           )
 
-          # --------------------------------------------------------
-          # Already initialized
-          # --------------------------------------------------------
+
+          # ========================================================
+          # ALREADY PRESENT
+          # ========================================================
 
           if "FirebaseApp.initializeApp" in text:
               print(
@@ -1356,11 +1357,6 @@ GRADLE
 
           if path.suffix == ".java":
 
-              # ----------------------------------------------------
-              # Case 1:
-              # Existing super.onCreate(...) in any formatting.
-              # ----------------------------------------------------
-
               super_pattern = re.compile(
                   r'super\s*\.\s*onCreate\s*\(\s*[^)]*\)\s*;',
                   re.MULTILINE
@@ -1373,7 +1369,7 @@ GRADLE
                   insertion = (
                       match.group(0)
                       + "\n        "
-                      + INIT
+                      + INIT_JAVA
                   )
 
                   text = (
@@ -1388,17 +1384,11 @@ GRADLE
                   )
 
                   print(
-                      "Firebase initialized after existing Java super.onCreate()."
+                      "Firebase initialized after Java super.onCreate()."
                   )
 
                   raise SystemExit(0)
 
-
-              # ----------------------------------------------------
-              # Case 2:
-              # onCreate exists but super call absent.
-              # Add Firebase call at beginning of onCreate body.
-              # ----------------------------------------------------
 
               oncreate_pattern = re.compile(
                   r'((?:public|protected)\s+void\s+onCreate\s*\([^)]*\)\s*\{)',
@@ -1412,7 +1402,7 @@ GRADLE
                   insertion = (
                       match.group(1)
                       + "\n        "
-                      + INIT
+                      + INIT_JAVA
                   )
 
                   text = (
@@ -1427,32 +1417,18 @@ GRADLE
                   )
 
                   print(
-                      "Firebase initialized inside existing Java onCreate()."
+                      "Firebase initialized inside Java onCreate()."
                   )
 
                   raise SystemExit(0)
 
 
-              # ----------------------------------------------------
-              # Case 3:
-              # No onCreate.
-              # Add complete override before final class brace.
-              # ----------------------------------------------------
+              last_brace = text.rfind("}")
 
-              positions = [
-                  m.start()
-                  for m in re.finditer(
-                      r'\}',
-                      text
-                  )
-              ]
-
-              if not positions:
+              if last_brace < 0:
                   raise SystemExit(
                       "Java MainActivity has no closing class brace."
                   )
-
-              last_brace = positions[-1]
 
               method = """
 
@@ -1488,10 +1464,6 @@ GRADLE
 
           if path.suffix == ".kt":
 
-              # ----------------------------------------------------
-              # Existing super.onCreate(...)
-              # ----------------------------------------------------
-
               super_pattern = re.compile(
                   r'super\s*\.\s*onCreate\s*\(\s*[^)]*\s*\)',
                   re.MULTILINE
@@ -1519,15 +1491,11 @@ GRADLE
                   )
 
                   print(
-                      "Firebase initialized after existing Kotlin super.onCreate()."
+                      "Firebase initialized after Kotlin super.onCreate()."
                   )
 
                   raise SystemExit(0)
 
-
-              # ----------------------------------------------------
-              # Existing onCreate but no super
-              # ----------------------------------------------------
 
               oncreate_pattern = re.compile(
                   r'(override\s+fun\s+onCreate\s*\([^)]*\)\s*\{)',
@@ -1556,15 +1524,11 @@ GRADLE
                   )
 
                   print(
-                      "Firebase initialized inside existing Kotlin onCreate()."
+                      "Firebase initialized inside Kotlin onCreate()."
                   )
 
                   raise SystemExit(0)
 
-
-              # ----------------------------------------------------
-              # No onCreate.
-              # ----------------------------------------------------
 
               last_brace = text.rfind("}")
 
