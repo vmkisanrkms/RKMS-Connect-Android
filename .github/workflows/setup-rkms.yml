@@ -315,7 +315,7 @@ jobs:
 
 
       # ============================================================
-      # 12. NPM INSTALL
+      # 12. NPM
       # ============================================================
 
       - name: Install npm dependencies
@@ -389,7 +389,7 @@ jobs:
 
 
       # ============================================================
-      # 16. CREATE CAPACITOR ANDROID
+      # 16. CAPACITOR ANDROID
       # ============================================================
 
       - name: Create Capacitor Android project
@@ -410,7 +410,7 @@ jobs:
 
 
       # ============================================================
-      # 17. CONFIGURE ANDROID 16
+      # 17. ANDROID 16
       # ============================================================
 
       - name: Configure Android 16
@@ -500,72 +500,10 @@ jobs:
 
 
       # ============================================================
-      # 20. REPAIR KNOWN NATIVE SETUP SCRIPT
+      # 20. SAFE REPAIR OF KNOWN MALFORMED NATIVE SCRIPT
       # ============================================================
 
       - name: Repair known malformed native setup script
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          SETUP_SHA="$(
-            sha256sum scripts/setup-android-native.sh |
-            awk '{print $1}'
-          )"
-
-          echo "Native setup script SHA:"
-          echo "$SETUP_SHA"
-
-          if [ "$SETUP_SHA" = "d8cdb6c16fb4c6ac768a4ca515f42224097a77419ca5bccd9dd38ab990b3e305" ]; then
-
-            sed -n '1,90p' \
-              scripts/setup-android-native.sh \
-              > /tmp/setup-rkms-fixed.sh
-
-            printf '%s\n' \
-              'DRAWABLE_DIR="$RES_DIR/drawable"' \
-              'mkdir -p "$DRAWABLE_DIR"' \
-              'printf "%s\n" '\''<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">'\''' \
-              '\''    <path android:fillColor="#FFFFFFFF" android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>'\''' \
-              '\''</vector>'\''' \
-              > "$DRAWABLE_DIR/ic_stat_rkms.xml"' \
-              >> /tmp/setup-rkms-fixed.sh
-
-            sed -n '118,$p' \
-              scripts/setup-android-native.sh \
-              >> /tmp/setup-rkms-fixed.sh
-
-            chmod +x \
-              /tmp/setup-rkms-fixed.sh
-
-            bash -n \
-              /tmp/setup-rkms-fixed.sh
-
-            mv \
-              /tmp/setup-rkms-fixed.sh \
-              scripts/setup-android-native.sh
-
-          fi
-
-          chmod +x \
-            scripts/setup-android-native.sh
-
-          bash -n \
-            scripts/setup-android-native.sh
-
-          echo "NATIVE SCRIPT SYNTAX: PASS"
-
-
-      # ============================================================
-      # 21. NATIVE MICROPHONE FIX
-      #
-      # NO PYTHON HEREDOC HERE.
-      # This is deliberately YAML-safe.
-      # ============================================================
-
-      - name: Add native microphone manifest implementation
         shell: bash
         run: |
           set -euo pipefail
@@ -576,26 +514,52 @@ jobs:
 
           test -s "$SCRIPT"
 
-          if ! grep -Fq \
-            "RKMS_NATIVE_MICROPHONE_MANIFEST_FIX" \
-            "$SCRIPT"
-          then
+          SETUP_SHA="$(
+            sha256sum "$SCRIPT" |
+            awk '{print $1}'
+          )"
 
-            printf '%s\n' \
-              '' \
-              '# RKMS_NATIVE_MICROPHONE_MANIFEST_FIX' \
-              '' \
-              'RKMS_MANIFEST="${ANDROID_DIR:-android}/app/src/main/AndroidManifest.xml"' \
-              '' \
-              'if [ -f "$RKMS_MANIFEST" ]; then' \
-              '' \
-              '  if ! grep -Fq '\''android:name="android.permission.RECORD_AUDIO"'\'' "$RKMS_MANIFEST"; then' \
-              '    perl -0pi -e '\''s|(<manifest\b[^>]*>)|$1\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>|s'\'' "$RKMS_MANIFEST"' \
-              '  fi' \
-              '' \
-              'fi' \
-              '' \
-              >> "$SCRIPT"
+          echo "Native setup script SHA:"
+          echo "$SETUP_SHA"
+
+          if [ "$SETUP_SHA" = "d8cdb6c16fb4c6ac768a4ca515f42224097a77419ca5bccd9dd38ab990b3e305" ]; then
+
+            echo "Known malformed native script detected."
+            echo "Replacing broken middle section safely."
+
+            rm -f /tmp/setup-rkms-fixed.sh
+
+            sed -n '1,90p' "$SCRIPT" \
+              > /tmp/setup-rkms-fixed.sh
+
+            cat >> /tmp/setup-rkms-fixed.sh <<'RKMSFIX'
+
+# RKMS SAFE REPAIRED ICON
+
+DRAWABLE_DIR="$RES_DIR/drawable"
+
+mkdir -p "$DRAWABLE_DIR"
+
+printf '%s' 'PHZlY3RvciB4bWxuczphbmRyb2lkPSJodHRwOi8vc2NoZW1hcy5hbmRyb2lkLmNvbS9hcGsvcmVzL2FuZHJvaWQiIGFuZHJvaWQ6d2lkdGg9IjI0ZHAiIGFuZHJvaWQ6aGVpZ2h0PSIyNGRwIiBhbmRyb2lkOnZpZXdwb3J0V2lkdGg9IjI0IiBhbmRyb2lkOnZpZXdwb3J0SGVpZ2h0PSIyNCI+CiAgICA8cGF0aCBhbmRyb2lkOmZpbGxDb2xvcj0iI0ZGRkZGRkZGIiBhbmRyb2lkOnBhdGhEYXRhPSJNMTIsMkE3LDcgMCwwIDAsNSA5djRsLTIsM3YxaDE4di0xbC0yLC0zVjlBNyw3IDAsMCAwLDEyIDJNOSwxOWEzLDMgMCwwIDAsNiAweiIvPgo8L3ZlY3Rvcj4K' |
+  base64 -d \
+  > "$DRAWABLE_DIR/ic_stat_rkms.xml"
+
+RKMSFIX
+
+            sed -n '118,$p' "$SCRIPT" \
+              >> /tmp/setup-rkms-fixed.sh
+
+            chmod +x \
+              /tmp/setup-rkms-fixed.sh
+
+            bash -n \
+              /tmp/setup-rkms-fixed.sh
+
+            mv \
+              /tmp/setup-rkms-fixed.sh \
+              "$SCRIPT"
+
+            echo "KNOWN SCRIPT REPAIR: PASS"
 
           fi
 
@@ -603,19 +567,11 @@ jobs:
 
           bash -n "$SCRIPT"
 
-          grep -Fq \
-            "RKMS_NATIVE_MICROPHONE_MANIFEST_FIX" \
-            "$SCRIPT"
-
-          grep -Fq \
-            "android.permission.RECORD_AUDIO" \
-            "$SCRIPT"
-
-          echo "NATIVE MICROPHONE SOURCE FIX: PASS"
+          echo "NATIVE SCRIPT SYNTAX: PASS"
 
 
       # ============================================================
-      # 22. RUN NATIVE SETUP
+      # 21. RUN NATIVE SETUP
       # ============================================================
 
       - name: Configure RKMS native Android
@@ -631,7 +587,7 @@ jobs:
 
 
       # ============================================================
-      # 23. LOCATE MANIFEST
+      # 22. LOCATE MANIFEST
       # ============================================================
 
       - name: Locate generated AndroidManifest
@@ -651,80 +607,10 @@ jobs:
 
 
       # ============================================================
-      # 24. PREDICTIVE BACK
+      # 23. MICROPHONE + NOTIFICATION PERMISSIONS
       # ============================================================
 
-      - name: Configure predictive back
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          python3 - "$MANIFEST" <<'PY'
-          import sys
-          import re
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-
-          text = path.read_text(
-              encoding="utf-8"
-          )
-
-          attribute = (
-              'android:enableOnBackInvokedCallback="true"'
-          )
-
-          if (
-              "android:enableOnBackInvokedCallback="
-              in text
-          ):
-
-              text = re.sub(
-                  r'android:enableOnBackInvokedCallback="[^"]*"',
-                  attribute,
-                  text,
-                  count=1
-              )
-
-          else:
-
-              match = re.search(
-                  r'<application\b',
-                  text
-              )
-
-              if not match:
-                  raise SystemExit(
-                      "application tag not found"
-                  )
-
-              text = (
-                  text[:match.end()]
-                  + " "
-                  + attribute
-                  + text[match.end():]
-              )
-
-          path.write_text(
-              text,
-              encoding="utf-8"
-          )
-          PY
-
-          grep -Fq \
-            'android:enableOnBackInvokedCallback="true"' \
-            "$MANIFEST"
-
-          echo "PREDICTIVE BACK: PASS"
-
-
-      # ============================================================
-      # 25. FINAL MICROPHONE + NOTIFICATION MANIFEST
-      # ============================================================
-
-      - name: Finalize native microphone manifest
+      - name: Configure microphone and notification permissions
         shell: bash
         run: |
           set -euo pipefail
@@ -784,25 +670,91 @@ jobs:
               encoding="utf-8"
           )
 
-          print(
-              "FINAL NATIVE MICROPHONE MANIFEST: PASS"
-          )
+          print("MICROPHONE MANIFEST: PASS")
+          print("NOTIFICATION MANIFEST: PASS")
           PY
 
           grep -Fq \
-            '<uses-permission android:name="android.permission.RECORD_AUDIO"/>' \
+            'android:name="android.permission.RECORD_AUDIO"' \
             "$MANIFEST"
 
           grep -Fq \
             'android:name="android.permission.POST_NOTIFICATIONS"' \
             "$MANIFEST"
 
-          echo "RECORD_AUDIO MANIFEST: PASS"
-          echo "POST_NOTIFICATIONS MANIFEST: PASS"
+          echo "RECORD_AUDIO: PASS"
+          echo "POST_NOTIFICATIONS: PASS"
 
 
       # ============================================================
-      # 26. XML VALIDATION
+      # 24. PREDICTIVE BACK
+      # ============================================================
+
+      - name: Configure predictive back
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+          import re
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          text = path.read_text(
+              encoding="utf-8"
+          )
+
+          attribute = (
+              'android:enableOnBackInvokedCallback="true"'
+          )
+
+          if "android:enableOnBackInvokedCallback=" in text:
+
+              text = re.sub(
+                  r'android:enableOnBackInvokedCallback="[^"]*"',
+                  attribute,
+                  text,
+                  count=1
+              )
+
+          else:
+
+              match = re.search(
+                  r'<application\b',
+                  text
+              )
+
+              if not match:
+                  raise SystemExit(
+                      "ERROR: application tag not found"
+                  )
+
+              text = (
+                  text[:match.end()]
+                  + " "
+                  + attribute
+                  + text[match.end():]
+              )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+          PY
+
+          grep -Fq \
+            'android:enableOnBackInvokedCallback="true"' \
+            "$MANIFEST"
+
+          echo "PREDICTIVE BACK: PASS"
+
+
+      # ============================================================
+      # 25. MANIFEST XML VALIDATION
       # ============================================================
 
       - name: Validate AndroidManifest XML
@@ -816,8 +768,10 @@ jobs:
           import sys
           import xml.etree.ElementTree as ET
 
+          manifest = sys.argv[1]
+
           try:
-              ET.parse(sys.argv[1])
+              ET.parse(manifest)
           except Exception as exc:
               print("ANDROID MANIFEST XML INVALID")
               print(exc)
@@ -826,9 +780,26 @@ jobs:
           print("ANDROID MANIFEST XML: PASS")
           PY
 
+          grep -Fq \
+            'android:name="android.permission.RECORD_AUDIO"' \
+            "$MANIFEST"
+
+          grep -Fq \
+            'android:name="android.permission.POST_NOTIFICATIONS"' \
+            "$MANIFEST"
+
+          grep -Fq \
+            'android:enableOnBackInvokedCallback="true"' \
+            "$MANIFEST"
+
+          echo "RECORD_AUDIO: PASS"
+          echo "POST_NOTIFICATIONS: PASS"
+          echo "PREDICTIVE BACK: PASS"
+          echo "MANIFEST XML: PASS"
+
 
       # ============================================================
-      # 27. FIREBASE CONFIG
+      # 26. FIREBASE CONFIG
       # ============================================================
 
       - name: Install Firebase configuration
@@ -853,7 +824,7 @@ jobs:
 
 
       # ============================================================
-      # 28. FIREBASE DEPENDENCIES
+      # 27. FIREBASE DEPENDENCIES
       # ============================================================
 
       - name: Configure Firebase dependencies
@@ -957,7 +928,7 @@ jobs:
 
 
       # ============================================================
-      # 29. FIREBASE INITIALIZATION
+      # 28. FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -1036,7 +1007,7 @@ jobs:
 
 
       # ============================================================
-      # 30. NATIVE BRIDGE
+      # 29. NATIVE BRIDGE
       # ============================================================
 
       - name: Verify RKMS native bridge
@@ -1072,7 +1043,7 @@ jobs:
 
 
       # ============================================================
-      # 31. FINAL MANIFEST CHECK
+      # 30. FINAL MANIFEST CHECK
       # ============================================================
 
       - name: Final AndroidManifest verification
@@ -1085,7 +1056,7 @@ jobs:
           test -s "$MANIFEST"
 
           grep -Fq \
-            '<uses-permission android:name="android.permission.RECORD_AUDIO"/>' \
+            'android:name="android.permission.RECORD_AUDIO"' \
             "$MANIFEST"
 
           grep -Fq \
@@ -1112,7 +1083,7 @@ jobs:
 
 
       # ============================================================
-      # 32. FINAL SDK
+      # 31. FINAL SDK
       # ============================================================
 
       - name: Finalize Android SDK versions
@@ -1156,17 +1127,15 @@ jobs:
             'minSdkVersion[[:space:]]*=?[[:space:]]*22([[:space:]]|$)|minSdk[[:space:]]*=?[[:space:]]*22([[:space:]]|$)' \
             android
           then
-
             echo "::error::minSdk 22 detected."
             exit 1
-
           fi
 
           echo "MIN SDK 23 FINAL: PASS"
 
 
       # ============================================================
-      # 33. POST-GENERATION RKMS AUDITS
+      # 32. POST-GENERATION RKMS AUDITS
       # ============================================================
 
       - name: Run post-generation RKMS audits
@@ -1202,7 +1171,7 @@ jobs:
 
 
       # ============================================================
-      # 34. FINAL ANDROID 16 AUDIT
+      # 33. FINAL ANDROID 16 AUDIT
       # ============================================================
 
       - name: Final Android 16 audit
@@ -1249,7 +1218,7 @@ jobs:
 
 
       # ============================================================
-      # 35. SIGNING SECRETS
+      # 34. SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -1286,7 +1255,7 @@ jobs:
 
 
       # ============================================================
-      # 36. RELEASE SIGNING
+      # 35. RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -1324,7 +1293,7 @@ jobs:
 
 
       # ============================================================
-      # 37. KEYSTORE
+      # 36. KEYSTORE
       # ============================================================
 
       - name: Verify release keystore
@@ -1348,7 +1317,7 @@ jobs:
 
 
       # ============================================================
-      # 38. GRADLE
+      # 37. GRADLE
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -1368,7 +1337,7 @@ jobs:
 
 
       # ============================================================
-      # 39. CLEAN
+      # 38. CLEAN
       # ============================================================
 
       - name: Clean Android build
@@ -1386,7 +1355,7 @@ jobs:
 
 
       # ============================================================
-      # 40. BUILD RELEASE APK ONLY
+      # 39. FINAL SIGNED RELEASE APK ONLY
       # ============================================================
 
       - name: Build Final Signed Release APK Only
@@ -1395,6 +1364,21 @@ jobs:
           set -euo pipefail
 
           cd "$RKMS_ROOT/android"
+
+          echo "=============================================="
+          echo "RKMS FINAL SIGNED RELEASE APK"
+          echo "=============================================="
+
+          echo "PACKAGE: ${APP_ID}"
+          echo "ANDROID API: ${ANDROID_API}"
+          echo "BUILD TOOLS: ${BUILD_TOOLS}"
+          echo "MIN SDK: ${MIN_SDK}"
+          echo "TARGET SDK: ${TARGET_SDK}"
+          echo "SIGNED: YES"
+          echo "DEBUG APK: NO"
+          echo "AAB: NO"
+
+          echo "=============================================="
 
           ./gradlew \
             :app:assembleRelease \
@@ -1413,7 +1397,6 @@ jobs:
               | sort
 
             exit 1
-
           fi
 
           cp \
@@ -1428,7 +1411,7 @@ jobs:
 
 
       # ============================================================
-      # 41. VERIFY APK
+      # 40. APK PACKAGE + SIGNATURE
       # ============================================================
 
       - name: Verify APK package and signature
@@ -1473,7 +1456,7 @@ jobs:
 
 
       # ============================================================
-      # 42. SHA256
+      # 41. SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1490,7 +1473,7 @@ jobs:
 
 
       # ============================================================
-      # 43. FINAL APK ONLY
+      # 42. FINAL APK-ONLY AUDIT
       # ============================================================
 
       - name: Final APK-only audit
@@ -1509,10 +1492,8 @@ jobs:
             -print \
             | grep -q .
           then
-
             echo "::error::AAB detected."
             exit 1
-
           fi
 
           if find "$GITHUB_WORKSPACE" \
@@ -1521,10 +1502,8 @@ jobs:
             -print \
             | grep -q .
           then
-
             echo "::error::Debug APK detected."
             exit 1
-
           fi
 
           SIZE="$(
@@ -1538,15 +1517,21 @@ jobs:
             exit 1
           fi
 
+          echo "=============================================="
           echo "FINAL APK AUDIT: PASS"
+          echo "=============================================="
+
           echo "APK: RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
           echo "SIGNED: YES"
           echo "DEBUG: NO"
           echo "AAB: NO"
+          echo "SIZE: $SIZE bytes"
+
+          echo "=============================================="
 
 
       # ============================================================
-      # 44. UPLOAD FINAL APK
+      # 43. UPLOAD FINAL APK
       # ============================================================
 
       - name: Upload final signed release APK
