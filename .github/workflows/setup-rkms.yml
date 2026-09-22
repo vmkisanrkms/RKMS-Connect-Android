@@ -35,7 +35,6 @@ jobs:
 
       # ============================================================
       # 2. NODE 22
-      # No npm cache - package-lock is inside ZIP
       # ============================================================
 
       - name: Setup Node.js 22
@@ -224,12 +223,9 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          node <<'NODE'
+          node -e '
           const fs = require("fs");
-
-          const pkg = JSON.parse(
-            fs.readFileSync("package.json", "utf8")
-          );
+          const pkg = JSON.parse(fs.readFileSync("package.json","utf8"));
 
           const deps = {
             ...(pkg.dependencies || {}),
@@ -248,10 +244,7 @@ jobs:
 
           for (const [name, wanted] of Object.entries(required)) {
             const actual = deps[name];
-
-            console.log(
-              `${name}: ${actual || "MISSING"}`
-            );
+            console.log(`${name}: ${actual || "MISSING"}`);
 
             if (actual !== wanted) {
               failed = true;
@@ -263,7 +256,7 @@ jobs:
           }
 
           console.log("CAPACITOR VERSION CHECK: PASS");
-          NODE
+          '
 
 
       # ============================================================
@@ -277,11 +270,11 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          node <<'NODE'
+          node -e '
           const fs = require("fs");
 
           const data = JSON.parse(
-            fs.readFileSync("google-services.json", "utf8")
+            fs.readFileSync("google-services.json","utf8")
           );
 
           const found = (data.client || []).some(
@@ -299,7 +292,7 @@ jobs:
           }
 
           console.log("FIREBASE PACKAGE CHECK: PASS");
-          NODE
+          '
 
 
       # ============================================================
@@ -499,8 +492,6 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          echo "Forcing minSdk to 23..."
-
           if [ -f android/variables.gradle ]; then
 
             perl -pi -e \
@@ -635,9 +626,7 @@ jobs:
 
 
       # ============================================================
-      # 23. PREDICTIVE BACK - ACTUAL GENERATED MANIFEST
-      #
-      # Android 16 audit requires this explicitly.
+      # 23. FORCE ANDROID 16 PREDICTIVE BACK
       # ============================================================
 
       - name: Configure Android 16 predictive back
@@ -653,13 +642,16 @@ jobs:
 
           python3 - "$MANIFEST" <<'PY'
           import sys
+          import re
           from pathlib import Path
 
           path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
+
+          text = path.read_text(
+              encoding="utf-8"
+          )
 
           if "android:enableOnBackInvokedCallback=" in text:
-              import re
 
               text = re.sub(
                   r'android:enableOnBackInvokedCallback="[^"]*"',
@@ -669,17 +661,15 @@ jobs:
               )
 
           else:
-              marker = "<application"
 
-              if marker not in text:
+              if "<application" not in text:
                   raise SystemExit(
-                      "application tag not found in AndroidManifest.xml"
+                      "ERROR: <application> tag not found."
                   )
 
               text = text.replace(
-                  marker,
-                  marker +
-                  ' android:enableOnBackInvokedCallback="true"',
+                  "<application",
+                  '<application android:enableOnBackInvokedCallback="true"',
                   1
               )
 
@@ -693,15 +683,107 @@ jobs:
             'android:enableOnBackInvokedCallback="true"' \
             "$MANIFEST"
 
-          echo "GENERATED MANIFEST PREDICTIVE BACK: PASS"
+          echo "PREDICTIVE BACK: PASS"
 
 
       # ============================================================
-      # 24. REPAIR MANIFEST PATCH / SCRIPT SOURCES
-      #
-      # The ZIP audit specifically mentions a generated manifest
-      # patch. Add the explicit Android 16 property to matching
-      # patch/configuration text files when they exist.
+      # 24. FORCE RECORD_AUDIO + POST_NOTIFICATIONS
+      # ============================================================
+
+      - name: Force Android permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          test -s "$MANIFEST"
+
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          text = path.read_text(
+              encoding="utf-8"
+          )
+
+          if "<manifest" not in text:
+              raise SystemExit(
+                  "ERROR: <manifest> tag not found."
+              )
+
+          permissions = []
+
+          if "android.permission.RECORD_AUDIO" not in text:
+              permissions.append(
+                  '    <uses-permission android:name="android.permission.RECORD_AUDIO" />'
+              )
+
+          if "android.permission.POST_NOTIFICATIONS" not in text:
+              permissions.append(
+                  '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />'
+              )
+
+          if permissions:
+              block = "\n".join(permissions)
+
+              text = text.replace(
+                  "<manifest",
+                  "<manifest\n" + block,
+                  1
+              )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print("Android permissions repaired.")
+          PY
+
+          echo ""
+          echo "=============================================="
+          echo "VERIFY RECORD_AUDIO"
+          echo "=============================================="
+
+          grep -Fq \
+            "android.permission.RECORD_AUDIO" \
+            "$MANIFEST"
+
+          echo "RECORD_AUDIO: PASS"
+
+          echo ""
+          echo "=============================================="
+          echo "VERIFY POST_NOTIFICATIONS"
+          echo "=============================================="
+
+          grep -Fq \
+            "android.permission.POST_NOTIFICATIONS" \
+            "$MANIFEST"
+
+          echo "POST_NOTIFICATIONS: PASS"
+
+          echo ""
+          echo "=============================================="
+          echo "VERIFY PREDICTIVE BACK"
+          echo "=============================================="
+
+          grep -Fq \
+            'android:enableOnBackInvokedCallback="true"' \
+            "$MANIFEST"
+
+          echo "PREDICTIVE BACK: PASS"
+
+          echo ""
+          echo "ANDROID MANIFEST PERMISSIONS: PASS"
+
+
+      # ============================================================
+      # 25. REPAIR GENERATED MANIFEST PATCH
       # ============================================================
 
       - name: Repair Android 16 generated manifest patch
@@ -711,42 +793,38 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          FOUND="false"
+          echo "Searching Android 16 manifest patch sources..."
 
           while IFS= read -r -d '' FILE; do
 
             if grep -Eq \
-              'enableOnBackInvokedCallback|AndroidManifest|manifest patch|manifest_patch' \
-              "$FILE"
+              'enableOnBackInvokedCallback|AndroidManifest|manifest.patch|manifest_patch' \
+              "$FILE" 2>/dev/null
             then
 
-              echo "Checking patch/config file: $FILE"
+              echo "CHECKING: $FILE"
 
-              if grep -Fq \
-                '<application' \
-                "$FILE"
-              then
+              if grep -Fq "<application" "$FILE" 2>/dev/null; then
 
-                if ! grep -Fq \
-                  'android:enableOnBackInvokedCallback="true"' \
-                  "$FILE"
-                then
-
-                  python3 - "$FILE" <<'PY'
+                python3 - "$FILE" <<'PY'
           import sys
           from pathlib import Path
 
           path = Path(sys.argv[1])
-          text = path.read_text(
-              encoding="utf-8",
-              errors="ignore"
-          )
+
+          try:
+              text = path.read_text(
+                  encoding="utf-8"
+              )
+          except Exception:
+              raise SystemExit(0)
 
           if (
               "<application" in text
               and
               "android:enableOnBackInvokedCallback=" not in text
           ):
+
               text = text.replace(
                   "<application",
                   '<application android:enableOnBackInvokedCallback="true"',
@@ -757,11 +835,12 @@ jobs:
                   text,
                   encoding="utf-8"
               )
+
+              print(
+                  "PATCHED:",
+                  path
+              )
           PY
-
-                fi
-
-                FOUND="true"
 
               fi
 
@@ -781,13 +860,11 @@ jobs:
               2>/dev/null
           )
 
-          echo "Patch candidates processed: $FOUND"
-
           echo ""
-          echo "Predictive back references:"
+          echo "Current predictive-back references:"
 
           grep -RIn \
-            'enableOnBackInvokedCallback' \
+            "enableOnBackInvokedCallback" \
             scripts \
             android \
             2>/dev/null \
@@ -795,11 +872,11 @@ jobs:
             || true
 
           echo ""
-          echo "ANDROID 16 PREDICTIVE BACK REPAIR: PASS"
+          echo "MANIFEST PATCH REPAIR: PASS"
 
 
       # ============================================================
-      # 25. FIREBASE
+      # 26. FIREBASE
       # ============================================================
 
       - name: Install Firebase configuration
@@ -824,7 +901,7 @@ jobs:
 
 
       # ============================================================
-      # 26. FIREBASE GRADLE DEPENDENCIES
+      # 27. FIREBASE GRADLE DEPENDENCIES
       # ============================================================
 
       - name: Configure Firebase Gradle dependencies
@@ -906,7 +983,7 @@ jobs:
 
 
       # ============================================================
-      # 27. FIREBASE INITIALIZATION
+      # 28. FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -953,6 +1030,7 @@ jobs:
           marker = "super.onCreate(savedInstanceState);"
 
           if "FirebaseApp.initializeApp" not in text:
+
               text = text.replace(
                   marker,
                   marker +
@@ -983,7 +1061,7 @@ jobs:
 
 
       # ============================================================
-      # 28. NATIVE BRIDGE
+      # 29. NATIVE BRIDGE
       # ============================================================
 
       - name: Verify RKMS native bridge
@@ -1019,10 +1097,10 @@ jobs:
 
 
       # ============================================================
-      # 29. MANIFEST PERMISSIONS
+      # 30. FINAL MANIFEST VERIFICATION
       # ============================================================
 
-      - name: Verify Android permissions
+      - name: Final Android manifest verification
         shell: bash
         run: |
           set -euo pipefail
@@ -1048,10 +1126,11 @@ jobs:
           echo "RECORD_AUDIO: PASS"
           echo "POST_NOTIFICATIONS: PASS"
           echo "PREDICTIVE BACK: PASS"
+          echo "FINAL MANIFEST: PASS"
 
 
       # ============================================================
-      # 30. RE-APPLY MIN SDK AFTER ALL NATIVE MODIFICATIONS
+      # 31. FINAL MIN SDK
       # ============================================================
 
       - name: Finalize Android SDK versions
@@ -1105,7 +1184,7 @@ jobs:
 
 
       # ============================================================
-      # 31. RUN GENERATED ANDROID AUDITS
+      # 32. GENERATED ANDROID AUDITS
       # ============================================================
 
       - name: Run generated Android audits
@@ -1142,7 +1221,7 @@ jobs:
 
 
       # ============================================================
-      # 32. FINAL SDK AUDIT
+      # 33. FINAL SDK AUDIT
       # ============================================================
 
       - name: Final Android SDK audit
@@ -1191,7 +1270,7 @@ jobs:
 
 
       # ============================================================
-      # 33. SIGNING SECRETS
+      # 34. SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -1228,7 +1307,7 @@ jobs:
 
 
       # ============================================================
-      # 34. RELEASE SIGNING
+      # 35. RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -1263,7 +1342,7 @@ jobs:
 
 
       # ============================================================
-      # 35. KEYSTORE
+      # 36. KEYSTORE
       # ============================================================
 
       - name: Verify release keystore
@@ -1287,7 +1366,7 @@ jobs:
 
 
       # ============================================================
-      # 36. GRADLE
+      # 37. GRADLE
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -1307,7 +1386,7 @@ jobs:
 
 
       # ============================================================
-      # 37. CLEAN
+      # 38. CLEAN
       # ============================================================
 
       - name: Clean Android build
@@ -1325,7 +1404,7 @@ jobs:
 
 
       # ============================================================
-      # 38. BUILD ONLY FINAL RELEASE APK
+      # 39. BUILD ONLY FINAL RELEASE APK
       # ============================================================
 
       - name: Build Final Signed Release APK Only
@@ -1386,7 +1465,7 @@ jobs:
 
 
       # ============================================================
-      # 39. APK VERIFY
+      # 40. APK VERIFY
       # ============================================================
 
       - name: Verify APK package and signature
@@ -1431,7 +1510,7 @@ jobs:
 
 
       # ============================================================
-      # 40. SHA256
+      # 41. SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1448,7 +1527,7 @@ jobs:
 
 
       # ============================================================
-      # 41. FINAL APK-ONLY AUDIT
+      # 42. FINAL APK-ONLY AUDIT
       # ============================================================
 
       - name: Final APK-only audit
@@ -1510,7 +1589,7 @@ jobs:
 
 
       # ============================================================
-      # 42. ARTIFACT
+      # 43. UPLOAD FINAL APK
       # ============================================================
 
       - name: Upload final signed release APK
