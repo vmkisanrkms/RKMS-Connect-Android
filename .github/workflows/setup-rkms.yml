@@ -11,6 +11,8 @@ env:
   BUILD_TOOLS: "36.0.0"
   NODE_VERSION: "22"
   JAVA_VERSION: "17"
+  AGP_VERSION: "8.9.1"
+  GRADLE_VERSION: "8.11.1"
   APP_ID: "org.rkms.connect"
   SOURCE_ZIP: "RKMS_CONNECT_FINAL_AUDITED_RELEASE_APK_BUILD_20260922.zip"
 
@@ -31,7 +33,9 @@ jobs:
 
       # ============================================================
       # 2. NODE 22
-      # No npm cache because package-lock.json is inside ZIP
+      # IMPORTANT:
+      # Do NOT use npm cache here.
+      # package-lock.json is inside the ZIP.
       # ============================================================
 
       - name: Setup Node.js 22
@@ -67,7 +71,7 @@ jobs:
 
 
       # ============================================================
-      # 5. VERIFY SOURCE ZIP
+      # 5. SOURCE ZIP
       # ============================================================
 
       - name: Locate and verify RKMS source ZIP
@@ -78,8 +82,6 @@ jobs:
           if [ ! -s "$SOURCE_ZIP" ]; then
             echo "::error::Source ZIP not found:"
             echo "$SOURCE_ZIP"
-
-            echo "ZIP FILES IN REPOSITORY:"
 
             find . \
               -maxdepth 4 \
@@ -118,8 +120,6 @@ jobs:
           unzip -q "$SOURCE_ZIP" -d rkms-build
 
           echo "ZIP EXTRACTION: PASS"
-
-          echo "TOP LEVEL CONTENT:"
 
           find rkms-build \
             -maxdepth 2 \
@@ -176,11 +176,7 @@ jobs:
 
           echo "RKMS_ROOT=$ROOT" >> "$GITHUB_ENV"
 
-          echo "=============================================="
-          echo "RKMS PROJECT ROOT"
-          echo "=============================================="
-          echo "$ROOT"
-          echo "=============================================="
+          echo "RKMS_ROOT=$ROOT"
 
 
       # ============================================================
@@ -220,7 +216,7 @@ jobs:
 
 
       # ============================================================
-      # 9. CAPACITOR VERSION CHECK
+      # 9. CAPACITOR
       # ============================================================
 
       - name: Verify Capacitor versions
@@ -273,7 +269,7 @@ jobs:
 
 
       # ============================================================
-      # 10. FIREBASE PACKAGE CHECK
+      # 10. FIREBASE PACKAGE
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -309,7 +305,7 @@ jobs:
 
 
       # ============================================================
-      # 11. AUDIT SCRIPT DISCOVERY
+      # 11. ZIP AUDIT SCRIPTS
       # ============================================================
 
       - name: Verify ZIP audit scripts
@@ -349,15 +345,16 @@ jobs:
           cd "$RKMS_ROOT"
 
           for AUDIT in scripts/verify-*.py; do
+
             echo ""
             echo "=============================================="
             echo "RUNNING: $AUDIT"
             echo "=============================================="
 
             python3 "$AUDIT"
+
           done
 
-          echo ""
           echo "ALL ZIP STATIC AUDITS: PASS"
 
 
@@ -424,10 +421,7 @@ jobs:
 
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
-          if [ -z "$SDK_ROOT" ]; then
-            echo "::error::Android SDK root not found."
-            exit 1
-          fi
+          test -n "$SDK_ROOT"
 
           test -x \
             "$SDK_ROOT/build-tools/$BUILD_TOOLS/aapt"
@@ -461,7 +455,7 @@ jobs:
 
 
       # ============================================================
-      # 18. ANDROID 16 CONFIG
+      # 18. ANDROID 16
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -517,15 +511,76 @@ jobs:
 
 
       # ============================================================
-      # 20. NATIVE SCRIPT SYNTAX
+      # 20. IMPORTANT ZIP FIX
+      #
+      # The exact audited ZIP contains a malformed Python block
+      # around the notification icon/manifest section.
+      #
+      # We verify the exact ZIP script SHA before changing it.
       # ============================================================
 
-      - name: Verify RKMS native setup script
+      - name: Repair known malformed native setup block
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$RKMS_ROOT"
+
+          EXPECTED_SETUP_SHA="d8cdb6c16fb4c6ac768a4ca515f42224097a77419ca5bccd9dd38ab990b3e305"
+
+          ACTUAL_SETUP_SHA="$(
+            sha256sum scripts/setup-android-native.sh |
+            awk '{print $1}'
+          )"
+
+          echo "Expected native script SHA:"
+          echo "$EXPECTED_SETUP_SHA"
+
+          echo "Actual native script SHA:"
+          echo "$ACTUAL_SETUP_SHA"
+
+          if [ "$ACTUAL_SETUP_SHA" != "$EXPECTED_SETUP_SHA" ]; then
+            echo "::error::Unexpected setup-android-native.sh version."
+            echo "::error::Refusing to patch an unknown script."
+            exit 1
+          fi
+
+          sed -n '1,90p' \
+            scripts/setup-android-native.sh \
+            > /tmp/setup-rkms-fixed.sh
+
+          printf '%s\n' \
+            '# CI repair: corrected malformed notification block from audited ZIP.' \
+            'DRAWABLE_DIR="$RES_DIR/drawable"' \
+            'mkdir -p "$DRAWABLE_DIR"' \
+            'cat > "$DRAWABLE_DIR/ic_stat_rkms.xml" <<'\''XML'\''' \
+            '<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">' \
+            '    <path android:fillColor="#FFFFFFFF" android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>' \
+            '</vector>' \
+            'XML' \
+            'MANIFEST="android/app/src/main/AndroidManifest.xml"' \
+            'if ! grep -Fq '\''android.permission.RECORD_AUDIO'\'' "$MANIFEST"; then' \
+            '  sed -i '\''/<application/i\    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />'\'' "$MANIFEST"' \
+            'fi' \
+            'if ! grep -Fq '\''com.google.firebase.messaging.default_notification_channel_id'\'' "$MANIFEST"; then' \
+            '  sed -i '\''0,/<application/s//<application android:enableOnBackInvokedCallback="true"/'\'' "$MANIFEST"' \
+            '  sed -i '\''/<\/application>/i\    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="@string/rkms_default_notification_channel_id" />\n    <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_rkms" />'\'' "$MANIFEST"' \
+            'fi' \
+            >> /tmp/setup-rkms-fixed.sh
+
+          sed -n '118,$p' \
+            scripts/setup-android-native.sh \
+            >> /tmp/setup-rkms-fixed.sh
+
+          chmod +x \
+            /tmp/setup-rkms-fixed.sh
+
+          bash -n \
+            /tmp/setup-rkms-fixed.sh
+
+          mv \
+            /tmp/setup-rkms-fixed.sh \
+            scripts/setup-android-native.sh
 
           chmod +x \
             scripts/setup-android-native.sh
@@ -533,11 +588,11 @@ jobs:
           bash -n \
             scripts/setup-android-native.sh
 
-          echo "NATIVE SETUP SCRIPT SYNTAX: PASS"
+          echo "NATIVE SETUP SCRIPT REPAIR: PASS"
 
 
       # ============================================================
-      # 21. NATIVE SETUP
+      # 21. RUN NATIVE SETUP
       # ============================================================
 
       - name: Configure RKMS native Android
@@ -553,7 +608,7 @@ jobs:
 
 
       # ============================================================
-      # 22. FIREBASE COPY
+      # 22. FIREBASE
       # ============================================================
 
       - name: Install Firebase configuration
@@ -563,11 +618,10 @@ jobs:
 
           cd "$RKMS_ROOT"
 
+          test -s google-services.json
+
           cp -f \
             google-services.json \
-            android/app/google-services.json
-
-          test -s \
             android/app/google-services.json
 
           grep -Fq \
@@ -578,7 +632,7 @@ jobs:
 
 
       # ============================================================
-      # 23. FIREBASE GRADLE
+      # 23. FIREBASE GRADLE DEPENDENCIES
       # ============================================================
 
       - name: Configure Firebase Gradle dependencies
@@ -651,7 +705,7 @@ jobs:
             "androidx.biometric:biometric:1.1.0" \
             "$APP_GRADLE"
 
-          echo "FIREBASE GRADLE CONFIGURATION: PASS"
+          echo "FIREBASE DEPENDENCIES: PASS"
 
 
       # ============================================================
@@ -687,13 +741,11 @@ jobs:
               "super.onCreate(savedInstanceState);" \
               "$MAIN"
             then
-
               sed -i \
                 '/super.onCreate(savedInstanceState);/a\        com.google.firebase.FirebaseApp.initializeApp(this);' \
                 "$MAIN"
-
             else
-              echo "::error::Cannot locate MainActivity onCreate marker."
+              echo "::error::MainActivity onCreate marker not found."
               exit 1
             fi
           fi
@@ -791,14 +843,12 @@ jobs:
           do
 
             if [ -f "$AUDIT" ]; then
-
               echo ""
               echo "=============================================="
               echo "RUNNING $AUDIT"
               echo "=============================================="
 
               python3 "$AUDIT"
-
             fi
 
           done
@@ -941,7 +991,7 @@ jobs:
 
 
       # ============================================================
-      # 33. FINAL SIGNED RELEASE APK
+      # 33. BUILD FINAL RELEASE APK ONLY
       # ============================================================
 
       - name: Build Final Signed Release APK Only
@@ -976,7 +1026,6 @@ jobs:
           APK="app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -s "$APK" ]; then
-
             echo "::error::Release APK was not created."
 
             find app/build/outputs \
@@ -1061,7 +1110,7 @@ jobs:
 
 
       # ============================================================
-      # 36. FINAL APK AUDIT
+      # 36. FINAL AUDIT
       # ============================================================
 
       - name: Final APK-only audit
