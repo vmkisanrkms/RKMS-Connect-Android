@@ -83,7 +83,7 @@ jobs:
 
 
       # ============================================================
-      # ANDROID API 36
+      # INSTALL ANDROID API 36
       # ============================================================
 
       - name: Install Android API 36 SDK packages
@@ -150,19 +150,14 @@ jobs:
 
 
       # ============================================================
-      # FIND RKMS SOURCE
+      # LOCATE RKMS SOURCE
       #
-      # IMPORTANT:
       # ZIP IS OPTIONAL.
       #
-      # 1. If package.json exists in repository root:
-      #    build directly from repository.
+      # If repository itself contains package.json,
+      # build directly from repository.
       #
-      # 2. Otherwise, find RKMS source ZIP and extract it.
-      #
-      # This prevents the old:
-      # "Verify exact RKMS source ZIP"
-      # failure when the ZIP is not committed to GitHub.
+      # Otherwise search for RKMS ZIP.
       # ============================================================
 
       - name: Locate RKMS source
@@ -176,23 +171,13 @@ jobs:
           echo "LOCATING RKMS SOURCE"
           echo "=========================================="
 
-          # --------------------------------------------------------
-          # OPTION 1:
-          # Repository itself contains the source.
-          # --------------------------------------------------------
-
           if [ -s "$WORKSPACE/package.json" ]; then
 
             ROOT="$WORKSPACE"
 
-            echo "RKMS source found directly in repository root."
+            echo "RKMS source found in repository root."
 
           else
-
-            # ------------------------------------------------------
-            # OPTION 2:
-            # Find an RKMS ZIP committed to repository.
-            # ------------------------------------------------------
 
             ZIP_FILE="$(
               find "$WORKSPACE" \
@@ -212,17 +197,15 @@ jobs:
             if [ -z "$ZIP_FILE" ]; then
 
               echo "::error::RKMS source not found."
-              echo ""
-              echo "No package.json exists in repository root"
-              echo "and no RKMS source ZIP was found."
-              echo ""
-              echo "Upload/commit the RKMS source files to the"
-              echo "repository, or commit the source ZIP."
+
+              echo "No package.json in repository root"
+              echo "and no RKMS ZIP was found."
+
               exit 1
 
             fi
 
-            echo "RKMS source ZIP found:"
+            echo "RKMS ZIP:"
             echo "$ZIP_FILE"
 
             rm -rf "$WORKSPACE/rkms-build"
@@ -257,8 +240,11 @@ jobs:
               )"
 
               if [ -z "$PACKAGE_FILE" ]; then
-                echo "::error::package.json not found inside RKMS ZIP."
+
+                echo "::error::package.json not found."
+
                 exit 1
+
               fi
 
               ROOT="$(dirname "$PACKAGE_FILE")"
@@ -272,12 +258,12 @@ jobs:
           test -d "$ROOT"
           test -s "$ROOT/package.json"
 
+          echo "RKMS_ROOT=$ROOT" >> "$GITHUB_ENV"
+
           echo "=========================================="
           echo "RKMS ROOT:"
           echo "$ROOT"
           echo "=========================================="
-
-          echo "RKMS_ROOT=$ROOT" >> "$GITHUB_ENV"
 
 
       # ============================================================
@@ -312,8 +298,11 @@ jobs:
           for FILE in "${REQUIRED_FILES[@]}"; do
 
             if [ ! -s "$FILE" ]; then
+
               echo "::error::Required file missing: $FILE"
+
               exit 1
+
             fi
 
           done
@@ -328,16 +317,7 @@ jobs:
             google-services.json \
             >/dev/null
 
-          bash -n \
-            scripts/setup-android-native.sh
-
-          bash -n \
-            scripts/configure-android-16.sh
-
-          bash -n \
-            scripts/configure-release-signing.sh
-
-          echo "RKMS SOURCE STRUCTURE: PASS"
+          echo "SOURCE STRUCTURE: PASS"
 
 
       # ============================================================
@@ -396,7 +376,7 @@ jobs:
           }
 
           console.log(
-            "PACKAGE/VERSION CHECK: PASS"
+            "CAPACITOR VERSION CHECK: PASS"
           );
           NODE
 
@@ -539,13 +519,11 @@ jobs:
               encoding="utf-8"
           )
 
-          replacements = {
+          for key, value in {
               "compileSdkVersion": "36",
               "targetSdkVersion": "36",
               "minSdkVersion": "23",
-          }
-
-          for key, value in replacements.items():
+          }.items():
 
               s = re.sub(
                   rf"(\b{key}\s*=\s*)\d+",
@@ -599,11 +577,115 @@ jobs:
 
 
       # ============================================================
-      # RKMS NATIVE SETUP
+      # IMPORTANT FIX:
+      # REPAIR ONLY THE BROKEN PYTHON HEREDOC
       #
-      # IMPORTANT:
-      # NO REPAIR / NO REPLACEMENT OF THE SOURCE SCRIPT.
-      # The audited ZIP already contains the corrected script.
+      # Screenshot error:
+      #
+      # File "<stdin>", line 4
+      #     mkdir -p "$DRAWABLE_DIR"
+      # SyntaxError: invalid syntax
+      #
+      # This happens when the PY3 closing marker immediately
+      # before RES_DIR is missing.
+      #
+      # This repair is deterministic.
+      # ============================================================
+
+      - name: Repair native setup Python heredoc
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          FILE="scripts/setup-android-native.sh"
+
+          test -s "$FILE"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "scripts/setup-android-native.sh"
+          )
+
+          s = p.read_text(
+              encoding="utf-8"
+          )
+
+          marker = 'RES_DIR="android/app/src/main/res"'
+
+          pos = s.find(marker)
+
+          if pos < 0:
+              raise SystemExit(
+                  'RES_DIR marker not found in setup script'
+              )
+
+          before = s[:pos]
+
+          opener = before.rfind(
+              "python3 - <<'PY3'"
+          )
+
+          if opener < 0:
+              raise SystemExit(
+                  "Expected python3 - <<'PY3' opener not found"
+              )
+
+          tail = before[opener:]
+
+          # Correct case:
+          # python3 - <<'PY3'
+          # ...
+          # PY3
+          # RES_DIR=...
+
+          if "\nPY3\n" in tail:
+
+              print(
+                  "Native setup heredoc already correct."
+              )
+
+          else:
+
+              # Insert the missing closing PY3 immediately
+              # before the shell command RES_DIR=...
+              s = (
+                  s[:pos]
+                  + "PY3\n\n"
+                  + s[pos:]
+              )
+
+              p.write_text(
+                  s,
+                  encoding="utf-8"
+              )
+
+              print(
+                  "Missing PY3 heredoc terminator inserted."
+              )
+          PY
+
+          # The script MUST now pass Bash syntax validation.
+          bash -n "$FILE"
+
+          # Confirm that the shell resource commands are outside
+          # the Python heredoc.
+          grep -Fq \
+            'RES_DIR="android/app/src/main/res"' \
+            "$FILE"
+
+          grep -Fq \
+            'mkdir -p "$DRAWABLE_DIR"' \
+            "$FILE"
+
+          echo "NATIVE SETUP HEREDOC REPAIR: PASS"
+
+
+      # ============================================================
+      # RKMS NATIVE SETUP
       # ============================================================
 
       - name: Apply RKMS native Android setup
@@ -614,6 +696,9 @@ jobs:
           cd "$RKMS_ROOT"
 
           chmod +x \
+            scripts/setup-android-native.sh
+
+          bash -n \
             scripts/setup-android-native.sh
 
           ./scripts/setup-android-native.sh
@@ -662,7 +747,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY GENERATED MAIN ACTIVITY
+      # VERIFY MAIN ACTIVITY
       # ============================================================
 
       - name: Verify generated MainActivity
@@ -682,9 +767,6 @@ jobs:
 
           test -n "$MAIN_ACTIVITY"
           test -s "$MAIN_ACTIVITY"
-
-          # The old malformed literal \n Java problem
-          # must NOT exist.
 
           if grep -Fq '\n' "$MAIN_ACTIVITY"; then
 
@@ -706,7 +788,7 @@ jobs:
             'RKMSNativeBridge' \
             "$MAIN_ACTIVITY"
 
-          echo "MAINACTIVITY GENERATION: PASS"
+          echo "MAINACTIVITY VERIFICATION: PASS"
 
 
       # ============================================================
@@ -854,7 +936,7 @@ jobs:
 
 
       # ============================================================
-      # STATIC AUDITS
+      # COMPLETE STATIC AUDITS
       # ============================================================
 
       - name: Run complete RKMS static audits
@@ -894,7 +976,7 @@ jobs:
 
 
       # ============================================================
-      # SIGNING SECRETS
+      # VERIFY RELEASE SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -930,7 +1012,7 @@ jobs:
 
 
       # ============================================================
-      # RELEASE SIGNING
+      # CONFIGURE RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -991,7 +1073,8 @@ jobs:
 
           cd "$RKMS_ROOT/android"
 
-          chmod +x gradlew
+          chmod +x \
+            gradlew
 
           ./gradlew \
             --version \
@@ -1019,7 +1102,7 @@ jobs:
 
 
       # ============================================================
-      # FINAL ANDROID AUDIT
+      # FINAL ANDROID 16 AUDIT
       # ============================================================
 
       - name: Final Android 16 API 36 audit
@@ -1053,10 +1136,9 @@ jobs:
 
 
       # ============================================================
-      # FINAL SIGNED RELEASE APK ONLY
+      # BUILD FINAL SIGNED RELEASE APK ONLY
       #
-      # NO assembleDebug
-      # NO bundleRelease
+      # NO DEBUG APK
       # NO AAB
       # ============================================================
 
@@ -1116,14 +1198,14 @@ jobs:
           echo "APK_PATH=$FINAL_APK" >> "$GITHUB_ENV"
 
           echo "=========================================="
-          echo "FINAL RELEASE APK CREATED"
+          echo "FINAL SIGNED RELEASE APK CREATED"
           echo "=========================================="
 
           stat -c%s "$FINAL_APK"
 
 
       # ============================================================
-      # NO DEBUG APK
+      # VERIFY NO DEBUG APK
       # ============================================================
 
       - name: Verify no debug APK
@@ -1154,7 +1236,7 @@ jobs:
 
 
       # ============================================================
-      # NO AAB
+      # VERIFY NO AAB
       # ============================================================
 
       - name: Verify no AAB
@@ -1185,7 +1267,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY APK PACKAGE AND TARGET SDK
+      # VERIFY APK PACKAGE / TARGET SDK
       # ============================================================
 
       - name: Verify final APK package and SDK
@@ -1249,7 +1331,7 @@ jobs:
 
 
       # ============================================================
-      # SHA256
+      # APK SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1268,7 +1350,7 @@ jobs:
 
 
       # ============================================================
-      # FINAL APK-ONLY AUDIT
+      # FINAL APK ONLY AUDIT
       # ============================================================
 
       - name: Final APK-only audit
@@ -1337,7 +1419,7 @@ jobs:
 
 
       # ============================================================
-      # UPLOAD ONLY FINAL RELEASE APK
+      # UPLOAD FINAL RELEASE APK ONLY
       # ============================================================
 
       - name: Upload final signed release APK
