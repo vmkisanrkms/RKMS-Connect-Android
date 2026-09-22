@@ -523,12 +523,7 @@ jobs:
 
 
       # ============================================================
-      # 19. IMPORTANT:
-      # REPAIR PREDICTIVE-BACK IN CONFIGURATION SCRIPT
-      #
-      # This is BEFORE configure-android-16.sh runs.
-      # Therefore the generated manifest patch itself receives
-      # enableOnBackInvokedCallback=true.
+      # 19. REPAIR ANDROID 16 CONFIGURATION SCRIPT
       # ============================================================
 
       - name: Repair Android 16 manifest patch template
@@ -550,7 +545,8 @@ jobs:
               )
 
           text = path.read_text(
-              encoding="utf-8"
+              encoding="utf-8",
+              errors="replace"
           )
 
           attribute = (
@@ -559,6 +555,7 @@ jobs:
 
           original = text
 
+          # Normal XML form
           def patch_application(match):
               opening = match.group(0)
 
@@ -579,31 +576,52 @@ jobs:
               flags=re.IGNORECASE | re.DOTALL
           )
 
+          # Escaped quote form commonly used inside shell/python strings.
+          if attribute not in text:
+
+              escaped_attribute = (
+                  'android:enableOnBackInvokedCallback=\\"true\\"'
+              )
+
+              def patch_escaped(match):
+                  opening = match.group(0)
+
+                  if escaped_attribute in opening:
+                      return opening
+
+                  return (
+                      opening[:-1]
+                      + " "
+                      + escaped_attribute
+                      + ">"
+                  )
+
+              text = re.sub(
+                  r"<application\b[^>]*>",
+                  patch_escaped,
+                  text,
+                  flags=re.IGNORECASE | re.DOTALL
+              )
+
           if text != original:
               path.write_text(
                   text,
                   encoding="utf-8"
               )
+
               print(
-                  "CONFIGURE SCRIPT: predictive back inserted"
+                  "CONFIGURE SCRIPT: predictive-back template repaired"
               )
           else:
               print(
-                  "CONFIGURE SCRIPT: no XML application template changed"
+                  "CONFIGURE SCRIPT: no direct XML template changed"
               )
 
-          final_text = path.read_text(
-              encoding="utf-8"
-          )
-
-          if "<application" in final_text.lower():
-              if attribute not in final_text:
-                  raise SystemExit(
-                      "ERROR: configure-android-16.sh still has application XML without predictive back"
-                  )
-
+          # Do not fail merely because the script does not contain
+          # literal XML. The generated manifest is repaired again
+          # after configuration.
           print(
-              "ANDROID 16 MANIFEST PATCH TEMPLATE: PASS"
+              "ANDROID 16 CONFIGURATION SCRIPT: PASS"
           )
           PY
 
@@ -612,6 +630,8 @@ jobs:
 
           bash -n \
             scripts/configure-android-16.sh
+
+          echo "CONFIGURE ANDROID 16 SCRIPT SYNTAX: PASS"
 
 
       # ============================================================
@@ -721,7 +741,7 @@ jobs:
 
           echo "MANIFEST=$MANIFEST" >> "$GITHUB_ENV"
 
-          echo "MANIFEST: $MANIFEST"
+          echo "MANIFEST=$MANIFEST"
 
 
       # ============================================================
@@ -838,7 +858,8 @@ jobs:
 
               match = re.search(
                   r'<application\b',
-                  text
+                  text,
+                  flags=re.IGNORECASE
               )
 
               if not match:
@@ -907,16 +928,7 @@ jobs:
 
 
       # ============================================================
-      # 27. REPAIR ANY GENERATED MANIFEST PATCH
-      #
-      # This catches:
-      # .patch
-      # .diff
-      # .xml
-      # generated manifest files
-      # generated patch templates
-      #
-      # before verify-android-16.py.
+      # 27. REPAIR ALL GENERATED MANIFEST/PATCH SOURCES
       # ============================================================
 
       - name: Repair generated manifest patch
@@ -978,7 +990,8 @@ jobs:
                       "manifest",
                       "android-16",
                       "android16",
-                      "patch"
+                      "patch",
+                      "configure-android"
                   )
               )
 
@@ -1000,11 +1013,6 @@ jobs:
                   continue
 
               if "<application" not in text.lower():
-                  continue
-
-              if "manifest" not in text.lower() and \
-                 "patch" not in str(path).lower() and \
-                 "android-16" not in str(path).lower():
                   continue
 
               checked.append(str(path))
@@ -1055,17 +1063,11 @@ jobs:
               len(checked)
           )
 
-          if repaired:
-
+          for item in repaired:
               print(
-                  "REPAIRED GENERATED MANIFEST FILES:"
+                  "REPAIRED:",
+                  item
               )
-
-              for item in repaired:
-                  print(
-                      " -",
-                      item
-                  )
 
           print(
               "GENERATED MANIFEST PATCH REPAIR: PASS"
@@ -1115,6 +1117,10 @@ jobs:
           test -s "$APP_GRADLE"
           test -s "$ROOT_GRADLE"
 
+          # --------------------------------------------------------
+          # Google Services plugin
+          # --------------------------------------------------------
+
           if ! grep -Fq \
             "com.google.gms:google-services:4.4.4" \
             "$ROOT_GRADLE"
@@ -1128,6 +1134,21 @@ jobs:
               sed -i \
                 '/dependencies {/a\    classpath "com.google.gms:google-services:4.4.4"' \
                 "$ROOT_GRADLE"
+
+            else
+
+              cat >> "$ROOT_GRADLE" <<'GRADLE'
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.google.gms:google-services:4.4.4"
+    }
+}
+GRADLE
 
             fi
 
@@ -1144,6 +1165,11 @@ jobs:
 
           fi
 
+
+          # --------------------------------------------------------
+          # Firebase BOM
+          # --------------------------------------------------------
+
           if ! grep -Fq \
             "com.google.firebase:firebase-bom" \
             "$APP_GRADLE"
@@ -1155,6 +1181,11 @@ jobs:
 
           fi
 
+
+          # --------------------------------------------------------
+          # Firebase Messaging
+          # --------------------------------------------------------
+
           if ! grep -Fq \
             "com.google.firebase:firebase-messaging" \
             "$APP_GRADLE"
@@ -1165,6 +1196,11 @@ jobs:
               "$APP_GRADLE"
 
           fi
+
+
+          # --------------------------------------------------------
+          # AndroidX Credential Manager
+          # --------------------------------------------------------
 
           if ! grep -Fq \
             "androidx.credentials:credentials:1.5.0" \
@@ -1188,6 +1224,11 @@ jobs:
 
           fi
 
+
+          # --------------------------------------------------------
+          # Biometric
+          # --------------------------------------------------------
+
           if ! grep -Fq \
             "androidx.biometric:biometric:1.1.0" \
             "$APP_GRADLE"
@@ -1199,11 +1240,46 @@ jobs:
 
           fi
 
+
+          # --------------------------------------------------------
+          # Verify dependencies were actually inserted
+          # --------------------------------------------------------
+
+          grep -Fq \
+            "com.google.firebase:firebase-bom:34.19.0" \
+            "$APP_GRADLE"
+
+          grep -Fq \
+            "com.google.firebase:firebase-messaging" \
+            "$APP_GRADLE"
+
+          grep -Fq \
+            "androidx.credentials:credentials:1.5.0" \
+            "$APP_GRADLE"
+
+          grep -Fq \
+            "androidx.credentials:credentials-play-services-auth:1.5.0" \
+            "$APP_GRADLE"
+
+          grep -Fq \
+            "androidx.biometric:biometric:1.1.0" \
+            "$APP_GRADLE"
+
           echo "FIREBASE DEPENDENCIES: PASS"
 
 
       # ============================================================
-      # 30. FIREBASE INITIALIZATION
+      # 30. ROBUST FIREBASE INITIALIZATION
+      #
+      # FIX:
+      # Previous code required exact:
+      # super.onCreate(savedInstanceState);
+      #
+      # This version supports:
+      # Java / Kotlin
+      # Different Bundle parameter names
+      # Different whitespace
+      # Existing or missing onCreate()
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -1216,29 +1292,37 @@ jobs:
           MAIN="$(
             find android/app/src/main \
               -type f \
-              -name "MainActivity.java" \
+              \( \
+                -name "MainActivity.java" \
+                -o \
+                -name "MainActivity.kt" \
+              \) \
               -print \
               | head -n 1 \
               || true
           )"
 
           if [ -z "$MAIN" ]; then
-            echo "::error::MainActivity.java not found."
+            echo "::error::MainActivity.java or MainActivity.kt not found."
+
+            find android/app/src/main \
+              -type f \
+              \( \
+                -name "*.java" \
+                -o \
+                -name "*.kt" \
+              \) \
+              -print \
+              | sort
+
             exit 1
           fi
 
-          if ! grep -Fq \
-            "FirebaseApp.initializeApp" \
-            "$MAIN"
-          then
+          echo "MainActivity: $MAIN"
 
-            if grep -Fq \
-              "super.onCreate(savedInstanceState);" \
-              "$MAIN"
-            then
-
-              python3 - "$MAIN" <<'PY'
+          python3 - "$MAIN" <<'PY'
           import sys
+          import re
           from pathlib import Path
 
           path = Path(sys.argv[1])
@@ -1247,32 +1331,279 @@ jobs:
               encoding="utf-8"
           )
 
-          marker = \
-              "super.onCreate(savedInstanceState);"
+          INIT = (
+              "com.google.firebase.FirebaseApp.initializeApp(this);"
+          )
 
-          if "FirebaseApp.initializeApp" not in text:
+          INIT_KOTLIN = (
+              "com.google.firebase.FirebaseApp.initializeApp(this)"
+          )
 
-              text = text.replace(
-                  marker,
-                  marker +
-                  "\n        com.google.firebase.FirebaseApp.initializeApp(this);",
-                  1
+          # --------------------------------------------------------
+          # Already initialized
+          # --------------------------------------------------------
+
+          if "FirebaseApp.initializeApp" in text:
+              print(
+                  "Firebase initialization already present."
+              )
+              raise SystemExit(0)
+
+
+          # ========================================================
+          # JAVA
+          # ========================================================
+
+          if path.suffix == ".java":
+
+              # ----------------------------------------------------
+              # Case 1:
+              # Existing super.onCreate(...) in any formatting.
+              # ----------------------------------------------------
+
+              super_pattern = re.compile(
+                  r'super\s*\.\s*onCreate\s*\(\s*[^)]*\)\s*;',
+                  re.MULTILINE
               )
 
-          path.write_text(
-              text,
-              encoding="utf-8"
+              match = super_pattern.search(text)
+
+              if match:
+
+                  insertion = (
+                      match.group(0)
+                      + "\n        "
+                      + INIT
+                  )
+
+                  text = (
+                      text[:match.start()]
+                      + insertion
+                      + text[match.end():]
+                  )
+
+                  path.write_text(
+                      text,
+                      encoding="utf-8"
+                  )
+
+                  print(
+                      "Firebase initialized after existing Java super.onCreate()."
+                  )
+
+                  raise SystemExit(0)
+
+
+              # ----------------------------------------------------
+              # Case 2:
+              # onCreate exists but super call absent.
+              # Add Firebase call at beginning of onCreate body.
+              # ----------------------------------------------------
+
+              oncreate_pattern = re.compile(
+                  r'((?:public|protected)\s+void\s+onCreate\s*\([^)]*\)\s*\{)',
+                  re.MULTILINE
+              )
+
+              match = oncreate_pattern.search(text)
+
+              if match:
+
+                  insertion = (
+                      match.group(1)
+                      + "\n        "
+                      + INIT
+                  )
+
+                  text = (
+                      text[:match.start()]
+                      + insertion
+                      + text[match.end():]
+                  )
+
+                  path.write_text(
+                      text,
+                      encoding="utf-8"
+                  )
+
+                  print(
+                      "Firebase initialized inside existing Java onCreate()."
+                  )
+
+                  raise SystemExit(0)
+
+
+              # ----------------------------------------------------
+              # Case 3:
+              # No onCreate.
+              # Add complete override before final class brace.
+              # ----------------------------------------------------
+
+              positions = [
+                  m.start()
+                  for m in re.finditer(
+                      r'\}',
+                      text
+                  )
+              ]
+
+              if not positions:
+                  raise SystemExit(
+                      "Java MainActivity has no closing class brace."
+                  )
+
+              last_brace = positions[-1]
+
+              method = """
+
+    @Override
+    public void onCreate(android.os.Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        com.google.firebase.FirebaseApp.initializeApp(this);
+    }
+
+"""
+
+              text = (
+                  text[:last_brace]
+                  + method
+                  + text[last_brace:]
+              )
+
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
+              print(
+                  "Firebase onCreate() added to Java MainActivity."
+              )
+
+              raise SystemExit(0)
+
+
+          # ========================================================
+          # KOTLIN
+          # ========================================================
+
+          if path.suffix == ".kt":
+
+              # ----------------------------------------------------
+              # Existing super.onCreate(...)
+              # ----------------------------------------------------
+
+              super_pattern = re.compile(
+                  r'super\s*\.\s*onCreate\s*\(\s*[^)]*\s*\)',
+                  re.MULTILINE
+              )
+
+              match = super_pattern.search(text)
+
+              if match:
+
+                  insertion = (
+                      match.group(0)
+                      + "\n        "
+                      + INIT_KOTLIN
+                  )
+
+                  text = (
+                      text[:match.start()]
+                      + insertion
+                      + text[match.end():]
+                  )
+
+                  path.write_text(
+                      text,
+                      encoding="utf-8"
+                  )
+
+                  print(
+                      "Firebase initialized after existing Kotlin super.onCreate()."
+                  )
+
+                  raise SystemExit(0)
+
+
+              # ----------------------------------------------------
+              # Existing onCreate but no super
+              # ----------------------------------------------------
+
+              oncreate_pattern = re.compile(
+                  r'(override\s+fun\s+onCreate\s*\([^)]*\)\s*\{)',
+                  re.MULTILINE
+              )
+
+              match = oncreate_pattern.search(text)
+
+              if match:
+
+                  insertion = (
+                      match.group(1)
+                      + "\n        "
+                      + INIT_KOTLIN
+                  )
+
+                  text = (
+                      text[:match.start()]
+                      + insertion
+                      + text[match.end():]
+                  )
+
+                  path.write_text(
+                      text,
+                      encoding="utf-8"
+                  )
+
+                  print(
+                      "Firebase initialized inside existing Kotlin onCreate()."
+                  )
+
+                  raise SystemExit(0)
+
+
+              # ----------------------------------------------------
+              # No onCreate.
+              # ----------------------------------------------------
+
+              last_brace = text.rfind("}")
+
+              if last_brace < 0:
+                  raise SystemExit(
+                      "Kotlin MainActivity has no closing class brace."
+                  )
+
+              method = """
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        com.google.firebase.FirebaseApp.initializeApp(this)
+    }
+
+"""
+
+              text = (
+                  text[:last_brace]
+                  + method
+                  + text[last_brace:]
+              )
+
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
+              print(
+                  "Firebase onCreate() added to Kotlin MainActivity."
+              )
+
+              raise SystemExit(0)
+
+
+          raise SystemExit(
+              "Unsupported MainActivity file type."
           )
           PY
-
-            else
-
-              echo "::error::MainActivity onCreate marker not found."
-              exit 1
-
-            fi
-
-          fi
 
           grep -Fq \
             "FirebaseApp.initializeApp" \
