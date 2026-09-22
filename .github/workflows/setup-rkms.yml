@@ -79,13 +79,6 @@ jobs:
 
       # ============================================================
       # ANDROID SDK
-      #
-      # IMPORTANT:
-      # Do NOT pass API 36 packages through the setup-android
-      # multiline packages input.
-      #
-      # setup-android installs command-line tools and platform-tools.
-      # API 36 and Build Tools are installed separately with sdkmanager.
       # ============================================================
 
       - name: Setup Android SDK
@@ -289,8 +282,6 @@ jobs:
 
       # ============================================================
       # VERIFY PACKAGE.JSON
-      #
-      # Do NOT compare the build script as an exact string.
       # ============================================================
 
       - name: Verify package versions
@@ -1308,7 +1299,13 @@ jobs:
 
 
       # ============================================================
-      # BUILD RELEASE APK ONLY
+      # BUILD FINAL SIGNED RELEASE APK ONLY
+      #
+      # IMPORTANT:
+      # Gradle BUILD SUCCESSFUL hone ke baad bhi fixed
+      # app-release.apk path assume nahi karenge.
+      #
+      # Actual release APK ko dynamically find kiya jayega.
       #
       # NO assembleDebug
       # NO bundleRelease
@@ -1328,24 +1325,113 @@ jobs:
           rm -rf \
             app/build/outputs/bundle
 
+          echo "=========================================="
+          echo "BUILDING FINAL SIGNED RELEASE APK"
+          echo "=========================================="
+
           ./gradlew \
             :app:assembleRelease \
             --no-daemon \
             --stacktrace
 
-          APK="$RKMS_ROOT/android/app/build/outputs/apk/release/app-release.apk"
+          echo "=========================================="
+          echo "GRADLE BUILD SUCCESSFUL"
+          echo "SEARCHING FOR RELEASE APK"
+          echo "=========================================="
+
+          RELEASE_DIR="$RKMS_ROOT/android/app/build/outputs/apk/release"
+
+          if [ ! -d "$RELEASE_DIR" ]; then
+
+            echo "::error::Release APK directory was not created."
+
+            echo "Available output directories:"
+            find "$RKMS_ROOT/android/app/build/outputs" \
+              -maxdepth 5 \
+              -type d \
+              -print || true
+
+            exit 1
+
+          fi
+
+          echo "Release directory:"
+          echo "$RELEASE_DIR"
+
+          echo "Files generated:"
+          find "$RELEASE_DIR" \
+            -maxdepth 3 \
+            -type f \
+            -print || true
+
+          APK_LIST="$(
+            find "$RELEASE_DIR" \
+              -maxdepth 3 \
+              -type f \
+              -name "*.apk" \
+              -print
+          )"
+
+          if [ -z "$APK_LIST" ]; then
+
+            echo "::error::No release APK was found after successful Gradle build."
+
+            echo "Complete APK output tree:"
+            find "$RKMS_ROOT/android/app/build/outputs" \
+              -type f \
+              -print || true
+
+            exit 1
+
+          fi
+
+          APK_COUNT="$(
+            printf '%s\n' "$APK_LIST" |
+            sed '/^[[:space:]]*$/d' |
+            wc -l
+          )"
+
+          echo "Release APK count: $APK_COUNT"
+
+          if [ "$APK_COUNT" -ne 1 ]; then
+
+            echo "::error::Expected exactly one release APK."
+
+            echo "Found APK files:"
+            printf '%s\n' "$APK_LIST"
+
+            exit 1
+
+          fi
+
+          APK="$(
+            printf '%s\n' "$APK_LIST" |
+            head -n 1
+          )"
 
           test -s "$APK"
 
+          echo "=========================================="
+          echo "RELEASE APK FOUND"
+          echo "$APK"
+          echo "=========================================="
+
+          FINAL_APK="$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+
           cp \
             "$APK" \
-            "$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
+            "$FINAL_APK"
+
+          test -s "$FINAL_APK"
 
           echo \
-            "APK_PATH=$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk" \
+            "APK_PATH=$FINAL_APK" \
             >> "$GITHUB_ENV"
 
+          echo "=========================================="
           echo "FINAL SIGNED RELEASE APK BUILD: PASS"
+          echo "=========================================="
+          echo "APK: $FINAL_APK"
 
 
       # ============================================================
