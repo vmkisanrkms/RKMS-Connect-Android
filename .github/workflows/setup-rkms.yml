@@ -192,13 +192,6 @@ jobs:
             if [ -z "$ZIP_FILE" ]; then
 
               echo "::error::RKMS source ZIP not found."
-              echo ""
-              echo "Repository root has no package.json."
-              echo "No RKMS source ZIP was found."
-              echo ""
-              echo "The final corrected RKMS ZIP must be committed"
-              echo "to the repository before starting the build."
-
               exit 1
 
             fi
@@ -262,34 +255,7 @@ jobs:
 
 
       # ============================================================
-      # SOURCE ZIP HASH / IDENTITY
-      # ============================================================
-
-      - name: Record RKMS source identity
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          echo "RKMS SOURCE:"
-          pwd
-
-          echo "PACKAGE:"
-          node -p "require('./package.json').name || 'unknown'"
-
-          echo "PACKAGE VERSION:"
-          node -p "require('./package.json').version || 'unknown'"
-
-          if [ -f "$GITHUB_WORKSPACE"/RKMS_CONNECT_*.zip ]; then
-            sha256sum "$GITHUB_WORKSPACE"/RKMS_CONNECT_*.zip || true
-          fi
-
-          echo "SOURCE IDENTITY: PASS"
-
-
-      # ============================================================
-      # VERIFY SOURCE STRUCTURE
+      # VERIFY SOURCE
       # ============================================================
 
       - name: Verify RKMS source structure
@@ -313,12 +279,10 @@ jobs:
           )
 
           for FILE in "${REQUIRED_FILES[@]}"; do
-
             if [ ! -s "$FILE" ]; then
               echo "::error::Required file missing: $FILE"
               exit 1
             fi
-
           done
 
           node --check app.js
@@ -332,9 +296,6 @@ jobs:
             >/dev/null
 
           bash -n \
-            scripts/setup-android-native.sh
-
-          bash -n \
             scripts/configure-android-16.sh
 
           bash -n \
@@ -344,108 +305,835 @@ jobs:
 
 
       # ============================================================
-      # IMPORTANT NATIVE SCRIPT PREFLIGHT
+      # INSTALL CORRECT RKMS NATIVE SCRIPT
       #
-      # Prevents the exact screenshot error:
+      # IMPORTANT:
+      # This completely replaces the broken setup-android-native.sh.
       #
-      # File "<stdin>", line 4
-      # mkdir -p "$DRAWABLE_DIR"
-      # SyntaxError: invalid syntax
-      #
-      # Bash commands must NEVER be inside a Python heredoc.
+      # NO "Repair native setup Python heredoc".
+      # NO Python/bash mixing.
       # ============================================================
 
-      - name: Preflight RKMS native setup script
+      - name: Install corrected RKMS native Android setup
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$RKMS_ROOT"
 
-          SCRIPT="scripts/setup-android-native.sh"
+          mkdir -p scripts
 
-          test -s "$SCRIPT"
+          cat > scripts/setup-android-native.sh <<'RKMS_NATIVE_SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+MAIN_ACTIVITY="$(
+  find android/app/src/main \
+    -type f \
+    -name 'MainActivity.java' \
+    -print \
+    -quit
+)"
+
+if [ -z "$MAIN_ACTIVITY" ]; then
+  echo "ERROR: MainActivity.java not found after Capacitor Android generation" >&2
+  find android/app/src/main -type f >&2 || true
+  exit 1
+fi
+
+APP_SRC="$(dirname "$MAIN_ACTIVITY")"
+
+mkdir -p "$APP_SRC"
+
+
+# ==============================================================
+# GOOGLE SERVICES GRADLE PLUGIN
+# ==============================================================
+
+python3 - <<'PY2'
+from pathlib import Path
+
+root = Path("android/build.gradle")
+s = root.read_text()
+
+if "com.google.gms:google-services:" not in s:
+    marker = "dependencies {"
+
+    if marker not in s:
+        raise SystemExit(
+            "android/build.gradle dependencies block missing"
+        )
+
+    s = s.replace(
+        marker,
+        marker + '\n        classpath "com.google.gms:google-services:4.4.3"',
+        1
+    )
+
+    root.write_text(s)
+
+app = Path("android/app/build.gradle")
+s = app.read_text()
+
+if "com.google.gms.google-services" not in s:
+    s += '''
+    
+// RKMS FCM: process android/app/google-services.json
+apply plugin: "com.google.gms.google-services"
+'''
+
+    app.write_text(s)
+PY2
+
+
+# ==============================================================
+# ANDROID CREDENTIAL MANAGER
+# ==============================================================
+
+python3 - <<'PYCM'
+from pathlib import Path
+
+p = Path("android/app/build.gradle")
+s = p.read_text()
+
+if "androidx.credentials:credentials:" not in s:
+
+    marker = "dependencies {"
+
+    if marker not in s:
+        raise SystemExit(
+            "dependencies block missing"
+        )
+
+    s = s.replace(
+        marker,
+        marker
+        + '\n    implementation "androidx.credentials:credentials:1.5.0"'
+        + '\n    implementation "androidx.credentials:credentials-play-services-auth:1.5.0"',
+        1
+    )
+
+p.write_text(s)
+PYCM
+
+
+# ==============================================================
+# GOOGLE SERVICES JSON
+# ==============================================================
+
+if [ ! -f "google-services.json" ]; then
+  echo "ERROR: root google-services.json is missing" >&2
+  exit 1
+fi
+
+cp -f \
+  "google-services.json" \
+  "android/app/google-services.json"
+
+chmod 600 \
+  "android/app/google-services.json"
+
+
+python3 - <<'PY3'
+import json
+from pathlib import Path
+
+p = Path("android/app/google-services.json")
+
+data = json.loads(
+    p.read_text()
+)
+
+clients = data.get("client", [])
+
+packages = []
+
+for c in clients:
+
+    packages.append(
+        c.get(
+            "client_info",
+            {}
+        ).get(
+            "android_client_info",
+            {}
+        ).get(
+            "package_name"
+        )
+    )
+
+if "org.rkms.connect" not in packages:
+
+    raise SystemExit(
+        "ERROR: google-services.json has no org.rkms.connect client"
+    )
+
+print(
+    "google-services.json package verification: PASS"
+)
+PY3
+
+
+# ==============================================================
+# NOTIFICATION RESOURCE DIRECTORIES
+# ==============================================================
+
+RES_DIR="android/app/src/main/res"
+VALUES_DIR="$RES_DIR/values"
+
+mkdir -p "$VALUES_DIR"
+
+STRINGS="$VALUES_DIR/strings.xml"
+
+if [ -f "$STRINGS" ]; then
+
+  python3 - <<'PY3'
+from pathlib import Path
+
+p = Path(
+    "android/app/src/main/res/values/strings.xml"
+)
+
+s = p.read_text()
+
+if "rkms_default_notification_channel_id" not in s:
+
+    s = s.replace(
+        "</resources>",
+        '    <string name="rkms_default_notification_channel_id">rkms_notifications_v2</string>\n'
+        '    <string name="rkms_priority_notification_channel_id">rkms_priority_v1</string>\n'
+        "</resources>"
+    )
+
+    p.write_text(s)
+PY3
+
+else
+
+  cat > "$STRINGS" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rkms_default_notification_channel_id">rkms_notifications_v2</string>
+    <string name="rkms_priority_notification_channel_id">rkms_priority_v1</string>
+</resources>
+XML
+
+fi
+
+
+# ==============================================================
+# NOTIFICATION ICON
+# ==============================================================
+
+DRAWABLE_DIR="$RES_DIR/drawable"
+
+mkdir -p "$DRAWABLE_DIR"
+
+cat > "$DRAWABLE_DIR/ic_stat_rkms.xml" <<'XML'
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>
+
+</vector>
+XML
+
+
+# ==============================================================
+# ANDROID MANIFEST
+# ==============================================================
+
+python3 - <<'PY3'
+from pathlib import Path
+
+p = Path(
+    "android/app/src/main/AndroidManifest.xml"
+)
+
+s = p.read_text()
+
+perm = (
+    '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
+    '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
+)
+
+if "android.permission.RECORD_AUDIO" not in s:
+
+    pos = s.find("<application")
+
+    if pos < 0:
+        raise SystemExit(
+            "AndroidManifest application tag missing"
+        )
+
+    s = s[:pos] + perm + s[pos:]
+
+
+if "com.google.firebase.messaging.default_notification_channel_id" not in s:
+
+    marker = "<application"
+
+    if marker not in s:
+        raise SystemExit(
+            "AndroidManifest application tag missing"
+        )
+
+    s = s.replace(
+        marker,
+        '<application android:enableOnBackInvokedCallback="true"',
+        1
+    )
+
+    meta = (
+        '    <meta-data '
+        'android:name="com.google.firebase.messaging.default_notification_channel_id" '
+        'android:value="@string/rkms_default_notification_channel_id" />\n'
+
+        '    <meta-data '
+        'android:name="com.google.firebase.messaging.default_notification_icon" '
+        'android:resource="@drawable/ic_stat_rkms" />\n'
+    )
+
+    marker = "</application>"
+
+    if marker not in s:
+        raise SystemExit(
+            "AndroidManifest application closing tag missing"
+        )
+
+    s = s.replace(
+        marker,
+        meta + marker,
+        1
+    )
+
+p.write_text(s)
+PY3
+
+
+# ==============================================================
+# MAIN ACTIVITY
+# ==============================================================
+
+MAIN="$MAIN_ACTIVITY"
+
+if [ -f "$MAIN" ]; then
+
+  MAIN_ACTIVITY_ENV="$MAIN_ACTIVITY" \
+  python3 - <<'PY'
+import os
+from pathlib import Path
+
+p = Path(
+    os.environ["MAIN_ACTIVITY_ENV"]
+)
+
+s = p.read_text()
+
+if "RKMSNativeBridge(this, rkmsWebView)" not in s:
+
+    marker = (
+        "public class MainActivity extends BridgeActivity {"
+    )
+
+    replacement = """public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(android.os.Bundle savedInstanceState) {
+        com.google.firebase.FirebaseApp.initializeApp(this);
+        super.onCreate(savedInstanceState);
+        getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+
+        android.webkit.WebView rkmsWebView =
+            getBridge().getWebView();
+
+        rkmsWebView.setImportantForAutofill(
+            android.view.View.IMPORTANT_FOR_AUTOFILL_YES
+        );
+
+        rkmsWebView.setSaveEnabled(true);
+
+        rkmsWebView.getSettings()
+            .setMediaPlaybackRequiresUserGesture(false);
+
+        rkmsWebView.addJavascriptInterface(
+            new RKMSNativeBridge(this, rkmsWebView),
+            "RKMSNative"
+        );
+
+        rkmsInstallWebAudioPermissionBridge(rkmsWebView);
+
+        createRkmsNotificationChannel();
+
+        rkmsCaptureNotificationIntent(getIntent());
+
+        new android.os.Handler(
+            android.os.Looper.getMainLooper()
+        ).postDelayed(
+            this::rkmsDispatchNotificationRoute,
+            700
+        );
+    }
+
+    private volatile String rkmsPendingNotificationRoute = "";
+
+    private String rkmsExtractNotificationRoute(
+        android.content.Intent intent
+    ) {
+        if (
+            intent == null ||
+            intent.getExtras() == null
+        ) {
+            return "";
+        }
+
+        android.os.Bundle b = intent.getExtras();
+
+        String route = b.getString(
+            "route",
+            ""
+        );
+
+        String type = b.getString(
+            "type",
+            ""
+        );
+
+        String cid = b.getString(
+            "conversation_id",
+            ""
+        );
+
+        if (
+            (route == null || route.trim().isEmpty()) &&
+            "rkms_chat".equalsIgnoreCase(type) &&
+            cid != null &&
+            !cid.trim().isEmpty()
+        ) {
+            route = "chat/" + cid.trim();
+        }
+
+        if (route == null) {
+            route = "";
+        }
+
+        return route.trim().replaceFirst(
+            "^#?[/]",
+            ""
+        );
+    }
+
+    private void rkmsCaptureNotificationIntent(
+        android.content.Intent intent
+    ) {
+        String route =
+            rkmsExtractNotificationRoute(intent);
+
+        if (route.isEmpty()) {
+            return;
+        }
+
+        rkmsPendingNotificationRoute = route;
+
+        rkmsDispatchNotificationRoute();
+    }
+
+    private void rkmsDispatchNotificationRoute() {
+
+        final String route =
+            rkmsPendingNotificationRoute;
+
+        if (
+            route == null ||
+            route.isEmpty()
+        ) {
+            return;
+        }
+
+        android.webkit.WebView w =
+            getBridge() == null
+                ? null
+                : getBridge().getWebView();
+
+        if (w == null) {
+
+            new android.os.Handler(
+                android.os.Looper.getMainLooper()
+            ).postDelayed(
+                this::rkmsDispatchNotificationRoute,
+                300
+            );
+
+            return;
+        }
+
+        String js =
+            "window.rkmsOpenNotificationRoute && " +
+            "window.rkmsOpenNotificationRoute(" +
+            org.json.JSONObject.quote(route) +
+            ");";
+
+        w.post(
+            () ->
+                w.evaluateJavascript(
+                    js,
+                    value ->
+                        rkmsPendingNotificationRoute = ""
+                )
+        );
+    }
+
+    @Override
+    protected void onNewIntent(
+        android.content.Intent intent
+    ) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        rkmsCaptureNotificationIntent(intent);
+    }
+
+    private android.webkit.PermissionRequest
+        rkmsPendingPermissionRequest;
+
+    private static final int
+        RKMS_AUDIO_PERMISSION_REQUEST = 4127;
+
+    private static final int
+        RKMS_FILE_CHOOSER_REQUEST = 4128;
+
+    private android.webkit.ValueCallback<android.net.Uri[]>
+        rkmsFilePathCallback;
+
+    private void rkmsInstallWebAudioPermissionBridge(
+        android.webkit.WebView webView
+    ) {
+
+        webView.setWebChromeClient(
+            new android.webkit.WebChromeClient() {
+
+                @Override
+                public boolean onShowFileChooser(
+                    android.webkit.WebView view,
+                    android.webkit.ValueCallback<android.net.Uri[]> callback,
+                    android.webkit.WebChromeClient.FileChooserParams params
+                ) {
+
+                    if (rkmsFilePathCallback != null) {
+                        rkmsFilePathCallback.onReceiveValue(null);
+                    }
+
+                    rkmsFilePathCallback = callback;
+
+                    try {
+
+                        android.content.Intent intent =
+                            params.createIntent();
+
+                        startActivityForResult(
+                            intent,
+                            RKMS_FILE_CHOOSER_REQUEST
+                        );
+
+                        return true;
+
+                    } catch (Exception e) {
+
+                        rkmsFilePathCallback = null;
+
+                        return false;
+                    }
+                }
+
+                @Override
+                public void onPermissionRequest(
+                    final android.webkit.PermissionRequest request
+                ) {
+
+                    runOnUiThread(
+                        () -> {
+
+                            boolean wantsAudio = false;
+
+                            for (
+                                String resource :
+                                request.getResources()
+                            ) {
+
+                                if (
+                                    android.webkit.PermissionRequest
+                                        .RESOURCE_AUDIO_CAPTURE
+                                        .equals(resource)
+                                ) {
+                                    wantsAudio = true;
+                                    break;
+                                }
+                            }
+
+                            if (!wantsAudio) {
+                                request.deny();
+                                return;
+                            }
+
+                            if (
+                                androidx.core.content.ContextCompat
+                                    .checkSelfPermission(
+                                        MainActivity.this,
+                                        android.Manifest.permission.RECORD_AUDIO
+                                    ) ==
+                                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+
+                                request.grant(
+                                    new String[]{
+                                        android.webkit.PermissionRequest
+                                            .RESOURCE_AUDIO_CAPTURE
+                                    }
+                                );
+
+                                return;
+                            }
+
+                            rkmsPendingPermissionRequest = request;
+
+                            androidx.core.app.ActivityCompat
+                                .requestPermissions(
+                                    MainActivity.this,
+                                    new String[]{
+                                        android.Manifest.permission.RECORD_AUDIO
+                                    },
+                                    RKMS_AUDIO_PERMISSION_REQUEST
+                                );
+                        }
+                    );
+                }
+            }
+        );
+    }
+
+    @Override
+    protected void onActivityResult(
+        int requestCode,
+        int resultCode,
+        android.content.Intent data
+    ) {
+
+        super.onActivityResult(
+            requestCode,
+            resultCode,
+            data
+        );
+
+        if (
+            requestCode ==
+            RKMS_FILE_CHOOSER_REQUEST
+        ) {
+
+            android.net.Uri[] results = null;
+
+            if (
+                resultCode ==
+                android.app.Activity.RESULT_OK
+            ) {
+
+                if (
+                    data != null &&
+                    data.getClipData() != null
+                ) {
+
+                    int n =
+                        data.getClipData().getItemCount();
+
+                    results =
+                        new android.net.Uri[n];
+
+                    for (
+                        int i = 0;
+                        i < n;
+                        i++
+                    ) {
+
+                        results[i] =
+                            data.getClipData()
+                                .getItemAt(i)
+                                .getUri();
+                    }
+
+                } else if (
+                    data != null &&
+                    data.getData() != null
+                ) {
+
+                    results =
+                        new android.net.Uri[]{
+                            data.getData()
+                        };
+                }
+            }
+
+            if (
+                rkmsFilePathCallback != null
+            ) {
+
+                rkmsFilePathCallback
+                    .onReceiveValue(results);
+
+                rkmsFilePathCallback = null;
+            }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+        int requestCode,
+        String[] permissions,
+        int[] grantResults
+    ) {
+
+        super.onRequestPermissionsResult(
+            requestCode,
+            permissions,
+            grantResults
+        );
+
+        if (
+            requestCode ==
+            RKMS_AUDIO_PERMISSION_REQUEST
+        ) {
+
+            android.webkit.PermissionRequest req =
+                rkmsPendingPermissionRequest;
+
+            rkmsPendingPermissionRequest = null;
+
+            if (req == null) {
+                return;
+            }
+
+            if (
+                grantResults.length > 0 &&
+                grantResults[0] ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+
+                req.grant(
+                    new String[]{
+                        android.webkit.PermissionRequest
+                            .RESOURCE_AUDIO_CAPTURE
+                    }
+                );
+
+            } else {
+
+                req.deny();
+            }
+        }
+    }
+
+    private void createRkmsNotificationChannel() {
+
+        if (
+            android.os.Build.VERSION.SDK_INT >=
+            android.os.Build.VERSION_CODES.O
+        ) {
+
+            android.app.NotificationManager nm =
+                (android.app.NotificationManager)
+                getSystemService(
+                    android.content.Context.NOTIFICATION_SERVICE
+                );
+
+            if (nm == null) {
+                return;
+            }
+
+            android.app.NotificationChannel normal =
+                new android.app.NotificationChannel(
+                    "rkms_notifications_v2",
+                    "RKMS Notifications",
+                    android.app.NotificationManager.IMPORTANCE_HIGH
+                );
+
+            normal.setDescription(
+                "RKMS Connect notifications"
+            );
+
+            normal.enableVibration(true);
+
+            normal.setSound(
+                android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+                null
+            );
+
+            nm.createNotificationChannel(
+                normal
+            );
+
+            android.app.NotificationChannel priority =
+                new android.app.NotificationChannel(
+                    "rkms_priority_v1",
+                    "RKMS Important Notifications",
+                    android.app.NotificationManager.IMPORTANCE_HIGH
+                );
+
+            priority.setDescription(
+                "Important RKMS organisation notices"
+            );
+
+            priority.enableVibration(true);
+
+            priority.setSound(
+                android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+                null
+            );
+
+            nm.createNotificationChannel(
+                priority
+            );
+        }
+    }
+}
+"""
+
+    if marker not in s:
+        raise SystemExit(
+            "MainActivity class marker missing"
+        )
+
+    s = s.replace(
+        marker,
+        replacement,
+        1
+    )
+
+    p.write_text(s)
+PY
+
+else
+
+  echo "ERROR: MainActivity.java not found" >&2
+
+  find android/app/src/main -type f >&2
+
+  exit 1
+
+fi
+RKMS_NATIVE_SCRIPT
+
+          chmod +x \
+            scripts/setup-android-native.sh
+
+          echo "Corrected native script installed."
 
           echo "Checking Bash syntax..."
-          bash -n "$SCRIPT"
 
-          echo "Checking Python heredoc boundaries..."
+          bash -n \
+            scripts/setup-android-native.sh
 
-          python3 - "$SCRIPT" <<'PY'
-          from pathlib import Path
-          import re
-          import sys
-
-          path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
-
-          lines = text.splitlines()
-
-          in_python = False
-          python_start = 0
-
-          shell_patterns = [
-              re.compile(r'^\s*mkdir\s+-p\b'),
-              re.compile(r'^\s*cp\s+'),
-              re.compile(r'^\s*mv\s+'),
-              re.compile(r'^\s*rm\s+'),
-              re.compile(r'^\s*chmod\s+'),
-              re.compile(r'^\s*cat\s+>'),
-              re.compile(r'^\s*cat\s+>>'),
-              re.compile(r'^\s*find\s+'),
-              re.compile(r'^\s*grep\s+'),
-              re.compile(r'^\s*echo\s+'),
-              re.compile(r'^\s*test\s+'),
-          ]
-
-          for number, line in enumerate(lines, 1):
-
-              stripped = line.strip()
-
-              if re.match(
-                  r'^\s*python3(?:\s+[^<]*)?\s*<<[-]?[\'"]?PY[0-9A-Za-z_-]*[\'"]?\s*$',
-                  line
-              ):
-                  in_python = True
-                  python_start = number
-                  continue
-
-              if in_python and re.match(
-                  r'^\s*PY[0-9A-Za-z_-]*\s*$',
-                  line
-              ):
-                  in_python = False
-                  continue
-
-              if in_python:
-
-                  for pattern in shell_patterns:
-
-                      if pattern.search(line):
-                          print(
-                              f"ERROR: Bash command found inside Python heredoc "
-                              f"at line {number}: {stripped}"
-                          )
-                          raise SystemExit(1)
-
-          if in_python:
-              print(
-                  f"ERROR: Python heredoc beginning near line "
-                  f"{python_start} is not closed."
-              )
-              raise SystemExit(1)
-
-          if "\\n" in text:
-              print(
-                  "ERROR: literal backslash-n sequence found in "
-                  "setup-android-native.sh"
-              )
-              raise SystemExit(1)
-
-          print("NATIVE SCRIPT PREFLIGHT: PASS")
-          PY
-
-          echo "Native setup script is syntactically safe."
+          echo "NATIVE SCRIPT SYNTAX: PASS"
 
 
       # ============================================================
@@ -482,11 +1170,9 @@ jobs:
           for (const [name, version] of Object.entries(wanted)) {
 
             if (d[name] !== version) {
-
               throw new Error(
                 `${name}: expected ${version}, found ${d[name] || "MISSING"}`
               );
-
             }
 
           }
@@ -496,11 +1182,9 @@ jobs:
             typeof p.scripts.build !== "string" ||
             !p.scripts.build.trim()
           ) {
-
             throw new Error(
               "package.json build script is missing"
             );
-
           }
 
           console.log("PACKAGE/VERSION CHECK: PASS");
@@ -545,7 +1229,7 @@ jobs:
 
 
       # ============================================================
-      # NPM INSTALL
+      # NPM
       # ============================================================
 
       - name: Install npm dependencies
@@ -575,7 +1259,8 @@ jobs:
 
           npm run build
 
-          test -s dist/index.html
+          test -s \
+            dist/index.html
 
           echo "WEB BUILD: PASS"
 
@@ -595,16 +1280,20 @@ jobs:
 
           npx cap add android
 
-          test -s android/gradlew
-          test -s android/app/build.gradle
+          test -s \
+            android/gradlew
 
-          chmod +x android/gradlew
+          test -s \
+            android/app/build.gradle
+
+          chmod +x \
+            android/gradlew
 
           echo "CAPACITOR ANDROID GENERATION: PASS"
 
 
       # ============================================================
-      # CONFIGURE ANDROID 16 API 36
+      # ANDROID 16 API 36
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -623,14 +1312,18 @@ jobs:
           from pathlib import Path
           import re
 
-          p = Path("android/variables.gradle")
+          p = Path(
+              "android/variables.gradle"
+          )
 
           if not p.exists():
               raise SystemExit(
                   "android/variables.gradle not found"
               )
 
-          s = p.read_text(encoding="utf-8")
+          s = p.read_text(
+              encoding="utf-8"
+          )
 
           replacements = {
               "compileSdkVersion": "36",
@@ -646,7 +1339,10 @@ jobs:
                   s
               )
 
-          p.write_text(s, encoding="utf-8")
+          p.write_text(
+              s,
+              encoding="utf-8"
+          )
           PY
 
           grep -Eq \
@@ -689,7 +1385,7 @@ jobs:
 
 
       # ============================================================
-      # APPLY NATIVE SETUP
+      # APPLY CORRECTED NATIVE SETUP
       # ============================================================
 
       - name: Apply RKMS native Android setup
@@ -699,10 +1395,9 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          chmod +x \
+          test -s \
             scripts/setup-android-native.sh
 
-          # Final safety check immediately before execution.
           bash -n \
             scripts/setup-android-native.sh
 
@@ -711,28 +1406,24 @@ jobs:
           test -s \
             android/app/google-services.json
 
-          find android/app/src/main \
-            -type f \
-            -name "MainActivity.java" \
-            -print \
-            -quit \
-            > main-activity-location.txt
+          MAIN_ACTIVITY="$(
+            find android/app/src/main \
+              -type f \
+              -name "MainActivity.java" \
+              -print \
+              -quit
+          )"
 
-          find android/app/src/main \
-            -type f \
-            -name "RKMSNativeBridge.java" \
-            -print \
-            -quit \
-            > bridge-location.txt
+          BRIDGE_FILE="$(
+            find android/app/src/main \
+              -type f \
+              -name "RKMSNativeBridge.java" \
+              -print \
+              -quit
+          )"
 
-          test -s main-activity-location.txt
-          test -s bridge-location.txt
-
-          read -r MAIN_ACTIVITY < \
-            main-activity-location.txt
-
-          read -r BRIDGE_FILE < \
-            bridge-location.txt
+          test -n "$MAIN_ACTIVITY"
+          test -n "$BRIDGE_FILE"
 
           test -s "$MAIN_ACTIVITY"
           test -s "$BRIDGE_FILE"
@@ -767,7 +1458,6 @@ jobs:
               -quit
           )"
 
-          test -n "$MAIN_ACTIVITY"
           test -s "$MAIN_ACTIVITY"
 
           if grep -Fq '\n' "$MAIN_ACTIVITY"; then
@@ -787,7 +1477,7 @@ jobs:
             'RKMSNativeBridge' \
             "$MAIN_ACTIVITY"
 
-          echo "MAINACTIVITY GENERATION: PASS"
+          echo "MAINACTIVITY: PASS"
 
 
       # ============================================================
@@ -822,18 +1512,18 @@ jobs:
             scripts/setup-android-native.sh
 
           grep -Fq \
-            "sound" \
+            "vibration" \
             scripts/setup-android-native.sh
 
           grep -Fq \
-            "vibration" \
+            "setSound" \
             scripts/setup-android-native.sh
 
           echo "NOTIFICATION CHANNELS: PASS"
 
 
       # ============================================================
-      # FIREBASE MESSAGING SDK
+      # FIREBASE MESSAGING
       # ============================================================
 
       - name: Ensure Firebase Messaging SDK
@@ -847,9 +1537,13 @@ jobs:
           from pathlib import Path
           import re
 
-          p = Path("android/app/build.gradle")
+          p = Path(
+              "android/app/build.gradle"
+          )
 
-          s = p.read_text(encoding="utf-8")
+          s = p.read_text(
+              encoding="utf-8"
+          )
 
           bom = (
               "implementation platform("
@@ -896,14 +1590,31 @@ jobs:
 
           block = s[start:end]
 
-          if "com.google.firebase:firebase-bom:" not in block:
-              block = "\n    " + bom + "\n" + block
+          if (
+              "com.google.firebase:firebase-bom:"
+              not in block
+          ):
+              block = (
+                  "\n    "
+                  + bom
+                  + "\n"
+                  + block
+              )
 
-          if "com.google.firebase:firebase-messaging" not in block:
-              block += "\n    " + messaging + "\n"
+          if (
+              "com.google.firebase:firebase-messaging"
+              not in block
+          ):
+              block += (
+                  "\n    "
+                  + messaging
+                  + "\n"
+              )
 
           p.write_text(
-              s[:start] + block + s[end:],
+              s[:start]
+              + block
+              + s[end:],
               encoding="utf-8"
           )
           PY
@@ -938,9 +1649,11 @@ jobs:
             python3 scripts/verify-rkms-final-fixes.py
           fi
 
-          python3 scripts/verify-fcm-pipeline.py
+          python3 \
+            scripts/verify-fcm-pipeline.py
 
-          python3 scripts/verify-native-bridge.py
+          python3 \
+            scripts/verify-native-bridge.py
 
           if [ -f scripts/verify-android-pdf.py ]; then
             python3 scripts/verify-android-pdf.py
@@ -950,9 +1663,7 @@ jobs:
             python3 scripts/verify-saved-login.py
           fi
 
-          echo "=========================================="
           echo "ALL RKMS STATIC AUDITS: PASS"
-          echo "=========================================="
 
 
       # ============================================================
@@ -1022,7 +1733,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY KEYSTORE
+      # KEYSTORE
       # ============================================================
 
       - name: Verify release keystore
@@ -1043,7 +1754,7 @@ jobs:
 
 
       # ============================================================
-      # GRADLE WRAPPER
+      # GRADLE
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -1116,9 +1827,6 @@ jobs:
 
       # ============================================================
       # FINAL SIGNED RELEASE APK ONLY
-      #
-      # NO DEBUG APK
-      # NO AAB
       # ============================================================
 
       - name: Build final signed release APK only
@@ -1170,9 +1878,7 @@ jobs:
 
           echo "APK_PATH=$FINAL_APK" >> "$GITHUB_ENV"
 
-          echo "=========================================="
           echo "FINAL RELEASE APK CREATED"
-          echo "=========================================="
 
           stat -c%s "$FINAL_APK"
 
@@ -1240,7 +1946,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY APK PACKAGE + TARGET SDK
+      # VERIFY APK PACKAGE
       # ============================================================
 
       - name: Verify final APK package and SDK
@@ -1276,7 +1982,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY APK SIGNATURE
+      # VERIFY SIGNATURE
       # ============================================================
 
       - name: Verify final APK signature
