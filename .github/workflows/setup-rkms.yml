@@ -37,7 +37,7 @@ jobs:
 
 
       # ============================================================
-      # 2. NODE
+      # 2. NODE 22
       # ============================================================
 
       - name: Setup Node.js 22
@@ -48,7 +48,7 @@ jobs:
 
 
       # ============================================================
-      # 3. JAVA
+      # 3. JAVA 17
       # ============================================================
 
       - name: Setup Java 17
@@ -139,7 +139,6 @@ jobs:
             ROOT="rkms-build"
 
           else
-
             PACKAGE_FILE="$(
               find rkms-build \
                 -type f \
@@ -153,7 +152,6 @@ jobs:
             if [ -n "$PACKAGE_FILE" ]; then
               ROOT="$(dirname "$PACKAGE_FILE")"
             fi
-
           fi
 
           if [ -z "$ROOT" ]; then
@@ -198,12 +196,10 @@ jobs:
           "
 
           for FILE in $REQUIRED_FILES; do
-
             if [ ! -s "$FILE" ]; then
               echo "::error::Missing required file: $FILE"
               exit 1
             fi
-
           done
 
           node --check app.js
@@ -245,7 +241,6 @@ jobs:
           let failed = false;
 
           for (const [name, wanted] of Object.entries(required)) {
-
             const actual = deps[name];
 
             console.log(
@@ -255,7 +250,6 @@ jobs:
             if (actual !== wanted) {
               failed = true;
             }
-
           }
 
           if (failed) {
@@ -321,7 +315,7 @@ jobs:
 
 
       # ============================================================
-      # 12. NPM
+      # 12. NPM INSTALL
       # ============================================================
 
       - name: Install npm dependencies
@@ -395,7 +389,7 @@ jobs:
 
 
       # ============================================================
-      # 16. CAPACITOR ANDROID
+      # 16. CREATE CAPACITOR ANDROID
       # ============================================================
 
       - name: Create Capacitor Android project
@@ -416,7 +410,7 @@ jobs:
 
 
       # ============================================================
-      # 17. ANDROID 16
+      # 17. CONFIGURE ANDROID 16
       # ============================================================
 
       - name: Configure Android 16
@@ -454,7 +448,7 @@ jobs:
 
 
       # ============================================================
-      # 19. MIN SDK 23
+      # 19. FORCE MIN SDK 23
       # ============================================================
 
       - name: Force minSdk 23
@@ -498,10 +492,8 @@ jobs:
             'minSdkVersion[[:space:]]*=?[[:space:]]*22([[:space:]]|$)|minSdk[[:space:]]*=?[[:space:]]*22([[:space:]]|$)' \
             android
           then
-
             echo "::error::minSdk 22 still exists."
             exit 1
-
           fi
 
           echo "MIN SDK 23: PASS"
@@ -567,11 +559,10 @@ jobs:
 
 
       # ============================================================
-      # 21. NATIVE MICROPHONE SOURCE FIX
+      # 21. NATIVE MICROPHONE FIX
       #
-      # IMPORTANT:
-      # NO nested Python triple quotes.
-      # This avoids YAML parser errors.
+      # NO PYTHON HEREDOC HERE.
+      # This is deliberately YAML-safe.
       # ============================================================
 
       - name: Add native microphone manifest implementation
@@ -590,67 +581,21 @@ jobs:
             "$SCRIPT"
           then
 
-            cat >> "$SCRIPT" <<'RKMS_NATIVE_SCRIPT'
-
-# RKMS_NATIVE_MICROPHONE_MANIFEST_FIX
-
-RKMS_MANIFEST="$ANDROID_DIR/app/src/main/AndroidManifest.xml"
-
-if [ -f "$RKMS_MANIFEST" ]; then
-
-python3 - "$RKMS_MANIFEST" <<'RKMS_MANIFEST_PY'
-import sys
-import re
-from pathlib import Path
-
-manifest = Path(sys.argv[1])
-
-text = manifest.read_text(
-    encoding="utf-8"
-)
-
-permission = (
-    '<uses-permission '
-    'android:name="android.permission.RECORD_AUDIO"/>'
-)
-
-if (
-    'android:name="android.permission.RECORD_AUDIO"'
-    not in text
-):
-
-    match = re.search(
-        r'<manifest\b[^>]*>',
-        text,
-        flags=re.DOTALL
-    )
-
-    if not match:
-        raise SystemExit(
-            "RKMS: manifest opening tag not found"
-        )
-
-    text = (
-        text[:match.end()]
-        + "\n    "
-        + permission
-        + "\n"
-        + text[match.end():]
-    )
-
-manifest.write_text(
-    text,
-    encoding="utf-8"
-)
-
-print(
-    "RKMS native RECORD_AUDIO manifest permission: PASS"
-)
-RKMS_MANIFEST_PY
-
-fi
-
-RKMS_NATIVE_SCRIPT
+            printf '%s\n' \
+              '' \
+              '# RKMS_NATIVE_MICROPHONE_MANIFEST_FIX' \
+              '' \
+              'RKMS_MANIFEST="${ANDROID_DIR:-android}/app/src/main/AndroidManifest.xml"' \
+              '' \
+              'if [ -f "$RKMS_MANIFEST" ]; then' \
+              '' \
+              '  if ! grep -Fq '\''android:name="android.permission.RECORD_AUDIO"'\'' "$RKMS_MANIFEST"; then' \
+              '    perl -0pi -e '\''s|(<manifest\b[^>]*>)|$1\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>|s'\'' "$RKMS_MANIFEST"' \
+              '  fi' \
+              '' \
+              'fi' \
+              '' \
+              >> "$SCRIPT"
 
           fi
 
@@ -686,7 +631,7 @@ RKMS_NATIVE_SCRIPT
 
 
       # ============================================================
-      # 23. MANIFEST
+      # 23. LOCATE MANIFEST
       # ============================================================
 
       - name: Locate generated AndroidManifest
@@ -776,7 +721,7 @@ RKMS_NATIVE_SCRIPT
 
 
       # ============================================================
-      # 25. FINAL MICROPHONE + NOTIFICATION PERMISSIONS
+      # 25. FINAL MICROPHONE + NOTIFICATION MANIFEST
       # ============================================================
 
       - name: Finalize native microphone manifest
@@ -797,7 +742,6 @@ RKMS_NATIVE_SCRIPT
               encoding="utf-8"
           )
 
-          # Remove existing RECORD_AUDIO permissions.
           text = re.sub(
               r'\s*<uses-permission\s+'
               r'android:name="android\.permission\.RECORD_AUDIO"\s*/>\s*',
@@ -805,7 +749,6 @@ RKMS_NATIVE_SCRIPT
               text
           )
 
-          # Remove existing POST_NOTIFICATIONS permissions.
           text = re.sub(
               r'\s*<uses-permission\s+'
               r'android:name="android\.permission\.POST_NOTIFICATIONS"\s*/>\s*',
@@ -1129,7 +1072,7 @@ RKMS_NATIVE_SCRIPT
 
 
       # ============================================================
-      # 31. FINAL MANIFEST
+      # 31. FINAL MANIFEST CHECK
       # ============================================================
 
       - name: Final AndroidManifest verification
@@ -1223,7 +1166,7 @@ RKMS_NATIVE_SCRIPT
 
 
       # ============================================================
-      # 33. POST GENERATION AUDITS
+      # 33. POST-GENERATION RKMS AUDITS
       # ============================================================
 
       - name: Run post-generation RKMS audits
@@ -1233,15 +1176,13 @@ RKMS_NATIVE_SCRIPT
 
           cd "$RKMS_ROOT"
 
-          AUDITS="
-          scripts/verify-android-16.py
-          scripts/verify-rkms-final-fixes.py
-          scripts/verify-native-bridge.py
-          scripts/verify-fcm-pipeline.py
-          scripts/verify-saved-login.py
-          "
-
-          for AUDIT in $AUDITS; do
+          for AUDIT in \
+            scripts/verify-android-16.py \
+            scripts/verify-rkms-final-fixes.py \
+            scripts/verify-native-bridge.py \
+            scripts/verify-fcm-pipeline.py \
+            scripts/verify-saved-login.py
+          do
 
             if [ -f "$AUDIT" ]; then
 
@@ -1261,7 +1202,7 @@ RKMS_NATIVE_SCRIPT
 
 
       # ============================================================
-      # 34. FINAL ANDROID AUDIT
+      # 34. FINAL ANDROID 16 AUDIT
       # ============================================================
 
       - name: Final Android 16 audit
@@ -1445,7 +1386,7 @@ RKMS_NATIVE_SCRIPT
 
 
       # ============================================================
-      # 40. BUILD FINAL SIGNED RELEASE APK ONLY
+      # 40. BUILD RELEASE APK ONLY
       # ============================================================
 
       - name: Build Final Signed Release APK Only
@@ -1454,21 +1395,6 @@ RKMS_NATIVE_SCRIPT
           set -euo pipefail
 
           cd "$RKMS_ROOT/android"
-
-          echo "=============================================="
-          echo "RKMS FINAL SIGNED RELEASE APK"
-          echo "=============================================="
-
-          echo "PACKAGE: ${APP_ID}"
-          echo "ANDROID API: ${ANDROID_API}"
-          echo "BUILD TOOLS: ${BUILD_TOOLS}"
-          echo "MIN SDK: ${MIN_SDK}"
-          echo "TARGET SDK: ${TARGET_SDK}"
-          echo "SIGNED: YES"
-          echo "DEBUG APK: NO"
-          echo "AAB: NO"
-
-          echo "=============================================="
 
           ./gradlew \
             :app:assembleRelease \
@@ -1502,7 +1428,7 @@ RKMS_NATIVE_SCRIPT
 
 
       # ============================================================
-      # 41. APK PACKAGE + SIGNATURE
+      # 41. VERIFY APK
       # ============================================================
 
       - name: Verify APK package and signature
@@ -1564,7 +1490,7 @@ RKMS_NATIVE_SCRIPT
 
 
       # ============================================================
-      # 43. FINAL APK ONLY AUDIT
+      # 43. FINAL APK ONLY
       # ============================================================
 
       - name: Final APK-only audit
@@ -1612,17 +1538,11 @@ RKMS_NATIVE_SCRIPT
             exit 1
           fi
 
-          echo "=============================================="
           echo "FINAL APK AUDIT: PASS"
-          echo "=============================================="
-
           echo "APK: RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
           echo "SIGNED: YES"
           echo "DEBUG: NO"
           echo "AAB: NO"
-          echo "SIZE: $SIZE bytes"
-
-          echo "=============================================="
 
 
       # ============================================================
