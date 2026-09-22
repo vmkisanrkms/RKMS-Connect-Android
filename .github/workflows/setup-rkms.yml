@@ -410,7 +410,212 @@ jobs:
 
 
       # ============================================================
-      # 17. CONFIGURE ANDROID 16
+      # 17. FORCE MIN SDK 23 BEFORE ANDROID CONFIGURATION
+      # ============================================================
+
+      - name: Force minSdk 23 before configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          find android \
+            -type f \
+            \( \
+              -name "*.gradle" \
+              -o \
+              -name "*.gradle.kts" \
+            \) \
+            -print0 |
+          while IFS= read -r -d '' FILE; do
+
+            perl -pi -e \
+              's/(minSdkVersion\s*=\s*)22\b/${1}23/g' \
+              "$FILE"
+
+            perl -pi -e \
+              's/(minSdkVersion\s+)\s*22\b/${1}23/g' \
+              "$FILE"
+
+            perl -pi -e \
+              's/(minSdk\s*=\s*)22\b/${1}23/g' \
+              "$FILE"
+
+            perl -pi -e \
+              's/(minSdk\s+)\s*22\b/${1}23/g' \
+              "$FILE"
+
+          done
+
+          echo "MIN SDK 23 PRE-CONFIGURATION: PASS"
+
+
+      # ============================================================
+      # 18. SAFE NATIVE SCRIPT REPAIR
+      # ============================================================
+
+      - name: Repair known malformed native setup script
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          SCRIPT="scripts/setup-android-native.sh"
+
+          test -s "$SCRIPT"
+
+          SETUP_SHA="$(
+            sha256sum "$SCRIPT" |
+            awk '{print $1}'
+          )"
+
+          echo "Native setup script SHA:"
+          echo "$SETUP_SHA"
+
+          if [ "$SETUP_SHA" = "d8cdb6c16fb4c6ac768a4ca515f42224097a77419ca5bccd9dd38ab990b3e305" ]; then
+
+            echo "Known malformed native script detected."
+
+            rm -f /tmp/setup-rkms-fixed.sh
+
+            sed -n '1,90p' \
+              "$SCRIPT" \
+              > /tmp/setup-rkms-fixed.sh
+
+            printf '%s\n' \
+              '# RKMS SAFE REPAIRED ICON' \
+              'DRAWABLE_DIR="$RES_DIR/drawable"' \
+              'mkdir -p "$DRAWABLE_DIR"' \
+              'ICON_B64="PHZlY3RvciB4bWxuczphbmRyb2lkPSJodHRwOi8vc2NoZW1hcy5hbmRyb2lkLmNvbS9hcGsvcmVzL2FuZHJvaWQiIGFuZHJvaWQ6d2lkdGg9IjI0ZHAiIGFuZHJvaWQ6aGVpZ2h0PSIyNGRwIiBhbmRyb2lkOnZpZXdwb3J0V2lkdGg9IjI0IiBhbmRyb2lkOnZpZXdwb3J0SGVpZ2h0PSIyNCI+CiAgICA8cGF0aCBhbmRyb2lkOmZpbGxDb2xvcj0iI0ZGRkZGRkZGIiBhbmRyb2lkOnBhdGhEYXRhPSJNMTIsMkE3LDcgMCwwIDAsNSA5vNGwtMiwzdjFoMTh2LTFsLTIsLTNWOUE3LDcgMCwwIDAsMTIgMk05LDE5YTMtMyAwLDAgMCw2IDB6Ii8+CjwvdmVjdG9yPgo="' \
+              'printf "%s" "$ICON_B64" | base64 -d > "$DRAWABLE_DIR/ic_stat_rkms.xml"' \
+              >> /tmp/setup-rkms-fixed.sh
+
+            sed -n '118,$p' \
+              "$SCRIPT" \
+              >> /tmp/setup-rkms-fixed.sh
+
+            chmod +x \
+              /tmp/setup-rkms-fixed.sh
+
+            bash -n \
+              /tmp/setup-rkms-fixed.sh
+
+            mv \
+              /tmp/setup-rkms-fixed.sh \
+              "$SCRIPT"
+
+            echo "KNOWN SCRIPT REPAIR: PASS"
+
+          else
+
+            echo "Known malformed-script hash not detected."
+            echo "Keeping source script unchanged."
+
+          fi
+
+          chmod +x "$SCRIPT"
+
+          bash -n "$SCRIPT"
+
+          echo "NATIVE SCRIPT SYNTAX: PASS"
+
+
+      # ============================================================
+      # 19. IMPORTANT:
+      # REPAIR PREDICTIVE-BACK IN CONFIGURATION SCRIPT
+      #
+      # This is BEFORE configure-android-16.sh runs.
+      # Therefore the generated manifest patch itself receives
+      # enableOnBackInvokedCallback=true.
+      # ============================================================
+
+      - name: Repair Android 16 manifest patch template
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("scripts/configure-android-16.sh")
+
+          if not path.is_file():
+              raise SystemExit(
+                  "configure-android-16.sh not found"
+              )
+
+          text = path.read_text(
+              encoding="utf-8"
+          )
+
+          attribute = (
+              'android:enableOnBackInvokedCallback="true"'
+          )
+
+          original = text
+
+          def patch_application(match):
+              opening = match.group(0)
+
+              if attribute in opening:
+                  return opening
+
+              return (
+                  opening[:-1]
+                  + " "
+                  + attribute
+                  + ">"
+              )
+
+          text = re.sub(
+              r"<application\b[^>]*>",
+              patch_application,
+              text,
+              flags=re.IGNORECASE | re.DOTALL
+          )
+
+          if text != original:
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+              print(
+                  "CONFIGURE SCRIPT: predictive back inserted"
+              )
+          else:
+              print(
+                  "CONFIGURE SCRIPT: no XML application template changed"
+              )
+
+          final_text = path.read_text(
+              encoding="utf-8"
+          )
+
+          if "<application" in final_text.lower():
+              if attribute not in final_text:
+                  raise SystemExit(
+                      "ERROR: configure-android-16.sh still has application XML without predictive back"
+                  )
+
+          print(
+              "ANDROID 16 MANIFEST PATCH TEMPLATE: PASS"
+          )
+          PY
+
+          chmod +x \
+            scripts/configure-android-16.sh
+
+          bash -n \
+            scripts/configure-android-16.sh
+
+
+      # ============================================================
+      # 20. CONFIGURE ANDROID 16
       # ============================================================
 
       - name: Configure Android 16
@@ -432,7 +637,7 @@ jobs:
 
 
       # ============================================================
-      # 18. CAPACITOR SYNC
+      # 21. CAPACITOR SYNC
       # ============================================================
 
       - name: Capacitor sync
@@ -448,10 +653,10 @@ jobs:
 
 
       # ============================================================
-      # 19. FORCE MIN SDK 23
+      # 22. FORCE MIN SDK 23 AFTER SYNC
       # ============================================================
 
-      - name: Force minSdk 23
+      - name: Force minSdk 23 after sync
         shell: bash
         run: |
           set -euo pipefail
@@ -500,100 +705,7 @@ jobs:
 
 
       # ============================================================
-      # 20. SAFE NATIVE SCRIPT REPAIR
-      #
-      # IMPORTANT:
-      # No heredoc is used here.
-      # This avoids the YAML line-539 failure.
-      # ============================================================
-
-      - name: Repair known malformed native setup script
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          SCRIPT="scripts/setup-android-native.sh"
-
-          test -s "$SCRIPT"
-
-          SETUP_SHA="$(
-            sha256sum "$SCRIPT" |
-            awk '{print $1}'
-          )"
-
-          echo "Native setup script SHA:"
-          echo "$SETUP_SHA"
-
-          if [ "$SETUP_SHA" = "d8cdb6c16fb4c6ac768a4ca515f42224097a77419ca5bccd9dd38ab990b3e305" ]; then
-
-            echo "Known malformed native script detected."
-
-            rm -f /tmp/setup-rkms-fixed.sh
-
-            sed -n '1,90p' \
-              "$SCRIPT" \
-              > /tmp/setup-rkms-fixed.sh
-
-            printf '%s\n' \
-              '# RKMS SAFE REPAIRED ICON' \
-              'DRAWABLE_DIR="$RES_DIR/drawable"' \
-              'mkdir -p "$DRAWABLE_DIR"' \
-              'ICON_B64="PHZlY3RvciB4bWxuczphbmRyb2lkPSJodHRwOi8vc2NoZW1hcy5hbmRyb2lkLmNvbS9hcGsvcmVzL2FuZHJvaWQiIGFuZHJvaWQ6d2lkdGg9IjI0ZHAiIGFuZHJvaWQ6aGVpZ2h0PSIyNGRwIiBhbmRyb2lkOnZpZXdwb3J0V2lkdGg9IjI0IiBhbmRyb2lkOnZpZXdwb3J0SGVpZ2h0PSIyNCI+CiAgICA8cGF0aCBhbmRyb2lkOmZpbGxDb2xvcj0iI0ZGRkZGRkZGIiBhbmRyb2lkOnBhdGhEYXRhPSJNMTIsMkE3LDcgMCwwIDAsNSA5djRsLTIsM3YxaDE4di0xbC0yLC0zVjlBNyw3IDAsMCAwLDEyIDJNOSwxOWEzLDMgMCwwIDAsNiAweiIvPgo8L3ZlY3Rvcj4K"' \
-              'printf "%s" "$ICON_B64" | base64 -d > "$DRAWABLE_DIR/ic_stat_rkms.xml"' \
-              >> /tmp/setup-rkms-fixed.sh
-
-            sed -n '118,$p' \
-              "$SCRIPT" \
-              >> /tmp/setup-rkms-fixed.sh
-
-            chmod +x \
-              /tmp/setup-rkms-fixed.sh
-
-            bash -n \
-              /tmp/setup-rkms-fixed.sh
-
-            mv \
-              /tmp/setup-rkms-fixed.sh \
-              "$SCRIPT"
-
-            echo "KNOWN SCRIPT REPAIR: PASS"
-
-          else
-
-            echo "Known malformed-script hash not detected."
-            echo "Keeping source script unchanged."
-
-          fi
-
-          chmod +x \
-            "$SCRIPT"
-
-          bash -n \
-            "$SCRIPT"
-
-          echo "NATIVE SCRIPT SYNTAX: PASS"
-
-
-      # ============================================================
-      # 21. RUN NATIVE SETUP
-      # ============================================================
-
-      - name: Configure RKMS native Android
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          ./scripts/setup-android-native.sh
-
-          echo "RKMS NATIVE SETUP: PASS"
-
-
-      # ============================================================
-      # 22. LOCATE GENERATED MANIFEST
+      # 23. LOCATE GENERATED MANIFEST
       # ============================================================
 
       - name: Locate generated AndroidManifest
@@ -613,7 +725,7 @@ jobs:
 
 
       # ============================================================
-      # 23. MICROPHONE + NOTIFICATION PERMISSIONS
+      # 24. MICROPHONE + NOTIFICATION PERMISSIONS
       # ============================================================
 
       - name: Configure microphone and notification permissions
@@ -635,15 +747,13 @@ jobs:
           )
 
           text = re.sub(
-              r'\s*<uses-permission\s+'
-              r'android:name="android\.permission\.RECORD_AUDIO"\s*/>\s*',
+              r'\s*<uses-permission\s+android:name="android\.permission\.RECORD_AUDIO"\s*/>\s*',
               '\n',
               text
           )
 
           text = re.sub(
-              r'\s*<uses-permission\s+'
-              r'android:name="android\.permission\.POST_NOTIFICATIONS"\s*/>\s*',
+              r'\s*<uses-permission\s+android:name="android\.permission\.POST_NOTIFICATIONS"\s*/>\s*',
               '\n',
               text
           )
@@ -688,12 +798,9 @@ jobs:
             'android:name="android.permission.POST_NOTIFICATIONS"' \
             "$MANIFEST"
 
-          echo "RECORD_AUDIO: PASS"
-          echo "POST_NOTIFICATIONS: PASS"
-
 
       # ============================================================
-      # 24. PREDICTIVE BACK
+      # 25. PREDICTIVE BACK IN FINAL MANIFEST
       # ============================================================
 
       - name: Configure predictive back
@@ -750,17 +857,17 @@ jobs:
               text,
               encoding="utf-8"
           )
+
+          print("PREDICTIVE BACK: PASS")
           PY
 
           grep -Fq \
             'android:enableOnBackInvokedCallback="true"' \
             "$MANIFEST"
 
-          echo "PREDICTIVE BACK: PASS"
-
 
       # ============================================================
-      # 25. VALIDATE MANIFEST XML
+      # 26. VALIDATE FINAL MANIFEST XML
       # ============================================================
 
       - name: Validate AndroidManifest XML
@@ -774,10 +881,8 @@ jobs:
           import sys
           import xml.etree.ElementTree as ET
 
-          manifest = sys.argv[1]
-
           try:
-              ET.parse(manifest)
+              ET.parse(sys.argv[1])
           except Exception as exc:
               print("ANDROID MANIFEST XML INVALID")
               print(exc)
@@ -798,14 +903,178 @@ jobs:
             'android:enableOnBackInvokedCallback="true"' \
             "$MANIFEST"
 
-          echo "RECORD_AUDIO: PASS"
-          echo "POST_NOTIFICATIONS: PASS"
-          echo "PREDICTIVE BACK: PASS"
-          echo "MANIFEST XML: PASS"
+          echo "FINAL MANIFEST: PASS"
 
 
       # ============================================================
-      # 26. FIREBASE CONFIGURATION
+      # 27. REPAIR ANY GENERATED MANIFEST PATCH
+      #
+      # This catches:
+      # .patch
+      # .diff
+      # .xml
+      # generated manifest files
+      # generated patch templates
+      #
+      # before verify-android-16.py.
+      # ============================================================
+
+      - name: Repair generated manifest patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          ROOT = Path(".")
+
+          ATTRIBUTE = (
+              'android:enableOnBackInvokedCallback="true"'
+          )
+
+          skip_dirs = {
+              ".git",
+              "node_modules",
+              ".gradle",
+              "build"
+          }
+
+          repaired = []
+          checked = []
+
+          def looks_like_text(path):
+              try:
+                  data = path.read_bytes()
+              except Exception:
+                  return False
+
+              if b"\x00" in data[:8192]:
+                  return False
+
+              return True
+
+          candidates = []
+
+          for path in ROOT.rglob("*"):
+
+              if not path.is_file():
+                  continue
+
+              if any(
+                  part in skip_dirs
+                  for part in path.parts
+              ):
+                  continue
+
+              lower_path = str(path).lower()
+
+              important_name = any(
+                  key in lower_path
+                  for key in (
+                      "manifest",
+                      "android-16",
+                      "android16",
+                      "patch"
+                  )
+              )
+
+              if not important_name:
+                  continue
+
+              if not looks_like_text(path):
+                  continue
+
+              candidates.append(path)
+
+          for path in candidates:
+
+              try:
+                  text = path.read_text(
+                      encoding="utf-8"
+                  )
+              except Exception:
+                  continue
+
+              if "<application" not in text.lower():
+                  continue
+
+              if "manifest" not in text.lower() and \
+                 "patch" not in str(path).lower() and \
+                 "android-16" not in str(path).lower():
+                  continue
+
+              checked.append(str(path))
+
+              if ATTRIBUTE in text:
+                  continue
+
+              original = text
+
+              def patch_application(match):
+                  opening = match.group(0)
+
+                  if ATTRIBUTE in opening:
+                      return opening
+
+                  return (
+                      opening[:-1]
+                      + " "
+                      + ATTRIBUTE
+                      + ">"
+                  )
+
+              text = re.sub(
+                  r"<application\b[^>]*>",
+                  patch_application,
+                  text,
+                  flags=re.IGNORECASE | re.DOTALL
+              )
+
+              if text != original:
+
+                  path.write_text(
+                      text,
+                      encoding="utf-8"
+                  )
+
+                  repaired.append(
+                      str(path)
+                  )
+
+          print(
+              "MANIFEST PATCH CANDIDATES:",
+              len(candidates)
+          )
+
+          print(
+              "MANIFEST FILES CHECKED:",
+              len(checked)
+          )
+
+          if repaired:
+
+              print(
+                  "REPAIRED GENERATED MANIFEST FILES:"
+              )
+
+              for item in repaired:
+                  print(
+                      " -",
+                      item
+                  )
+
+          print(
+              "GENERATED MANIFEST PATCH REPAIR: PASS"
+          )
+          PY
+
+
+      # ============================================================
+      # 28. FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Install Firebase configuration
@@ -830,7 +1099,7 @@ jobs:
 
 
       # ============================================================
-      # 27. FIREBASE DEPENDENCIES
+      # 29. FIREBASE DEPENDENCIES
       # ============================================================
 
       - name: Configure Firebase dependencies
@@ -934,7 +1203,7 @@ jobs:
 
 
       # ============================================================
-      # 28. FIREBASE INITIALIZATION
+      # 30. FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -1013,7 +1282,7 @@ jobs:
 
 
       # ============================================================
-      # 29. NATIVE BRIDGE
+      # 31. NATIVE BRIDGE
       # ============================================================
 
       - name: Verify RKMS native bridge
@@ -1049,7 +1318,7 @@ jobs:
 
 
       # ============================================================
-      # 30. FINAL MANIFEST CHECK
+      # 32. FINAL MANIFEST CHECK
       # ============================================================
 
       - name: Final AndroidManifest verification
@@ -1089,7 +1358,7 @@ jobs:
 
 
       # ============================================================
-      # 31. FINAL SDK
+      # 33. FINAL SDK
       # ============================================================
 
       - name: Finalize Android SDK versions
@@ -1141,7 +1410,7 @@ jobs:
 
 
       # ============================================================
-      # 32. POST-GENERATION RKMS AUDITS
+      # 34. POST-GENERATION RKMS AUDITS
       # ============================================================
 
       - name: Run post-generation RKMS audits
@@ -1177,7 +1446,7 @@ jobs:
 
 
       # ============================================================
-      # 33. FINAL ANDROID 16 AUDIT
+      # 35. FINAL ANDROID 16 AUDIT
       # ============================================================
 
       - name: Final Android 16 audit
@@ -1224,7 +1493,7 @@ jobs:
 
 
       # ============================================================
-      # 34. SIGNING SECRETS
+      # 36. SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -1261,7 +1530,7 @@ jobs:
 
 
       # ============================================================
-      # 35. RELEASE SIGNING
+      # 37. RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -1299,7 +1568,7 @@ jobs:
 
 
       # ============================================================
-      # 36. KEYSTORE
+      # 38. KEYSTORE
       # ============================================================
 
       - name: Verify release keystore
@@ -1323,7 +1592,7 @@ jobs:
 
 
       # ============================================================
-      # 37. GRADLE
+      # 39. GRADLE
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -1343,7 +1612,7 @@ jobs:
 
 
       # ============================================================
-      # 38. CLEAN
+      # 40. CLEAN
       # ============================================================
 
       - name: Clean Android build
@@ -1361,7 +1630,7 @@ jobs:
 
 
       # ============================================================
-      # 39. BUILD FINAL SIGNED RELEASE APK ONLY
+      # 41. BUILD FINAL SIGNED RELEASE APK ONLY
       # ============================================================
 
       - name: Build Final Signed Release APK Only
@@ -1406,7 +1675,7 @@ jobs:
 
 
       # ============================================================
-      # 40. VERIFY APK
+      # 42. VERIFY APK
       # ============================================================
 
       - name: Verify APK package and signature
@@ -1451,7 +1720,7 @@ jobs:
 
 
       # ============================================================
-      # 41. SHA256
+      # 43. SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1468,7 +1737,7 @@ jobs:
 
 
       # ============================================================
-      # 42. FINAL APK ONLY AUDIT
+      # 44. FINAL APK ONLY AUDIT
       # ============================================================
 
       - name: Final APK-only audit
@@ -1528,7 +1797,7 @@ jobs:
 
 
       # ============================================================
-      # 43. UPLOAD FINAL APK
+      # 45. UPLOAD FINAL APK
       # ============================================================
 
       - name: Upload final signed release APK
