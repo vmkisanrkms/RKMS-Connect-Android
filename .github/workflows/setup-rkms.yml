@@ -82,6 +82,7 @@ jobs:
             echo "::error::Source ZIP not found."
             echo "Expected:"
             echo "$SOURCE_ZIP"
+
             echo ""
             echo "Available ZIP files:"
 
@@ -115,6 +116,7 @@ jobs:
           set -euo pipefail
 
           rm -rf rkms-build
+
           mkdir -p rkms-build
 
           unzip -q \
@@ -125,7 +127,7 @@ jobs:
 
 
       # ============================================================
-      # 7. PROJECT ROOT
+      # 7. FIND PROJECT ROOT
       # ============================================================
 
       - name: Find RKMS project root
@@ -225,7 +227,10 @@ jobs:
 
           node -e '
           const fs = require("fs");
-          const pkg = JSON.parse(fs.readFileSync("package.json","utf8"));
+
+          const pkg = JSON.parse(
+            fs.readFileSync("package.json","utf8")
+          );
 
           const deps = {
             ...(pkg.dependencies || {}),
@@ -244,7 +249,10 @@ jobs:
 
           for (const [name, wanted] of Object.entries(required)) {
             const actual = deps[name];
-            console.log(`${name}: ${actual || "MISSING"}`);
+
+            console.log(
+              `${name}: ${actual || "MISSING"}`
+            );
 
             if (actual !== wanted) {
               failed = true;
@@ -296,60 +304,35 @@ jobs:
 
 
       # ============================================================
-      # 11. ZIP AUDIT SCRIPTS
+      # 11. SOURCE AUDIT - ONLY SAFE PRE-GENERATION AUDITS
+      #
+      # DO NOT run verify-rkms-final-fixes.py here.
+      # DO NOT run generated Android audits here.
       # ============================================================
 
-      - name: Verify ZIP audit scripts
+      - name: Run source level audits
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$RKMS_ROOT"
 
-          COUNT=0
+          echo "=============================================="
+          echo "PRE-GENERATION SOURCE AUDITS"
+          echo "=============================================="
 
-          for AUDIT in scripts/verify-*.py; do
-            if [ -f "$AUDIT" ]; then
-              echo "FOUND: $AUDIT"
-              COUNT=$((COUNT + 1))
-            fi
-          done
-
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::No verify-*.py audit scripts found."
-            exit 1
+          if [ -f "scripts/verify-android-pdf.py" ]; then
+            echo ""
+            echo "RUNNING: scripts/verify-android-pdf.py"
+            python3 scripts/verify-android-pdf.py
           fi
 
-          echo "AUDIT SCRIPT COUNT: $COUNT"
+          echo ""
+          echo "PRE-GENERATION SOURCE AUDITS: PASS"
 
 
       # ============================================================
-      # 12. RUN SOURCE AUDITS
-      # ============================================================
-
-      - name: Run ZIP static audits
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          for AUDIT in scripts/verify-*.py; do
-
-            echo ""
-            echo "=============================================="
-            echo "RUNNING: $AUDIT"
-            echo "=============================================="
-
-            python3 "$AUDIT"
-
-          done
-
-          echo "ZIP STATIC AUDITS: PASS"
-
-
-      # ============================================================
-      # 13. NPM
+      # 12. NPM INSTALL
       # ============================================================
 
       - name: Install npm dependencies
@@ -367,7 +350,7 @@ jobs:
 
 
       # ============================================================
-      # 14. WEB BUILD
+      # 13. WEB BUILD
       # ============================================================
 
       - name: Build web application
@@ -385,7 +368,7 @@ jobs:
 
 
       # ============================================================
-      # 15. ANDROID SDK
+      # 14. ANDROID SDK
       # ============================================================
 
       - name: Setup Android SDK
@@ -393,7 +376,7 @@ jobs:
 
 
       # ============================================================
-      # 16. API 36
+      # 15. INSTALL API 36
       # ============================================================
 
       - name: Install Android API 36
@@ -423,7 +406,7 @@ jobs:
 
 
       # ============================================================
-      # 17. CREATE ANDROID
+      # 16. CREATE CAPACITOR ANDROID
       # ============================================================
 
       - name: Create Capacitor Android project
@@ -444,7 +427,7 @@ jobs:
 
 
       # ============================================================
-      # 18. ANDROID 16 CONFIGURATION
+      # 17. CONFIGURE ANDROID 16
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -462,11 +445,11 @@ jobs:
 
           ./scripts/configure-android-16.sh
 
-          echo "ANDROID 16 CONFIGURATION SCRIPT: PASS"
+          echo "ANDROID 16 CONFIGURATION: PASS"
 
 
       # ============================================================
-      # 19. CAPACITOR SYNC
+      # 18. CAPACITOR SYNC
       # ============================================================
 
       - name: Capacitor sync
@@ -482,7 +465,7 @@ jobs:
 
 
       # ============================================================
-      # 20. FORCE MIN SDK 23
+      # 19. FORCE MIN SDK 23
       # ============================================================
 
       - name: Force Android minSdk 23
@@ -491,26 +474,6 @@ jobs:
           set -euo pipefail
 
           cd "$RKMS_ROOT"
-
-          if [ -f android/variables.gradle ]; then
-
-            perl -pi -e \
-              's/(minSdkVersion\s*=\s*)22\b/${1}23/g' \
-              android/variables.gradle
-
-            perl -pi -e \
-              's/(minSdkVersion\s+)\s*22\b/${1}23/g' \
-              android/variables.gradle
-
-            perl -pi -e \
-              's/(minSdk\s*=\s*)22\b/${1}23/g' \
-              android/variables.gradle
-
-            perl -pi -e \
-              's/(minSdk\s+)\s*22\b/${1}23/g' \
-              android/variables.gradle
-
-          fi
 
           find android \
             -type f \
@@ -546,15 +509,18 @@ jobs:
             'minSdkVersion[[:space:]]*=?[[:space:]]*22([[:space:]]|$)|minSdk[[:space:]]*=?[[:space:]]*22([[:space:]]|$)' \
             android
           then
+
             echo "::error::minSdk 22 still exists."
+
             exit 1
+
           fi
 
           echo "MIN SDK 23: PASS"
 
 
       # ============================================================
-      # 21. REPAIR KNOWN MALFORMED NATIVE SCRIPT
+      # 20. REPAIR NATIVE SETUP SCRIPT
       # ============================================================
 
       - name: Repair known malformed native setup script
@@ -610,7 +576,7 @@ jobs:
 
 
       # ============================================================
-      # 22. RUN NATIVE SETUP
+      # 21. RUN NATIVE SETUP
       # ============================================================
 
       - name: Configure RKMS native Android
@@ -626,7 +592,7 @@ jobs:
 
 
       # ============================================================
-      # 23. FORCE ANDROID 16 PREDICTIVE BACK
+      # 22. FORCE PREDICTIVE BACK
       # ============================================================
 
       - name: Configure Android 16 predictive back
@@ -664,7 +630,7 @@ jobs:
 
               if "<application" not in text:
                   raise SystemExit(
-                      "ERROR: <application> tag not found."
+                      "ERROR: application tag not found."
                   )
 
               text = text.replace(
@@ -687,7 +653,7 @@ jobs:
 
 
       # ============================================================
-      # 24. FORCE RECORD_AUDIO + POST_NOTIFICATIONS
+      # 23. FORCE RECORD_AUDIO + POST_NOTIFICATIONS
       # ============================================================
 
       - name: Force Android permissions
@@ -713,27 +679,26 @@ jobs:
 
           if "<manifest" not in text:
               raise SystemExit(
-                  "ERROR: <manifest> tag not found."
+                  "ERROR: manifest tag not found."
               )
 
-          permissions = []
+          additions = []
 
           if "android.permission.RECORD_AUDIO" not in text:
-              permissions.append(
+              additions.append(
                   '    <uses-permission android:name="android.permission.RECORD_AUDIO" />'
               )
 
           if "android.permission.POST_NOTIFICATIONS" not in text:
-              permissions.append(
+              additions.append(
                   '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />'
               )
 
-          if permissions:
-              block = "\n".join(permissions)
+          if additions:
 
               text = text.replace(
                   "<manifest",
-                  "<manifest\n" + block,
+                  "<manifest\n" + "\n".join(additions),
                   1
               )
 
@@ -741,49 +706,27 @@ jobs:
               text,
               encoding="utf-8"
           )
-
-          print("Android permissions repaired.")
           PY
-
-          echo ""
-          echo "=============================================="
-          echo "VERIFY RECORD_AUDIO"
-          echo "=============================================="
 
           grep -Fq \
             "android.permission.RECORD_AUDIO" \
             "$MANIFEST"
 
-          echo "RECORD_AUDIO: PASS"
-
-          echo ""
-          echo "=============================================="
-          echo "VERIFY POST_NOTIFICATIONS"
-          echo "=============================================="
-
           grep -Fq \
             "android.permission.POST_NOTIFICATIONS" \
             "$MANIFEST"
-
-          echo "POST_NOTIFICATIONS: PASS"
-
-          echo ""
-          echo "=============================================="
-          echo "VERIFY PREDICTIVE BACK"
-          echo "=============================================="
 
           grep -Fq \
             'android:enableOnBackInvokedCallback="true"' \
             "$MANIFEST"
 
+          echo "RECORD_AUDIO: PASS"
+          echo "POST_NOTIFICATIONS: PASS"
           echo "PREDICTIVE BACK: PASS"
-
-          echo ""
-          echo "ANDROID MANIFEST PERMISSIONS: PASS"
 
 
       # ============================================================
-      # 25. REPAIR GENERATED MANIFEST PATCH
+      # 24. REPAIR GENERATED MANIFEST PATCH
       # ============================================================
 
       - name: Repair Android 16 generated manifest patch
@@ -793,7 +736,7 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          echo "Searching Android 16 manifest patch sources..."
+          echo "Searching manifest patch sources..."
 
           while IFS= read -r -d '' FILE; do
 
@@ -804,7 +747,10 @@ jobs:
 
               echo "CHECKING: $FILE"
 
-              if grep -Fq "<application" "$FILE" 2>/dev/null; then
+              if grep -Fq \
+                "<application" \
+                "$FILE" 2>/dev/null
+              then
 
                 python3 - "$FILE" <<'PY'
           import sys
@@ -860,23 +806,11 @@ jobs:
               2>/dev/null
           )
 
-          echo ""
-          echo "Current predictive-back references:"
-
-          grep -RIn \
-            "enableOnBackInvokedCallback" \
-            scripts \
-            android \
-            2>/dev/null \
-            | head -n 100 \
-            || true
-
-          echo ""
           echo "MANIFEST PATCH REPAIR: PASS"
 
 
       # ============================================================
-      # 26. FIREBASE
+      # 25. FIREBASE CONFIG
       # ============================================================
 
       - name: Install Firebase configuration
@@ -901,7 +835,7 @@ jobs:
 
 
       # ============================================================
-      # 27. FIREBASE GRADLE DEPENDENCIES
+      # 26. FIREBASE DEPENDENCIES
       # ============================================================
 
       - name: Configure Firebase Gradle dependencies
@@ -983,7 +917,7 @@ jobs:
 
 
       # ============================================================
-      # 28. FIREBASE INITIALIZATION
+      # 27. FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -1061,7 +995,7 @@ jobs:
 
 
       # ============================================================
-      # 29. NATIVE BRIDGE
+      # 28. NATIVE BRIDGE
       # ============================================================
 
       - name: Verify RKMS native bridge
@@ -1097,7 +1031,7 @@ jobs:
 
 
       # ============================================================
-      # 30. FINAL MANIFEST VERIFICATION
+      # 29. FINAL MANIFEST VERIFICATION
       # ============================================================
 
       - name: Final Android manifest verification
@@ -1130,7 +1064,7 @@ jobs:
 
 
       # ============================================================
-      # 31. FINAL MIN SDK
+      # 30. FINAL MIN SDK
       # ============================================================
 
       - name: Finalize Android SDK versions
@@ -1184,24 +1118,27 @@ jobs:
 
 
       # ============================================================
-      # 32. GENERATED ANDROID AUDITS
+      # 31. RUN POST-GENERATION AUDITS
+      #
+      # These audits now run AFTER Android generation and fixes.
       # ============================================================
 
-      - name: Run generated Android audits
+      - name: Run post-generation RKMS audits
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$RKMS_ROOT"
 
-          for AUDIT in \
-            scripts/verify-android-16.py \
-            scripts/verify-android-pdf.py \
-            scripts/verify-native-bridge.py \
-            scripts/verify-fcm-pipeline.py \
-            scripts/verify-rkms-final-fixes.py \
-            scripts/verify-saved-login.py
-          do
+          AUDITS="
+          scripts/verify-android-16.py
+          scripts/verify-rkms-final-fixes.py
+          scripts/verify-native-bridge.py
+          scripts/verify-fcm-pipeline.py
+          scripts/verify-saved-login.py
+          "
+
+          for AUDIT in $AUDITS; do
 
             if [ -f "$AUDIT" ]; then
 
@@ -1217,11 +1154,11 @@ jobs:
           done
 
           echo ""
-          echo "GENERATED ANDROID AUDITS: PASS"
+          echo "POST-GENERATION AUDITS: PASS"
 
 
       # ============================================================
-      # 33. FINAL SDK AUDIT
+      # 32. FINAL ANDROID SDK AUDIT
       # ============================================================
 
       - name: Final Android SDK audit
@@ -1263,14 +1200,24 @@ jobs:
             'android:enableOnBackInvokedCallback="true"' \
             android/app/src/main/AndroidManifest.xml
 
+          grep -Fq \
+            "android.permission.RECORD_AUDIO" \
+            android/app/src/main/AndroidManifest.xml
+
+          grep -Fq \
+            "android.permission.POST_NOTIFICATIONS" \
+            android/app/src/main/AndroidManifest.xml
+
           echo "COMPILE SDK 36: PASS"
           echo "TARGET SDK 36: PASS"
           echo "MIN SDK 23: PASS"
           echo "PREDICTIVE BACK: PASS"
+          echo "RECORD AUDIO: PASS"
+          echo "POST NOTIFICATIONS: PASS"
 
 
       # ============================================================
-      # 34. SIGNING SECRETS
+      # 33. SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -1307,7 +1254,7 @@ jobs:
 
 
       # ============================================================
-      # 35. RELEASE SIGNING
+      # 34. RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -1342,7 +1289,7 @@ jobs:
 
 
       # ============================================================
-      # 36. KEYSTORE
+      # 35. KEYSTORE
       # ============================================================
 
       - name: Verify release keystore
@@ -1366,7 +1313,7 @@ jobs:
 
 
       # ============================================================
-      # 37. GRADLE
+      # 36. GRADLE
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -1386,7 +1333,7 @@ jobs:
 
 
       # ============================================================
-      # 38. CLEAN
+      # 37. CLEAN
       # ============================================================
 
       - name: Clean Android build
@@ -1404,7 +1351,7 @@ jobs:
 
 
       # ============================================================
-      # 39. BUILD ONLY FINAL RELEASE APK
+      # 38. BUILD FINAL RELEASE APK ONLY
       # ============================================================
 
       - name: Build Final Signed Release APK Only
@@ -1465,7 +1412,7 @@ jobs:
 
 
       # ============================================================
-      # 40. APK VERIFY
+      # 39. APK PACKAGE + SIGNATURE
       # ============================================================
 
       - name: Verify APK package and signature
@@ -1510,7 +1457,7 @@ jobs:
 
 
       # ============================================================
-      # 41. SHA256
+      # 40. SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1527,7 +1474,7 @@ jobs:
 
 
       # ============================================================
-      # 42. FINAL APK-ONLY AUDIT
+      # 41. FINAL APK-ONLY AUDIT
       # ============================================================
 
       - name: Final APK-only audit
@@ -1589,7 +1536,7 @@ jobs:
 
 
       # ============================================================
-      # 43. UPLOAD FINAL APK
+      # 42. UPLOAD FINAL APK
       # ============================================================
 
       - name: Upload final signed release APK
