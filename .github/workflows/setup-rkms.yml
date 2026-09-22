@@ -116,7 +116,6 @@ jobs:
           set -euo pipefail
 
           rm -rf rkms-build
-
           mkdir -p rkms-build
 
           unzip -q \
@@ -304,10 +303,7 @@ jobs:
 
 
       # ============================================================
-      # 11. SOURCE AUDIT - ONLY SAFE PRE-GENERATION AUDITS
-      #
-      # DO NOT run verify-rkms-final-fixes.py here.
-      # DO NOT run generated Android audits here.
+      # 11. SOURCE AUDIT
       # ============================================================
 
       - name: Run source level audits
@@ -509,18 +505,15 @@ jobs:
             'minSdkVersion[[:space:]]*=?[[:space:]]*22([[:space:]]|$)|minSdk[[:space:]]*=?[[:space:]]*22([[:space:]]|$)' \
             android
           then
-
             echo "::error::minSdk 22 still exists."
-
             exit 1
-
           fi
 
           echo "MIN SDK 23: PASS"
 
 
       # ============================================================
-      # 20. REPAIR NATIVE SETUP SCRIPT
+      # 20. REPAIR KNOWN NATIVE SCRIPT
       # ============================================================
 
       - name: Repair known malformed native setup script
@@ -592,7 +585,7 @@ jobs:
 
 
       # ============================================================
-      # 22. FORCE PREDICTIVE BACK
+      # 22. PREDICTIVE BACK
       # ============================================================
 
       - name: Configure Android 16 predictive back
@@ -628,16 +621,19 @@ jobs:
 
           else:
 
-              if "<application" not in text:
+              match = re.search(
+                  r'<application\b',
+                  text
+              )
+
+              if not match:
                   raise SystemExit(
                       "ERROR: application tag not found."
                   )
 
-              text = text.replace(
-                  "<application",
-                  '<application android:enableOnBackInvokedCallback="true"',
-                  1
-              )
+              text = text[:match.end()] + \
+                  ' android:enableOnBackInvokedCallback="true"' + \
+                  text[match.end():]
 
           path.write_text(
               text,
@@ -653,10 +649,15 @@ jobs:
 
 
       # ============================================================
-      # 23. FORCE RECORD_AUDIO + POST_NOTIFICATIONS
+      # 23. FIX MICROPHONE + NOTIFICATION MANIFEST
+      #
+      # IMPORTANT:
+      # Permission elements are inserted AFTER the complete
+      # <manifest ...> opening tag, not inside its attributes.
+      # This keeps AndroidManifest.xml valid XML.
       # ============================================================
 
-      - name: Force Android permissions
+      - name: Configure microphone and notification permissions
         shell: bash
         run: |
           set -euo pipefail
@@ -669,6 +670,7 @@ jobs:
 
           python3 - "$MANIFEST" <<'PY'
           import sys
+          import re
           from pathlib import Path
 
           path = Path(sys.argv[1])
@@ -696,10 +698,24 @@ jobs:
 
           if additions:
 
-              text = text.replace(
-                  "<manifest",
-                  "<manifest\n" + "\n".join(additions),
-                  1
+              match = re.search(
+                  r'<manifest\b[^>]*>',
+                  text,
+                  flags=re.DOTALL
+              )
+
+              if not match:
+                  raise SystemExit(
+                      "ERROR: complete manifest opening tag not found."
+                  )
+
+              opening_tag = match.group(0)
+
+              text = (
+                  text[:match.end()]
+                  + "\n"
+                  + "\n".join(additions)
+                  + text[match.end():]
               )
 
           path.write_text(
@@ -709,11 +725,11 @@ jobs:
           PY
 
           grep -Fq \
-            "android.permission.RECORD_AUDIO" \
+            'android:name="android.permission.RECORD_AUDIO"' \
             "$MANIFEST"
 
           grep -Fq \
-            "android.permission.POST_NOTIFICATIONS" \
+            'android:name="android.permission.POST_NOTIFICATIONS"' \
             "$MANIFEST"
 
           grep -Fq \
@@ -726,7 +742,37 @@ jobs:
 
 
       # ============================================================
-      # 24. REPAIR GENERATED MANIFEST PATCH
+      # 24. VALIDATE MANIFEST XML
+      # ============================================================
+
+      - name: Validate AndroidManifest XML
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path = sys.argv[1]
+
+          try:
+              ET.parse(path)
+          except Exception as exc:
+              print("ANDROID MANIFEST XML INVALID")
+              print(exc)
+              raise SystemExit(1)
+
+          print("ANDROID MANIFEST XML: PASS")
+          PY
+
+
+      # ============================================================
+      # 25. REPAIR GENERATED MANIFEST PATCH
       # ============================================================
 
       - name: Repair Android 16 generated manifest patch
@@ -810,7 +856,7 @@ jobs:
 
 
       # ============================================================
-      # 25. FIREBASE CONFIG
+      # 26. FIREBASE CONFIG
       # ============================================================
 
       - name: Install Firebase configuration
@@ -835,7 +881,7 @@ jobs:
 
 
       # ============================================================
-      # 26. FIREBASE DEPENDENCIES
+      # 27. FIREBASE DEPENDENCIES
       # ============================================================
 
       - name: Configure Firebase Gradle dependencies
@@ -917,7 +963,7 @@ jobs:
 
 
       # ============================================================
-      # 27. FIREBASE INITIALIZATION
+      # 28. FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -995,7 +1041,7 @@ jobs:
 
 
       # ============================================================
-      # 28. NATIVE BRIDGE
+      # 29. NATIVE BRIDGE
       # ============================================================
 
       - name: Verify RKMS native bridge
@@ -1031,7 +1077,7 @@ jobs:
 
 
       # ============================================================
-      # 29. FINAL MANIFEST VERIFICATION
+      # 30. FINAL MANIFEST VERIFICATION
       # ============================================================
 
       - name: Final Android manifest verification
@@ -1046,16 +1092,29 @@ jobs:
           test -s "$MANIFEST"
 
           grep -Fq \
-            "android.permission.RECORD_AUDIO" \
+            'android:name="android.permission.RECORD_AUDIO"' \
             "$MANIFEST"
 
           grep -Fq \
-            "android.permission.POST_NOTIFICATIONS" \
+            'android:name="android.permission.POST_NOTIFICATIONS"' \
             "$MANIFEST"
 
           grep -Fq \
             'android:enableOnBackInvokedCallback="true"' \
             "$MANIFEST"
+
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          try:
+              ET.parse(sys.argv[1])
+          except Exception as exc:
+              print(exc)
+              raise SystemExit(1)
+
+          print("MANIFEST XML: PASS")
+          PY
 
           echo "RECORD_AUDIO: PASS"
           echo "POST_NOTIFICATIONS: PASS"
@@ -1064,7 +1123,7 @@ jobs:
 
 
       # ============================================================
-      # 30. FINAL MIN SDK
+      # 31. FINAL MIN SDK
       # ============================================================
 
       - name: Finalize Android SDK versions
@@ -1118,9 +1177,7 @@ jobs:
 
 
       # ============================================================
-      # 31. RUN POST-GENERATION AUDITS
-      #
-      # These audits now run AFTER Android generation and fixes.
+      # 32. POST GENERATION AUDITS
       # ============================================================
 
       - name: Run post-generation RKMS audits
@@ -1158,7 +1215,7 @@ jobs:
 
 
       # ============================================================
-      # 32. FINAL ANDROID SDK AUDIT
+      # 33. FINAL ANDROID SDK AUDIT
       # ============================================================
 
       - name: Final Android SDK audit
@@ -1201,11 +1258,11 @@ jobs:
             android/app/src/main/AndroidManifest.xml
 
           grep -Fq \
-            "android.permission.RECORD_AUDIO" \
+            'android:name="android.permission.RECORD_AUDIO"' \
             android/app/src/main/AndroidManifest.xml
 
           grep -Fq \
-            "android.permission.POST_NOTIFICATIONS" \
+            'android:name="android.permission.POST_NOTIFICATIONS"' \
             android/app/src/main/AndroidManifest.xml
 
           echo "COMPILE SDK 36: PASS"
@@ -1217,7 +1274,7 @@ jobs:
 
 
       # ============================================================
-      # 33. SIGNING SECRETS
+      # 34. SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -1254,7 +1311,7 @@ jobs:
 
 
       # ============================================================
-      # 34. RELEASE SIGNING
+      # 35. RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -1289,7 +1346,7 @@ jobs:
 
 
       # ============================================================
-      # 35. KEYSTORE
+      # 36. KEYSTORE
       # ============================================================
 
       - name: Verify release keystore
@@ -1313,7 +1370,7 @@ jobs:
 
 
       # ============================================================
-      # 36. GRADLE
+      # 37. GRADLE
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -1333,7 +1390,7 @@ jobs:
 
 
       # ============================================================
-      # 37. CLEAN
+      # 38. CLEAN
       # ============================================================
 
       - name: Clean Android build
@@ -1351,7 +1408,7 @@ jobs:
 
 
       # ============================================================
-      # 38. BUILD FINAL RELEASE APK ONLY
+      # 39. BUILD FINAL RELEASE APK ONLY
       # ============================================================
 
       - name: Build Final Signed Release APK Only
@@ -1412,7 +1469,7 @@ jobs:
 
 
       # ============================================================
-      # 39. APK PACKAGE + SIGNATURE
+      # 40. APK PACKAGE + SIGNATURE
       # ============================================================
 
       - name: Verify APK package and signature
@@ -1457,7 +1514,7 @@ jobs:
 
 
       # ============================================================
-      # 40. SHA256
+      # 41. SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1474,7 +1531,7 @@ jobs:
 
 
       # ============================================================
-      # 41. FINAL APK-ONLY AUDIT
+      # 42. FINAL APK ONLY AUDIT
       # ============================================================
 
       - name: Final APK-only audit
@@ -1536,7 +1593,7 @@ jobs:
 
 
       # ============================================================
-      # 42. UPLOAD FINAL APK
+      # 43. UPLOAD FINAL APK
       # ============================================================
 
       - name: Upload final signed release APK
