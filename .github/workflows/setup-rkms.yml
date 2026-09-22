@@ -31,8 +31,7 @@ jobs:
 
       # ============================================================
       # 2. NODE 22
-      # IMPORTANT:
-      # NO npm cache here because package-lock.json is INSIDE ZIP.
+      # No npm cache because package-lock.json is inside ZIP
       # ============================================================
 
       - name: Setup Node.js 22
@@ -81,6 +80,7 @@ jobs:
             echo "$SOURCE_ZIP"
 
             echo "ZIP FILES IN REPOSITORY:"
+
             find . \
               -maxdepth 4 \
               -type f \
@@ -95,8 +95,11 @@ jobs:
           echo "=============================================="
           echo "RKMS SOURCE ZIP"
           echo "=============================================="
+
           echo "$SOURCE_ZIP"
+
           sha256sum "$SOURCE_ZIP"
+
           echo "=============================================="
 
 
@@ -117,6 +120,7 @@ jobs:
           echo "ZIP EXTRACTION: PASS"
 
           echo "TOP LEVEL CONTENT:"
+
           find rkms-build \
             -maxdepth 2 \
             -type f \
@@ -216,7 +220,7 @@ jobs:
 
 
       # ============================================================
-      # 9. VERIFY CAPACITOR VERSIONS
+      # 9. CAPACITOR VERSION CHECK
       # ============================================================
 
       - name: Verify Capacitor versions
@@ -226,7 +230,7 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          node <<'NODE'
+          node -e '
           const fs = require("fs");
 
           const pkg = JSON.parse(
@@ -252,7 +256,7 @@ jobs:
             const actual = deps[name];
 
             console.log(
-              `${name}: ${actual || "MISSING"}`
+              name + ": " + (actual || "MISSING")
             );
 
             if (actual !== wanted) {
@@ -261,20 +265,15 @@ jobs:
           }
 
           if (failed) {
-            console.error(
-              "Capacitor version validation failed."
-            );
             process.exit(1);
           }
 
-          console.log(
-            "CAPACITOR VERSION CHECK: PASS"
-          );
-          NODE
+          console.log("CAPACITOR VERSION CHECK: PASS");
+          '
 
 
       # ============================================================
-      # 10. VERIFY FIREBASE PACKAGE
+      # 10. FIREBASE PACKAGE CHECK
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -284,7 +283,7 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          node <<'NODE'
+          node -e '
           const fs = require("fs");
 
           const data = JSON.parse(
@@ -305,14 +304,12 @@ jobs:
             );
           }
 
-          console.log(
-            "FIREBASE PACKAGE CHECK: PASS"
-          );
-          NODE
+          console.log("FIREBASE PACKAGE CHECK: PASS");
+          '
 
 
       # ============================================================
-      # 11. CHECK ZIP AUDIT SCRIPTS
+      # 11. AUDIT SCRIPT DISCOVERY
       # ============================================================
 
       - name: Verify ZIP audit scripts
@@ -341,7 +338,7 @@ jobs:
 
 
       # ============================================================
-      # 12. RUN ZIP STATIC AUDITS
+      # 12. RUN ZIP AUDITS
       # ============================================================
 
       - name: Run ZIP static audits
@@ -361,13 +358,11 @@ jobs:
           done
 
           echo ""
-          echo "=============================================="
           echo "ALL ZIP STATIC AUDITS: PASS"
-          echo "=============================================="
 
 
       # ============================================================
-      # 13. NPM INSTALL
+      # 13. NPM
       # ============================================================
 
       - name: Install npm dependencies
@@ -397,10 +392,7 @@ jobs:
 
           npm run build
 
-          if [ ! -s "dist/index.html" ]; then
-            echo "::error::dist/index.html was not created."
-            exit 1
-          fi
+          test -s dist/index.html
 
           echo "WEB BUILD: PASS"
 
@@ -414,7 +406,7 @@ jobs:
 
 
       # ============================================================
-      # 16. API 36 + BUILD TOOLS
+      # 16. API 36
       # ============================================================
 
       - name: Install Android API 36
@@ -448,7 +440,7 @@ jobs:
 
 
       # ============================================================
-      # 17. CREATE ANDROID PROJECT
+      # 17. CREATE ANDROID
       # ============================================================
 
       - name: Create Capacitor Android project
@@ -525,61 +517,15 @@ jobs:
 
 
       # ============================================================
-      # 20. PATCH KNOWN ZIP NATIVE SCRIPT ISSUE
+      # 20. NATIVE SCRIPT SYNTAX
       # ============================================================
 
-      - name: Validate and repair RKMS native setup script
+      - name: Verify RKMS native setup script
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$RKMS_ROOT"
-
-          chmod +x \
-            scripts/setup-android-native.sh
-
-          if ! bash -n \
-            scripts/setup-android-native.sh
-          then
-            echo "::warning::Native setup script requires CI repair."
-          fi
-
-          cp \
-            scripts/setup-android-native.sh \
-            /tmp/setup-android-native.original.sh
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          p = Path("scripts/setup-android-native.sh")
-          s = p.read_text(encoding="utf-8")
-
-          # Repair a malformed nested Python/heredoc section if present.
-          if "PY3" in s:
-              lines = s.splitlines()
-
-              out = []
-              skip = False
-
-              for line in lines:
-                  if "python3 - <<'PY3'" in line:
-                      skip = True
-                      continue
-
-                  if skip and line.strip() == "PY3":
-                      skip = False
-                      continue
-
-                  if not skip:
-                      out.append(line)
-
-              s = "\n".join(out) + "\n"
-
-          p.write_text(
-              s,
-              encoding="utf-8"
-          )
-          PY
 
           chmod +x \
             scripts/setup-android-native.sh
@@ -591,7 +537,7 @@ jobs:
 
 
       # ============================================================
-      # 21. RUN NATIVE SETUP
+      # 21. NATIVE SETUP
       # ============================================================
 
       - name: Configure RKMS native Android
@@ -709,7 +655,7 @@ jobs:
 
 
       # ============================================================
-      # 24. FIREBASE INIT
+      # 24. FIREBASE INITIALIZATION
       # ============================================================
 
       - name: Verify Firebase initialization
@@ -741,10 +687,11 @@ jobs:
               "super.onCreate(savedInstanceState);" \
               "$MAIN"
             then
+
               sed -i \
-                '/super.onCreate(savedInstanceState);/i\
-        com.google.firebase.FirebaseApp.initializeApp(this);' \
+                '/super.onCreate(savedInstanceState);/a\        com.google.firebase.FirebaseApp.initializeApp(this);' \
                 "$MAIN"
+
             else
               echo "::error::Cannot locate MainActivity onCreate marker."
               exit 1
@@ -824,7 +771,7 @@ jobs:
 
 
       # ============================================================
-      # 27. GENERATED ANDROID STATIC AUDITS
+      # 27. GENERATED ANDROID AUDITS
       # ============================================================
 
       - name: Run generated Android audits
@@ -842,14 +789,18 @@ jobs:
             scripts/verify-rkms-final-fixes.py \
             scripts/verify-saved-login.py
           do
+
             if [ -f "$AUDIT" ]; then
+
               echo ""
               echo "=============================================="
               echo "RUNNING $AUDIT"
               echo "=============================================="
 
               python3 "$AUDIT"
+
             fi
+
           done
 
           echo "GENERATED ANDROID AUDITS: PASS"
@@ -928,7 +879,7 @@ jobs:
 
 
       # ============================================================
-      # 30. KEYSTORE VALIDATION
+      # 30. KEYSTORE
       # ============================================================
 
       - name: Verify release keystore
@@ -952,7 +903,7 @@ jobs:
 
 
       # ============================================================
-      # 31. GRADLE VALIDATION
+      # 31. GRADLE
       # ============================================================
 
       - name: Verify Gradle
@@ -990,7 +941,7 @@ jobs:
 
 
       # ============================================================
-      # 33. FINAL RELEASE APK
+      # 33. FINAL SIGNED RELEASE APK
       # ============================================================
 
       - name: Build Final Signed Release APK Only
@@ -1007,12 +958,14 @@ jobs:
           echo "=============================================="
           echo "RKMS FINAL SIGNED RELEASE APK"
           echo "=============================================="
+
           echo "PACKAGE: ${APP_ID}"
           echo "ANDROID API: ${ANDROID_API}"
           echo "BUILD TOOLS: ${BUILD_TOOLS}"
           echo "SIGNED: YES"
           echo "DEBUG APK: NO"
           echo "AAB: NO"
+
           echo "=============================================="
 
           ./gradlew \
@@ -1023,6 +976,7 @@ jobs:
           APK="app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -s "$APK" ]; then
+
             echo "::error::Release APK was not created."
 
             find app/build/outputs \
@@ -1045,7 +999,7 @@ jobs:
 
 
       # ============================================================
-      # 34. APK PACKAGE + SIGNATURE
+      # 34. APK VERIFY
       # ============================================================
 
       - name: Verify APK package and signature
@@ -1107,7 +1061,7 @@ jobs:
 
 
       # ============================================================
-      # 36. FINAL APK ONLY AUDIT
+      # 36. FINAL APK AUDIT
       # ============================================================
 
       - name: Final APK-only audit
@@ -1154,11 +1108,13 @@ jobs:
           echo "=============================================="
           echo "FINAL APK AUDIT: PASS"
           echo "=============================================="
+
           echo "APK: RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
           echo "SIGNED: YES"
           echo "DEBUG: NO"
           echo "AAB: NO"
           echo "SIZE: $SIZE bytes"
+
           echo "=============================================="
 
           cat \
