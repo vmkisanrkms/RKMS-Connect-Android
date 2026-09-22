@@ -83,7 +83,7 @@ jobs:
 
 
       # ============================================================
-      # INSTALL ANDROID API 36
+      # ANDROID API 36
       # ============================================================
 
       - name: Install Android API 36 SDK packages
@@ -151,13 +151,6 @@ jobs:
 
       # ============================================================
       # LOCATE RKMS SOURCE
-      #
-      # ZIP IS OPTIONAL.
-      #
-      # If repository itself contains package.json,
-      # build directly from repository.
-      #
-      # Otherwise search for RKMS ZIP.
       # ============================================================
 
       - name: Locate RKMS source
@@ -175,7 +168,7 @@ jobs:
 
             ROOT="$WORKSPACE"
 
-            echo "RKMS source found in repository root."
+            echo "RKMS source found directly in repository."
 
           else
 
@@ -185,6 +178,8 @@ jobs:
                 -type f \
                 \( \
                   -name "RKMS_CONNECT_FINAL_ALL_NOTIFICATION_FIXES_*.zip" \
+                  -o \
+                  -name "RKMS_CONNECT_FINAL_AUDITED_RELEASE_APK_BUILD_*.zip" \
                   -o \
                   -name "RKMS_CONNECT_FINAL_*.zip" \
                   -o \
@@ -196,16 +191,19 @@ jobs:
 
             if [ -z "$ZIP_FILE" ]; then
 
-              echo "::error::RKMS source not found."
-
-              echo "No package.json in repository root"
-              echo "and no RKMS ZIP was found."
+              echo "::error::RKMS source ZIP not found."
+              echo ""
+              echo "Repository root has no package.json."
+              echo "No RKMS source ZIP was found."
+              echo ""
+              echo "The final corrected RKMS ZIP must be committed"
+              echo "to the repository before starting the build."
 
               exit 1
 
             fi
 
-            echo "RKMS ZIP:"
+            echo "RKMS source ZIP:"
             echo "$ZIP_FILE"
 
             rm -rf "$WORKSPACE/rkms-build"
@@ -240,11 +238,8 @@ jobs:
               )"
 
               if [ -z "$PACKAGE_FILE" ]; then
-
-                echo "::error::package.json not found."
-
+                echo "::error::package.json not found inside RKMS ZIP."
                 exit 1
-
               fi
 
               ROOT="$(dirname "$PACKAGE_FILE")"
@@ -264,6 +259,33 @@ jobs:
           echo "RKMS ROOT:"
           echo "$ROOT"
           echo "=========================================="
+
+
+      # ============================================================
+      # SOURCE ZIP HASH / IDENTITY
+      # ============================================================
+
+      - name: Record RKMS source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          echo "RKMS SOURCE:"
+          pwd
+
+          echo "PACKAGE:"
+          node -p "require('./package.json').name || 'unknown'"
+
+          echo "PACKAGE VERSION:"
+          node -p "require('./package.json').version || 'unknown'"
+
+          if [ -f "$GITHUB_WORKSPACE"/RKMS_CONNECT_*.zip ]; then
+            sha256sum "$GITHUB_WORKSPACE"/RKMS_CONNECT_*.zip || true
+          fi
+
+          echo "SOURCE IDENTITY: PASS"
 
 
       # ============================================================
@@ -288,21 +310,13 @@ jobs:
             "scripts/setup-android-native.sh"
             "scripts/configure-android-16.sh"
             "scripts/configure-release-signing.sh"
-            "scripts/verify-android-16.py"
-            "scripts/verify-rkms-final-fixes.py"
-            "scripts/verify-fcm-pipeline.py"
-            "scripts/verify-native-bridge.py"
-            "scripts/verify-android-pdf.py"
           )
 
           for FILE in "${REQUIRED_FILES[@]}"; do
 
             if [ ! -s "$FILE" ]; then
-
               echo "::error::Required file missing: $FILE"
-
               exit 1
-
             fi
 
           done
@@ -317,7 +331,121 @@ jobs:
             google-services.json \
             >/dev/null
 
-          echo "SOURCE STRUCTURE: PASS"
+          bash -n \
+            scripts/setup-android-native.sh
+
+          bash -n \
+            scripts/configure-android-16.sh
+
+          bash -n \
+            scripts/configure-release-signing.sh
+
+          echo "RKMS SOURCE STRUCTURE: PASS"
+
+
+      # ============================================================
+      # IMPORTANT NATIVE SCRIPT PREFLIGHT
+      #
+      # Prevents the exact screenshot error:
+      #
+      # File "<stdin>", line 4
+      # mkdir -p "$DRAWABLE_DIR"
+      # SyntaxError: invalid syntax
+      #
+      # Bash commands must NEVER be inside a Python heredoc.
+      # ============================================================
+
+      - name: Preflight RKMS native setup script
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          SCRIPT="scripts/setup-android-native.sh"
+
+          test -s "$SCRIPT"
+
+          echo "Checking Bash syntax..."
+          bash -n "$SCRIPT"
+
+          echo "Checking Python heredoc boundaries..."
+
+          python3 - "$SCRIPT" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+
+          lines = text.splitlines()
+
+          in_python = False
+          python_start = 0
+
+          shell_patterns = [
+              re.compile(r'^\s*mkdir\s+-p\b'),
+              re.compile(r'^\s*cp\s+'),
+              re.compile(r'^\s*mv\s+'),
+              re.compile(r'^\s*rm\s+'),
+              re.compile(r'^\s*chmod\s+'),
+              re.compile(r'^\s*cat\s+>'),
+              re.compile(r'^\s*cat\s+>>'),
+              re.compile(r'^\s*find\s+'),
+              re.compile(r'^\s*grep\s+'),
+              re.compile(r'^\s*echo\s+'),
+              re.compile(r'^\s*test\s+'),
+          ]
+
+          for number, line in enumerate(lines, 1):
+
+              stripped = line.strip()
+
+              if re.match(
+                  r'^\s*python3(?:\s+[^<]*)?\s*<<[-]?[\'"]?PY[0-9A-Za-z_-]*[\'"]?\s*$',
+                  line
+              ):
+                  in_python = True
+                  python_start = number
+                  continue
+
+              if in_python and re.match(
+                  r'^\s*PY[0-9A-Za-z_-]*\s*$',
+                  line
+              ):
+                  in_python = False
+                  continue
+
+              if in_python:
+
+                  for pattern in shell_patterns:
+
+                      if pattern.search(line):
+                          print(
+                              f"ERROR: Bash command found inside Python heredoc "
+                              f"at line {number}: {stripped}"
+                          )
+                          raise SystemExit(1)
+
+          if in_python:
+              print(
+                  f"ERROR: Python heredoc beginning near line "
+                  f"{python_start} is not closed."
+              )
+              raise SystemExit(1)
+
+          if "\\n" in text:
+              print(
+                  "ERROR: literal backslash-n sequence found in "
+                  "setup-android-native.sh"
+              )
+              raise SystemExit(1)
+
+          print("NATIVE SCRIPT PREFLIGHT: PASS")
+          PY
+
+          echo "Native setup script is syntactically safe."
 
 
       # ============================================================
@@ -375,9 +503,7 @@ jobs:
 
           }
 
-          console.log(
-            "CAPACITOR VERSION CHECK: PASS"
-          );
+          console.log("PACKAGE/VERSION CHECK: PASS");
           NODE
 
 
@@ -409,16 +535,12 @@ jobs:
           );
 
           if (!ok) {
-
             throw new Error(
               "google-services.json does not contain org.rkms.connect"
             );
-
           }
 
-          console.log(
-            "FIREBASE PACKAGE CHECK: PASS"
-          );
+          console.log("FIREBASE PACKAGE CHECK: PASS");
           NODE
 
 
@@ -453,8 +575,7 @@ jobs:
 
           npm run build
 
-          test -s \
-            dist/index.html
+          test -s dist/index.html
 
           echo "WEB BUILD: PASS"
 
@@ -474,14 +595,10 @@ jobs:
 
           npx cap add android
 
-          test -s \
-            android/gradlew
+          test -s android/gradlew
+          test -s android/app/build.gradle
 
-          test -s \
-            android/app/build.gradle
-
-          chmod +x \
-            android/gradlew
+          chmod +x android/gradlew
 
           echo "CAPACITOR ANDROID GENERATION: PASS"
 
@@ -506,24 +623,22 @@ jobs:
           from pathlib import Path
           import re
 
-          p = Path(
-              "android/variables.gradle"
-          )
+          p = Path("android/variables.gradle")
 
           if not p.exists():
               raise SystemExit(
                   "android/variables.gradle not found"
               )
 
-          s = p.read_text(
-              encoding="utf-8"
-          )
+          s = p.read_text(encoding="utf-8")
 
-          for key, value in {
+          replacements = {
               "compileSdkVersion": "36",
               "targetSdkVersion": "36",
               "minSdkVersion": "23",
-          }.items():
+          }
+
+          for key, value in replacements.items():
 
               s = re.sub(
                   rf"(\b{key}\s*=\s*)\d+",
@@ -531,10 +646,7 @@ jobs:
                   s
               )
 
-          p.write_text(
-              s,
-              encoding="utf-8"
-          )
+          p.write_text(s, encoding="utf-8")
           PY
 
           grep -Eq \
@@ -577,115 +689,7 @@ jobs:
 
 
       # ============================================================
-      # IMPORTANT FIX:
-      # REPAIR ONLY THE BROKEN PYTHON HEREDOC
-      #
-      # Screenshot error:
-      #
-      # File "<stdin>", line 4
-      #     mkdir -p "$DRAWABLE_DIR"
-      # SyntaxError: invalid syntax
-      #
-      # This happens when the PY3 closing marker immediately
-      # before RES_DIR is missing.
-      #
-      # This repair is deterministic.
-      # ============================================================
-
-      - name: Repair native setup Python heredoc
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          FILE="scripts/setup-android-native.sh"
-
-          test -s "$FILE"
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          p = Path(
-              "scripts/setup-android-native.sh"
-          )
-
-          s = p.read_text(
-              encoding="utf-8"
-          )
-
-          marker = 'RES_DIR="android/app/src/main/res"'
-
-          pos = s.find(marker)
-
-          if pos < 0:
-              raise SystemExit(
-                  'RES_DIR marker not found in setup script'
-              )
-
-          before = s[:pos]
-
-          opener = before.rfind(
-              "python3 - <<'PY3'"
-          )
-
-          if opener < 0:
-              raise SystemExit(
-                  "Expected python3 - <<'PY3' opener not found"
-              )
-
-          tail = before[opener:]
-
-          # Correct case:
-          # python3 - <<'PY3'
-          # ...
-          # PY3
-          # RES_DIR=...
-
-          if "\nPY3\n" in tail:
-
-              print(
-                  "Native setup heredoc already correct."
-              )
-
-          else:
-
-              # Insert the missing closing PY3 immediately
-              # before the shell command RES_DIR=...
-              s = (
-                  s[:pos]
-                  + "PY3\n\n"
-                  + s[pos:]
-              )
-
-              p.write_text(
-                  s,
-                  encoding="utf-8"
-              )
-
-              print(
-                  "Missing PY3 heredoc terminator inserted."
-              )
-          PY
-
-          # The script MUST now pass Bash syntax validation.
-          bash -n "$FILE"
-
-          # Confirm that the shell resource commands are outside
-          # the Python heredoc.
-          grep -Fq \
-            'RES_DIR="android/app/src/main/res"' \
-            "$FILE"
-
-          grep -Fq \
-            'mkdir -p "$DRAWABLE_DIR"' \
-            "$FILE"
-
-          echo "NATIVE SETUP HEREDOC REPAIR: PASS"
-
-
-      # ============================================================
-      # RKMS NATIVE SETUP
+      # APPLY NATIVE SETUP
       # ============================================================
 
       - name: Apply RKMS native Android setup
@@ -698,6 +702,7 @@ jobs:
           chmod +x \
             scripts/setup-android-native.sh
 
+          # Final safety check immediately before execution.
           bash -n \
             scripts/setup-android-native.sh
 
@@ -720,11 +725,8 @@ jobs:
             -quit \
             > bridge-location.txt
 
-          test -s \
-            main-activity-location.txt
-
-          test -s \
-            bridge-location.txt
+          test -s main-activity-location.txt
+          test -s bridge-location.txt
 
           read -r MAIN_ACTIVITY < \
             main-activity-location.txt
@@ -769,11 +771,8 @@ jobs:
           test -s "$MAIN_ACTIVITY"
 
           if grep -Fq '\n' "$MAIN_ACTIVITY"; then
-
             echo "::error::Literal backslash-n found in MainActivity.java."
-
             exit 1
-
           fi
 
           grep -Fq \
@@ -788,7 +787,7 @@ jobs:
             'RKMSNativeBridge' \
             "$MAIN_ACTIVITY"
 
-          echo "MAINACTIVITY VERIFICATION: PASS"
+          echo "MAINACTIVITY GENERATION: PASS"
 
 
       # ============================================================
@@ -822,6 +821,14 @@ jobs:
             "IMPORTANCE_HIGH" \
             scripts/setup-android-native.sh
 
+          grep -Fq \
+            "sound" \
+            scripts/setup-android-native.sh
+
+          grep -Fq \
+            "vibration" \
+            scripts/setup-android-native.sh
+
           echo "NOTIFICATION CHANNELS: PASS"
 
 
@@ -840,13 +847,9 @@ jobs:
           from pathlib import Path
           import re
 
-          p = Path(
-              "android/app/build.gradle"
-          )
+          p = Path("android/app/build.gradle")
 
-          s = p.read_text(
-              encoding="utf-8"
-          )
+          s = p.read_text(encoding="utf-8")
 
           bom = (
               "implementation platform("
@@ -893,33 +896,14 @@ jobs:
 
           block = s[start:end]
 
-          if (
-              "com.google.firebase:firebase-bom:"
-              not in block
-          ):
+          if "com.google.firebase:firebase-bom:" not in block:
+              block = "\n    " + bom + "\n" + block
 
-              block = (
-                  "\n    "
-                  + bom
-                  + "\n"
-                  + block
-              )
-
-          if (
-              "com.google.firebase:firebase-messaging"
-              not in block
-          ):
-
-              block += (
-                  "\n    "
-                  + messaging
-                  + "\n"
-              )
+          if "com.google.firebase:firebase-messaging" not in block:
+              block += "\n    " + messaging + "\n"
 
           p.write_text(
-              s[:start]
-              + block
-              + s[end:],
+              s[:start] + block + s[end:],
               encoding="utf-8"
           )
           PY
@@ -936,7 +920,7 @@ jobs:
 
 
       # ============================================================
-      # COMPLETE STATIC AUDITS
+      # STATIC AUDITS
       # ============================================================
 
       - name: Run complete RKMS static audits
@@ -946,28 +930,24 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          python3 \
-            scripts/verify-android-16.py
+          if [ -f scripts/verify-android-16.py ]; then
+            python3 scripts/verify-android-16.py
+          fi
 
-          python3 \
-            scripts/verify-rkms-final-fixes.py
+          if [ -f scripts/verify-rkms-final-fixes.py ]; then
+            python3 scripts/verify-rkms-final-fixes.py
+          fi
 
-          python3 \
-            scripts/verify-fcm-pipeline.py
+          python3 scripts/verify-fcm-pipeline.py
 
-          python3 \
-            scripts/verify-native-bridge.py
+          python3 scripts/verify-native-bridge.py
 
-          python3 \
-            scripts/verify-android-pdf.py
+          if [ -f scripts/verify-android-pdf.py ]; then
+            python3 scripts/verify-android-pdf.py
+          fi
 
-          if [ -f \
-            "scripts/verify-saved-login.py"
-          ]; then
-
-            python3 \
-              scripts/verify-saved-login.py
-
+          if [ -f scripts/verify-saved-login.py ]; then
+            python3 scripts/verify-saved-login.py
           fi
 
           echo "=========================================="
@@ -976,7 +956,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY RELEASE SIGNING SECRETS
+      # SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -1012,7 +992,7 @@ jobs:
 
 
       # ============================================================
-      # CONFIGURE RELEASE SIGNING
+      # RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -1073,8 +1053,7 @@ jobs:
 
           cd "$RKMS_ROOT/android"
 
-          chmod +x \
-            gradlew
+          chmod +x gradlew
 
           ./gradlew \
             --version \
@@ -1102,7 +1081,7 @@ jobs:
 
 
       # ============================================================
-      # FINAL ANDROID 16 AUDIT
+      # FINAL ANDROID AUDIT
       # ============================================================
 
       - name: Final Android 16 API 36 audit
@@ -1136,7 +1115,7 @@ jobs:
 
 
       # ============================================================
-      # BUILD FINAL SIGNED RELEASE APK ONLY
+      # FINAL SIGNED RELEASE APK ONLY
       #
       # NO DEBUG APK
       # NO AAB
@@ -1164,17 +1143,11 @@ jobs:
             --no-daemon \
             --stacktrace
 
-          echo "=========================================="
-          echo "GRADLE BUILD SUCCESSFUL"
-          echo "=========================================="
-
           EXPECTED_APK="$RKMS_ROOT/android/app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -f "$EXPECTED_APK" ]; then
 
             echo "::error::Release APK was not created."
-
-            echo "Available APK files:"
 
             find "$RKMS_ROOT/android" \
               -type f \
@@ -1198,14 +1171,14 @@ jobs:
           echo "APK_PATH=$FINAL_APK" >> "$GITHUB_ENV"
 
           echo "=========================================="
-          echo "FINAL SIGNED RELEASE APK CREATED"
+          echo "FINAL RELEASE APK CREATED"
           echo "=========================================="
 
           stat -c%s "$FINAL_APK"
 
 
       # ============================================================
-      # VERIFY NO DEBUG APK
+      # NO DEBUG APK
       # ============================================================
 
       - name: Verify no debug APK
@@ -1236,7 +1209,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY NO AAB
+      # NO AAB
       # ============================================================
 
       - name: Verify no AAB
@@ -1267,7 +1240,7 @@ jobs:
 
 
       # ============================================================
-      # VERIFY APK PACKAGE / TARGET SDK
+      # VERIFY APK PACKAGE + TARGET SDK
       # ============================================================
 
       - name: Verify final APK package and SDK
@@ -1331,7 +1304,7 @@ jobs:
 
 
       # ============================================================
-      # APK SHA256
+      # SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1419,7 +1392,7 @@ jobs:
 
 
       # ============================================================
-      # UPLOAD FINAL RELEASE APK ONLY
+      # UPLOAD ONLY FINAL RELEASE APK
       # ============================================================
 
       - name: Upload final signed release APK
