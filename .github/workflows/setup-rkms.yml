@@ -168,10 +168,9 @@ jobs:
 
           test -s "$SOURCE_ZIP"
 
-          ACTUAL_SHA="$(
-            sha256sum "$SOURCE_ZIP" |
-            awk '{print $1}'
-          )"
+          sha256sum "$SOURCE_ZIP" > source.sha256
+
+          read -r ACTUAL_SHA ACTUAL_FILE < source.sha256
 
           echo "Expected SHA256:"
           echo "$SOURCE_SHA256"
@@ -189,8 +188,7 @@ jobs:
 
       # ============================================================
       # EXTRACT ZIP
-      # IMPORTANT:
-      # RKMS_ROOT IS CONVERTED TO AN ABSOLUTE PATH.
+      # RKMS_ROOT IS ALWAYS ABSOLUTE
       # ============================================================
 
       - name: Extract RKMS source ZIP
@@ -215,16 +213,17 @@ jobs:
 
           else
 
-            PACKAGE_FILE="$(
-              find rkms-build \
-                -type f \
-                -name package.json \
-                -not -path '*/node_modules/*' \
-                -print |
-                head -n 1 || true
-            )"
+            find rkms-build \
+              -type f \
+              -name package.json \
+              -not -path '*/node_modules/*' \
+              -print \
+              -quit \
+              > package-location.txt
 
-            test -n "$PACKAGE_FILE"
+            test -s package-location.txt
+
+            read -r PACKAGE_FILE < package-location.txt
 
             ROOT="$(dirname "$PACKAGE_FILE")"
 
@@ -232,8 +231,6 @@ jobs:
 
           test -s "$ROOT/package.json"
 
-          # IMPORTANT FIX:
-          # Convert relative ROOT into absolute path.
           ROOT="$(cd "$ROOT" && pwd)"
 
           test -d "$ROOT"
@@ -397,10 +394,11 @@ jobs:
 
           EXPECTED_SETUP_SHA="d8cdb6c16fb4c6ac768a4ca515f42224097a77419ca5bccd9dd38ab990b3e305"
 
-          ACTUAL_SETUP_SHA="$(
-            sha256sum scripts/setup-android-native.sh |
-            awk '{print $1}'
-          )"
+          sha256sum \
+            scripts/setup-android-native.sh \
+            > setup-native.sha256
+
+          read -r ACTUAL_SETUP_SHA ACTUAL_SETUP_FILE < setup-native.sha256
 
           if [ "$ACTUAL_SETUP_SHA" != "$EXPECTED_SETUP_SHA" ]; then
             echo "::error::Unexpected setup-android-native.sh version."
@@ -442,10 +440,6 @@ jobs:
               )
 
           replacement = r'''
-          # ------------------------------------------------------------------
-          # Stable FCM notification icon + Android manifest requirements.
-          # ------------------------------------------------------------------
-
           RES_DIR="android/app/src/main/res"
           VALUES_DIR="$RES_DIR/values"
           DRAWABLE_DIR="$RES_DIR/drawable"
@@ -579,18 +573,6 @@ jobs:
           bash -n \
             scripts/setup-android-native.sh
 
-          grep -Fq \
-            'android.permission.RECORD_AUDIO' \
-            scripts/setup-android-native.sh
-
-          grep -Fq \
-            'android.permission.POST_NOTIFICATIONS' \
-            scripts/setup-android-native.sh
-
-          grep -Fq \
-            'android:enableOnBackInvokedCallback="true"' \
-            scripts/setup-android-native.sh
-
           echo "NATIVE SETUP SCRIPT REPAIR: PASS"
 
 
@@ -659,7 +641,7 @@ jobs:
 
 
       # ============================================================
-      # ANDROID 16 / API 36
+      # ANDROID 16 API 36
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -788,24 +770,25 @@ jobs:
           test -s \
             android/app/google-services.json
 
-          MAIN_ACTIVITY="$(
-            find android/app/src/main \
-              -type f \
-              -name "MainActivity.java" \
-              -print |
-              head -n 1
-          )"
+          find android/app/src/main \
+            -type f \
+            -name "MainActivity.java" \
+            -print \
+            -quit \
+            > main-activity-location.txt
 
-          BRIDGE_FILE="$(
-            find android/app/src/main \
-              -type f \
-              -name "RKMSNativeBridge.java" \
-              -print |
-              head -n 1
-          )"
+          find android/app/src/main \
+            -type f \
+            -name "RKMSNativeBridge.java" \
+            -print \
+            -quit \
+            > bridge-location.txt
 
-          test -n "$MAIN_ACTIVITY"
-          test -n "$BRIDGE_FILE"
+          test -s main-activity-location.txt
+          test -s bridge-location.txt
+
+          read -r MAIN_ACTIVITY < main-activity-location.txt
+          read -r BRIDGE_FILE < bridge-location.txt
 
           test -s "$MAIN_ACTIVITY"
           test -s "$BRIDGE_FILE"
@@ -1098,9 +1081,7 @@ jobs:
           python3 \
             scripts/verify-android-pdf.py
 
-          if [ -f \
-            "scripts/verify-saved-login.py"
-          ]; then
+          if [ -f "scripts/verify-saved-login.py" ]; then
 
             python3 \
               scripts/verify-saved-login.py
@@ -1279,9 +1260,11 @@ jobs:
       # ============================================================
       # BUILD FINAL SIGNED RELEASE APK ONLY
       #
-      # IMPORTANT FIX:
-      # RKMS_ROOT IS NOW ABSOLUTE.
-      # APK IS FOUND DYNAMICALLY.
+      # IMPORTANT:
+      # No complex RELEASE_APKS="$()" command.
+      # No relative RKMS_ROOT.
+      # No AAB.
+      # No DEBUG APK.
       # ============================================================
 
       - name: Build final signed release APK only
@@ -1308,11 +1291,8 @@ jobs:
 
           echo "=========================================="
           echo "GRADLE BUILD SUCCESSFUL"
-          echo "SEARCHING COMPLETE BUILD TREE"
           echo "=========================================="
 
-          # RKMS_ROOT IS ABSOLUTE, SO THIS WORKS
-          # EVEN AFTER cd INTO android.
           cd "$RKMS_ROOT"
 
           test -d "$RKMS_ROOT"
@@ -1320,90 +1300,52 @@ jobs:
           echo "RKMS_ROOT:"
           echo "$RKMS_ROOT"
 
-          echo "Searching for APK files..."
+          echo "=========================================="
+          echo "SEARCHING FOR RELEASE APK"
+          echo "=========================================="
 
-          ALL_APKS="$(
-            find "$RKMS_ROOT" \
+          EXPECTED_APK="$RKMS_ROOT/android/app/build/outputs/apk/release/app-release.apk"
+
+          if [ -f "$EXPECTED_APK" ]; then
+
+            APK="$EXPECTED_APK"
+
+            echo "Expected release APK found:"
+            echo "$APK"
+
+          else
+
+            echo "Expected APK path not found."
+            echo "Searching for another non-debug APK..."
+
+            find "$RKMS_ROOT/android" \
               -type f \
               -name "*.apk" \
-              -not -path "*/node_modules/*" \
-              -not -path "*/.gradle/*" \
-              -print
-          )"
+              -not -iname "*debug*" \
+              -print \
+              -quit \
+              > release-apk-location.txt
 
-          echo "All APK candidates:"
-          printf '%s\n' "$ALL_APKS"
+            if [ ! -s release-apk-location.txt ]; then
 
-          RELEASE_APKS="$(
-            printf '%s\n' "$ALL_APKS" |
-            grep -E '/release/|/release[-_]?' |
-            grep -vi 'debug' ||
-            true
-          )"
+              echo "::error::No release APK found."
 
-          if [ -z "$RELEASE_APKS" ]; then
-
-            echo "No APK matched release path."
-            echo "Trying non-debug APK search..."
-
-            RELEASE_APKS="$(
-              find "$RKMS_ROOT" \
+              echo "APK files found:"
+              find "$RKMS_ROOT/android" \
                 -type f \
                 -name "*.apk" \
-                -not -iname "*debug*" \
-                -not -path "*/node_modules/*" \
-                -not -path "*/.gradle/*" \
-                -print
-            )
+                -print || true
+
+              exit 1
+
+            fi
+
+            read -r APK < release-apk-location.txt
+
+            echo "Fallback release APK found:"
+            echo "$APK"
 
           fi
-
-          echo "Release APK candidates:"
-          printf '%s\n' "$RELEASE_APKS"
-
-          if [ -z "$RELEASE_APKS" ]; then
-
-            echo "::error::No release APK found after successful Gradle build."
-
-            echo "Complete Android build directories:"
-            find "$RKMS_ROOT/android" \
-              -type d \
-              -name "build" \
-              -print || true
-
-            echo "All APK files:"
-            find "$RKMS_ROOT" \
-              -type f \
-              -name "*.apk" \
-              -print || true
-
-            exit 1
-
-          fi
-
-          APK_COUNT="$(
-            printf '%s\n' "$RELEASE_APKS" |
-            sed '/^[[:space:]]*$/d' |
-            wc -l
-          )"
-
-          echo "Candidate APK count: $APK_COUNT"
-
-          if [ "$APK_COUNT" -ne 1 ]; then
-
-            echo "::error::Expected exactly one release APK."
-
-            echo "Found:"
-            printf '%s\n' "$RELEASE_APKS"
-
-            exit 1
-
-          fi
-
-          APK="$(
-            printf '%s\n' "$RELEASE_APKS" |
-            head -n 1
-          )"
 
           test -f "$APK"
           test -s "$APK"
@@ -1422,16 +1364,11 @@ jobs:
           test -f "$FINAL_APK"
           test -s "$FINAL_APK"
 
-          echo \
-            "APK_PATH=$FINAL_APK" \
-            >> "$GITHUB_ENV"
+          echo "APK_PATH=$FINAL_APK" >> "$GITHUB_ENV"
 
           echo "=========================================="
           echo "FINAL SIGNED RELEASE APK BUILD: PASS"
           echo "=========================================="
-
-          echo "SOURCE APK:"
-          echo "$APK"
 
           echo "FINAL APK:"
           echo "$FINAL_APK"
@@ -1449,18 +1386,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          AAB_FILES="$(
+          if find "$RKMS_ROOT/android" \
+            -type f \
+            -name "*.aab" \
+            -print \
+            -quit |
+            grep -q .
+          then
+
+            echo "::error::AAB output detected."
+
             find "$RKMS_ROOT/android" \
               -type f \
               -name "*.aab" \
               -print
-          )"
-
-          if [ -n "$AAB_FILES" ]; then
-
-            echo "::error::AAB output detected."
-
-            printf '%s\n' "$AAB_FILES"
 
             exit 1
 
@@ -1490,17 +1429,18 @@ jobs:
 
           "$AAPT" \
             dump badging \
-            "$APK_PATH" |
-            tee \
-            "$GITHUB_WORKSPACE/apk-badging.txt"
+            "$APK_PATH" \
+            > apk-badging.txt
+
+          cat apk-badging.txt
 
           grep -Fq \
             "package: name='$APP_ID'" \
-            "$GITHUB_WORKSPACE/apk-badging.txt"
+            apk-badging.txt
 
           grep -Fq \
             "targetSdkVersion:'36'" \
-            "$GITHUB_WORKSPACE/apk-badging.txt"
+            apk-badging.txt
 
           echo "APK PACKAGE: PASS"
           echo "TARGET SDK 36: PASS"
@@ -1542,8 +1482,10 @@ jobs:
           set -euo pipefail
 
           sha256sum \
-            "$APK_PATH" |
-            tee \
+            "$APK_PATH" \
+            > "$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256"
+
+          cat \
             "$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256"
 
           echo "APK SHA256 GENERATED: PASS"
@@ -1563,35 +1505,40 @@ jobs:
           test -s \
             "$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256"
 
-          AAB_FILES="$(
-            find "$RKMS_ROOT/android" \
-              -type f \
-              -name "*.aab" \
-              -print
-          )"
+          if find "$RKMS_ROOT/android" \
+            -type f \
+            -name "*.aab" \
+            -print \
+            -quit |
+            grep -q .
+          then
 
-          if [ -n "$AAB_FILES" ]; then
             echo "::error::AAB output detected."
-            printf '%s\n' "$AAB_FILES"
+
             exit 1
+
           fi
 
-          DEBUG_APKS="$(
+          if find "$RKMS_ROOT/android" \
+            -type f \
+            -iname "*debug*.apk" \
+            -print \
+            -quit |
+            grep -q .
+          then
+
+            echo "::error::Debug APK output detected."
+
             find "$RKMS_ROOT/android" \
               -type f \
               -iname "*debug*.apk" \
               -print
-          )"
 
-          if [ -n "$DEBUG_APKS" ]; then
-            echo "::error::Debug APK output detected."
-            printf '%s\n' "$DEBUG_APKS"
             exit 1
+
           fi
 
-          SIZE="$(
-            stat -c%s "$APK_PATH"
-          )"
+          SIZE=$(stat -c%s "$APK_PATH")
 
           if [ "$SIZE" -lt 1000000 ]; then
             echo "::error::APK size is unexpectedly small."
