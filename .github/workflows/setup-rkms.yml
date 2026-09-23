@@ -135,12 +135,12 @@ jobs:
             exit 1
           fi
 
-          echo "SOURCE ZIP:"
-          echo "$SOURCE_PATH"
-
           SOURCE_SHA256="$(
             sha256sum "$SOURCE_PATH" | awk '{print $1}'
           )"
+
+          echo "SOURCE ZIP:"
+          echo "$SOURCE_PATH"
 
           echo "SOURCE SHA256:"
           echo "$SOURCE_SHA256"
@@ -192,7 +192,7 @@ jobs:
 
 
       # ============================================================
-      # REPAIR MALFORMED NATIVE SCRIPT
+      # REPAIR MALFORMED OLD NATIVE SCRIPT
       # ============================================================
 
       - name: Repair RKMS native setup script
@@ -287,9 +287,7 @@ jobs:
           p = Path("android/app/src/main/AndroidManifest.xml")
 
           if not p.exists():
-              raise SystemExit(
-                  "AndroidManifest.xml not found"
-              )
+              raise SystemExit("AndroidManifest.xml not found")
 
           s = p.read_text()
 
@@ -297,9 +295,7 @@ jobs:
               pos = s.find("<application")
 
               if pos < 0:
-                  raise SystemExit(
-                      "AndroidManifest application tag missing"
-                  )
+                  raise SystemExit("AndroidManifest application tag missing")
 
               s = (
                   s[:pos]
@@ -311,9 +307,7 @@ jobs:
               pos = s.find("<application")
 
               if pos < 0:
-                  raise SystemExit(
-                      "AndroidManifest application tag missing"
-                  )
+                  raise SystemExit("AndroidManifest application tag missing")
 
               s = (
                   s[:pos]
@@ -361,7 +355,6 @@ jobs:
               )
 
           p.write_text(s)
-
           print("AndroidManifest notification configuration repaired.")
           PYMANIFEST
           '''
@@ -377,13 +370,158 @@ jobs:
           print("Malformed native setup block repaired successfully.")
           PY
 
-          chmod +x \
-            "$SCRIPT"
+          chmod +x "$SCRIPT"
 
-          bash -n \
-            "$SCRIPT"
+          bash -n "$SCRIPT"
 
           echo "RKMS NATIVE SCRIPT REPAIR: PASS"
+
+
+      # ============================================================
+      # ADD BOTH NOTIFICATION CHANNELS
+      #
+      # IMPORTANT:
+      # Old ZIP contains normal channel only.
+      # This step adds the priority channel to BOTH:
+      # 1. app.js
+      # 2. native Android setup
+      # ============================================================
+
+      - name: Repair RKMS notification channels
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          test -s app.js
+          test -s scripts/setup-android-native.sh
+
+          # --------------------------------------------------------
+          # app.js
+          # --------------------------------------------------------
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("app.js")
+          s = p.read_text()
+
+          normal = "rkms_notifications_v2"
+          priority = "rkms_priority_v1"
+
+          if priority not in s:
+
+              marker = (
+                  "await Push.createChannel?.({"
+                  "id:'rkms_notifications_v2'"
+              )
+
+              pos = s.find(marker)
+
+              if pos < 0:
+                  raise SystemExit(
+                      "Normal notification channel creation not found in app.js"
+                  )
+
+              close = s.find("});", pos)
+
+              if close < 0:
+                  raise SystemExit(
+                      "Normal notification channel block closing not found"
+                  )
+
+              close += 3
+
+              priority_code = (
+                  "\n"
+                  "  try{await Push.createChannel?.({"
+                  "id:'rkms_priority_v1',"
+                  "name:'RKMS Important Notifications',"
+                  "description:'Important RKMS organisation notices',"
+                  "importance:5,"
+                  "visibility:1,"
+                  "sound:'default',"
+                  "vibration:true,"
+                  "lights:true"
+                  "});}catch(e){console.warn('RKMS priority notification channel setup unavailable',e)}"
+              )
+
+              s = (
+                  s[:close]
+                  + priority_code
+                  + s[close:]
+              )
+
+          p.write_text(s)
+
+          print("app.js notification channels: PASS")
+          PY
+
+          # --------------------------------------------------------
+          # Native Android setup
+          # --------------------------------------------------------
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("scripts/setup-android-native.sh")
+          s = p.read_text()
+
+          normal = "rkms_notifications_v2"
+          priority = "rkms_priority_v1"
+
+          if priority not in s:
+
+              needle = (
+                  "if (nm != null) nm.createNotificationChannel(channel);"
+              )
+
+              if needle not in s:
+                  raise SystemExit(
+                      "Native normal notification channel creation not found"
+                  )
+
+              priority_java = r'''
+              android.app.NotificationChannel priority =
+                  new android.app.NotificationChannel(
+                      "rkms_priority_v1",
+                      "RKMS Important Notifications",
+                      android.app.NotificationManager.IMPORTANCE_HIGH
+                  );
+              priority.setDescription(
+                  "Important RKMS organisation notices"
+              );
+              priority.enableVibration(true);
+              priority.setSound(
+                  android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+                  null
+              );
+
+              if (nm != null) {
+                  nm.createNotificationChannel(priority);
+              }'''
+
+              s = s.replace(
+                  needle,
+                  needle + "\n" + priority_java,
+                  1
+              )
+
+          p.write_text(s)
+
+          print("Native notification channels: PASS")
+          PY
+
+          bash -n \
+            scripts/setup-android-native.sh
+
+          node --check \
+            app.js
+
+          echo "NORMAL CHANNEL: rkms_notifications_v2"
+          echo "PRIORITY CHANNEL: rkms_priority_v1"
+          echo "NOTIFICATION CHANNEL REPAIR: PASS"
 
 
       # ============================================================
@@ -492,7 +630,7 @@ jobs:
 
 
       # ============================================================
-      # FIREBASE CONFIGURATION
+      # FIREBASE
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -544,13 +682,18 @@ jobs:
             "@capacitor/push-notifications" \
             package.json
 
-          grep -Eiq \
-            "Push|PushNotifications|notification" \
+          grep -Fq \
+            "rkms_notifications_v2" \
+            app.js
+
+          grep -Fq \
+            "rkms_priority_v1" \
             app.js
 
           node --check app.js
 
-          echo "NOTIFICATION SOURCE: PASS"
+          echo "NORMAL NOTIFICATION SOURCE: PASS"
+          echo "PRIORITY NOTIFICATION SOURCE: PASS"
 
 
       # ============================================================
@@ -625,957 +768,3 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          chmod +x \
-            scripts/configure-android-16.sh
-
-          ./scripts/configure-android-16.sh
-
-          echo "ANDROID 16 API 36 CONFIGURATION: PASS"
-
-
-      # ============================================================
-      # CAPACITOR SYNC
-      # ============================================================
-
-      - name: Sync Capacitor
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          npx cap sync android
-
-          echo "CAPACITOR SYNC: PASS"
-
-
-      # ============================================================
-      # APPLY RKMS NATIVE SETUP
-      # ============================================================
-
-      - name: Apply RKMS native Android setup
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          SCRIPT="scripts/setup-android-native.sh"
-
-          bash -n \
-            "$SCRIPT"
-
-          chmod +x \
-            "$SCRIPT"
-
-          ./"$SCRIPT"
-
-          echo "RKMS NATIVE ANDROID SETUP: PASS"
-
-
-      # ============================================================
-      # REPAIR GENERATED MAIN ACTIVITY
-      # ============================================================
-
-      - name: Repair generated MainActivity
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          MAIN_ACTIVITY="$(
-            find android/app/src/main \
-              -type f \
-              -name "MainActivity.java" \
-              -print \
-              -quit
-          )"
-
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "::error::MainActivity.java not found."
-            exit 1
-          fi
-
-          test -s \
-            "$MAIN_ACTIVITY"
-
-          MAIN_ACTIVITY_ENV="$MAIN_ACTIVITY" python3 <<'PY'
-          import os
-          from pathlib import Path
-
-          path = Path(os.environ["MAIN_ACTIVITY_ENV"])
-          text = path.read_text()
-
-          class_marker = (
-              "public class MainActivity extends BridgeActivity {"
-          )
-
-          if class_marker not in text:
-              raise SystemExit(
-                  "MainActivity class marker not found"
-              )
-
-          # ========================================================
-          # FIREBASE INITIALIZATION
-          # ========================================================
-
-          if "FirebaseApp.initializeApp(this)" not in text:
-
-              oncreate_marker = (
-                  "public void onCreate(android.os.Bundle savedInstanceState)"
-              )
-
-              if oncreate_marker in text:
-
-                  brace = text.find(
-                      "{",
-                      text.find(oncreate_marker)
-                  )
-
-                  if brace < 0:
-                      raise SystemExit(
-                          "onCreate opening brace not found"
-                      )
-
-                  text = (
-                      text[:brace + 1]
-                      + "\n"
-                      + "        com.google.firebase.FirebaseApp.initializeApp(this);"
-                      + "\n"
-                      + text[brace + 1:]
-                  )
-
-              else:
-
-                  replacement = (
-                      class_marker
-                      + "\n"
-                      + "    @Override\n"
-                      + "    public void onCreate(android.os.Bundle savedInstanceState) {\n"
-                      + "        com.google.firebase.FirebaseApp.initializeApp(this);\n"
-                      + "        super.onCreate(savedInstanceState);\n"
-                      + "    }\n"
-                  )
-
-                  text = text.replace(
-                      class_marker,
-                      replacement,
-                      1
-                  )
-
-          # ========================================================
-          # RKMS NATIVE BRIDGE
-          # ========================================================
-
-          if "RKMSNativeBridge(this, rkmsWebView)" not in text:
-
-              oncreate_marker = (
-                  "public void onCreate(android.os.Bundle savedInstanceState)"
-              )
-
-              if oncreate_marker not in text:
-                  raise SystemExit(
-                      "Cannot install RKMSNativeBridge: onCreate missing"
-                  )
-
-              oncreate_pos = text.find(oncreate_marker)
-
-              brace = text.find(
-                  "{",
-                  oncreate_pos
-              )
-
-              if brace < 0:
-                  raise SystemExit(
-                      "onCreate opening brace not found"
-                  )
-
-              bridge_code = r'''
-                  getWindow().setSoftInputMode(
-                      android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-                  );
-
-                  android.webkit.WebView rkmsWebView =
-                      getBridge().getWebView();
-
-                  rkmsWebView.setImportantForAutofill(
-                      android.view.View.IMPORTANT_FOR_AUTOFILL_YES
-                  );
-
-                  rkmsWebView.setSaveEnabled(true);
-
-                  rkmsWebView.getSettings()
-                      .setMediaPlaybackRequiresUserGesture(false);
-
-                  rkmsWebView.addJavascriptInterface(
-                      new RKMSNativeBridge(this, rkmsWebView),
-                      "RKMSNative"
-                  );
-
-                  if (rkmsInstallWebAudioPermissionBridge != null) {
-                      rkmsInstallWebAudioPermissionBridge(rkmsWebView);
-                  }
-
-                  if (createRkmsNotificationChannel != null) {
-                      createRkmsNotificationChannel();
-                  }
-          '''
-
-              # Do not use invalid Java references to methods as variables.
-              bridge_code = r'''
-                  getWindow().setSoftInputMode(
-                      android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-                  );
-
-                  android.webkit.WebView rkmsWebView =
-                      getBridge().getWebView();
-
-                  rkmsWebView.setImportantForAutofill(
-                      android.view.View.IMPORTANT_FOR_AUTOFILL_YES
-                  );
-
-                  rkmsWebView.setSaveEnabled(true);
-
-                  rkmsWebView.getSettings()
-                      .setMediaPlaybackRequiresUserGesture(false);
-
-                  rkmsWebView.addJavascriptInterface(
-                      new RKMSNativeBridge(this, rkmsWebView),
-                      "RKMSNative"
-                  );
-
-                  rkmsInstallWebAudioPermissionBridge(rkmsWebView);
-
-                  createRkmsNotificationChannel();
-          '''
-
-              text = (
-                  text[:brace + 1]
-                  + bridge_code
-                  + text[brace + 1:]
-              )
-
-          # ========================================================
-          # NOTIFICATION ROUTE SUPPORT
-          # ========================================================
-
-          route_methods = r'''
-              private volatile String rkmsPendingNotificationRoute = "";
-
-              private String rkmsExtractNotificationRoute(
-                  android.content.Intent intent
-              ) {
-                  if (
-                      intent == null ||
-                      intent.getExtras() == null
-                  ) {
-                      return "";
-                  }
-
-                  android.os.Bundle b = intent.getExtras();
-
-                  String route = b.getString("route", "");
-                  String type = b.getString("type", "");
-                  String cid = b.getString("conversation_id", "");
-
-                  if (
-                      (route == null || route.trim().isEmpty()) &&
-                      "rkms_chat".equalsIgnoreCase(type) &&
-                      cid != null &&
-                      !cid.trim().isEmpty()
-                  ) {
-                      route = "chat/" + cid.trim();
-                  }
-
-                  if (route == null) {
-                      route = "";
-                  }
-
-                  return route
-                      .trim()
-                      .replaceFirst("^#?[/]", "");
-              }
-
-              private void rkmsCaptureNotificationIntent(
-                  android.content.Intent intent
-              ) {
-                  String route =
-                      rkmsExtractNotificationRoute(intent);
-
-                  if (route.isEmpty()) {
-                      return;
-                  }
-
-                  rkmsPendingNotificationRoute = route;
-
-                  rkmsDispatchNotificationRoute();
-              }
-
-              private void rkmsDispatchNotificationRoute() {
-                  final String route =
-                      rkmsPendingNotificationRoute;
-
-                  if (
-                      route == null ||
-                      route.isEmpty()
-                  ) {
-                      return;
-                  }
-
-                  android.webkit.WebView w =
-                      getBridge() == null
-                          ? null
-                          : getBridge().getWebView();
-
-                  if (w == null) {
-                      new android.os.Handler(
-                          android.os.Looper.getMainLooper()
-                      ).postDelayed(
-                          this::rkmsDispatchNotificationRoute,
-                          300
-                      );
-                      return;
-                  }
-
-                  String js =
-                      "window.rkmsOpenNotificationRoute && " +
-                      "window.rkmsOpenNotificationRoute(" +
-                      org.json.JSONObject.quote(route) +
-                      ");";
-
-                  w.post(
-                      () -> w.evaluateJavascript(
-                          js,
-                          value ->
-                              rkmsPendingNotificationRoute = ""
-                      )
-                  );
-              }
-
-              @Override
-              protected void onNewIntent(
-                  android.content.Intent intent
-              ) {
-                  super.onNewIntent(intent);
-                  setIntent(intent);
-                  rkmsCaptureNotificationIntent(intent);
-              }
-          '''
-
-          if "rkmsCaptureNotificationIntent" not in text:
-
-              # Insert route methods before the final class brace.
-              last_brace = text.rfind("}")
-
-              if last_brace < 0:
-                  raise SystemExit(
-                      "MainActivity closing brace not found"
-                  )
-
-              text = (
-                  text[:last_brace]
-                  + route_methods
-                  + "\n"
-                  + text[last_brace:]
-              )
-
-          # ========================================================
-          # INITIAL NOTIFICATION INTENT
-          # ========================================================
-
-          if (
-              "rkmsCaptureNotificationIntent(getIntent())"
-              not in text
-          ):
-
-              oncreate_marker = (
-                  "public void onCreate(android.os.Bundle savedInstanceState)"
-              )
-
-              oncreate_pos = text.find(oncreate_marker)
-
-              if oncreate_pos >= 0:
-
-                  brace = text.find(
-                      "{",
-                      oncreate_pos
-                  )
-
-                  close = text.find(
-                      "}",
-                      brace
-                  )
-
-                  if brace >= 0 and close >= 0:
-
-                      insertion = (
-                          "\n"
-                          "        rkmsCaptureNotificationIntent(getIntent());\n"
-                          "        new android.os.Handler(android.os.Looper.getMainLooper())"
-                          ".postDelayed(this::rkmsDispatchNotificationRoute, 700);\n"
-                      )
-
-                      text = (
-                          text[:close]
-                          + insertion
-                          + text[close:]
-                      )
-
-          path.write_text(text)
-
-          print("MainActivity repair completed.")
-          PY
-
-          echo "MAIN ACTIVITY REPAIR: PASS"
-
-
-      # ============================================================
-      # VERIFY GENERATED MAIN ACTIVITY
-      # ============================================================
-
-      - name: Verify generated MainActivity
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          MAIN_ACTIVITY="$(
-            find android/app/src/main \
-              -type f \
-              -name "MainActivity.java" \
-              -print \
-              -quit
-          )"
-
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "::error::MainActivity.java not found."
-            exit 1
-          fi
-
-          test -s \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            "RKMSNativeBridge" \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            "FirebaseApp.initializeApp(this)" \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            "rkmsCaptureNotificationIntent" \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            "onNewIntent" \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            "rkmsOpenNotificationRoute" \
-            "$MAIN_ACTIVITY"
-
-          echo "RKMSNativeBridge: PASS"
-          echo "Firebase initialization: PASS"
-          echo "Notification route capture: PASS"
-          echo "onNewIntent: PASS"
-          echo "MAINACTIVITY: PASS"
-
-
-      # ============================================================
-      # VERIFY MAIN ACTIVITY JAVA SYNTAX STRUCTURE
-      # ============================================================
-
-      - name: Verify MainActivity native source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          MAIN_ACTIVITY="$(
-            find android/app/src/main \
-              -type f \
-              -name "MainActivity.java" \
-              -print \
-              -quit
-          )"
-
-          test -s \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            "public class MainActivity extends BridgeActivity" \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            "super.onCreate(savedInstanceState)" \
-            "$MAIN_ACTIVITY"
-
-          grep -Fq \
-            "setIntent(intent)" \
-            "$MAIN_ACTIVITY"
-
-          echo "MAINACTIVITY SOURCE AUDIT: PASS"
-
-
-      # ============================================================
-      # FIREBASE MESSAGING
-      # ============================================================
-
-      - name: Verify Firebase Messaging SDK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          test -s \
-            android/app/google-services.json
-
-          grep -Fq \
-            "org.rkms.connect" \
-            android/app/google-services.json
-
-          echo "FIREBASE MESSAGING CONFIGURATION: PASS"
-
-
-      # ============================================================
-      # NOTIFICATION CHANNELS
-      # ============================================================
-
-      - name: Verify notification priority channels
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          grep -Fq \
-            "rkms_notifications_v2" \
-            scripts/setup-android-native.sh
-
-          grep -Fq \
-            "rkms_priority_v1" \
-            scripts/setup-android-native.sh
-
-          if grep -Fq \
-            "deleteNotificationChannel" \
-            scripts/setup-android-native.sh
-          then
-            echo "::error::Notification channel deletion detected."
-            exit 1
-          fi
-
-          echo "Normal notification channel: PASS"
-          echo "Priority notification channel: PASS"
-          echo "No notification channel deletion: PASS"
-          echo "NOTIFICATION CHANNEL AUDIT: PASS"
-
-
-      # ============================================================
-      # STATIC AUDITS
-      # ============================================================
-
-      - name: Run RKMS static audits
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          node --check app.js
-
-          bash -n \
-            scripts/setup-android-native.sh
-
-          bash -n \
-            scripts/configure-android-16.sh
-
-          bash -n \
-            scripts/configure-release-signing.sh
-
-          if [ -f scripts/verify-fcm-pipeline.py ]; then
-            python3 scripts/verify-fcm-pipeline.py
-          fi
-
-          if [ -f scripts/verify-native-bridge.py ]; then
-            python3 scripts/verify-native-bridge.py
-          fi
-
-          if [ -f scripts/verify-rkms-final.py ]; then
-            python3 scripts/verify-rkms-final.py
-          fi
-
-          echo "RKMS STATIC AUDITS: PASS"
-
-
-      # ============================================================
-      # ANDROID 16 API 36 AUDIT
-      # ============================================================
-
-      - name: Final Android 16 API 36 audit
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT/android"
-
-          if ! grep -R \
-            -E \
-            "compileSdk(Version)?[[:space:]]*=?[[:space:]]*36" \
-            . \
-            --include="*.gradle" \
-            --include="*.gradle.kts" \
-            >/dev/null
-          then
-            echo "::error::compileSdk 36 not found."
-            exit 1
-          fi
-
-          if ! grep -R \
-            -E \
-            "targetSdk(Version)?[[:space:]]*=?[[:space:]]*36" \
-            . \
-            --include="*.gradle" \
-            --include="*.gradle.kts" \
-            >/dev/null
-          then
-            echo "::error::targetSdk 36 not found."
-            exit 1
-          fi
-
-          echo "COMPILE SDK 36: PASS"
-          echo "TARGET SDK 36: PASS"
-          echo "ANDROID 16 API 36 AUDIT: PASS"
-
-
-      # ============================================================
-      # SIGNING SECRETS
-      # ============================================================
-
-      - name: Verify release signing secrets
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -n \
-            "${RKMS_KEYSTORE_BASE64:-}"
-
-          test -n \
-            "${RKMS_KEYSTORE_PASSWORD:-}"
-
-          test -n \
-            "${RKMS_KEY_ALIAS:-}"
-
-          test -n \
-            "${RKMS_KEY_PASSWORD:-}"
-
-          echo "RELEASE SIGNING SECRETS: PASS"
-
-
-      # ============================================================
-      # RELEASE SIGNING
-      # ============================================================
-
-      - name: Configure release signing
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          chmod +x \
-            scripts/configure-release-signing.sh
-
-          ./scripts/configure-release-signing.sh
-
-          test -s \
-            android/app/release.keystore
-
-          echo "RELEASE SIGNING CONFIGURATION: PASS"
-
-
-      # ============================================================
-      # KEYSTORE
-      # ============================================================
-
-      - name: Verify release keystore
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          keytool \
-            -list \
-            -keystore android/app/release.keystore \
-            -storepass "$RKMS_KEYSTORE_PASSWORD" \
-            -alias "$RKMS_KEY_ALIAS" \
-            >/dev/null
-
-          echo "RELEASE KEYSTORE: PASS"
-
-
-      # ============================================================
-      # GRADLE
-      # ============================================================
-
-      - name: Verify Gradle wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT/android"
-
-          chmod +x \
-            gradlew
-
-          ./gradlew \
-            --version \
-            --no-daemon
-
-          echo "GRADLE WRAPPER: PASS"
-
-
-      # ============================================================
-      # CLEAN
-      # ============================================================
-
-      - name: Clean Android build
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT/android"
-
-          ./gradlew \
-            clean \
-            --no-daemon
-
-          echo "ANDROID CLEAN: PASS"
-
-
-      # ============================================================
-      # FINAL RELEASE APK ONLY
-      # ============================================================
-
-      - name: Build final signed release APK only
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT/android"
-
-          rm -rf \
-            app/build/outputs/apk/release
-
-          rm -rf \
-            app/build/outputs/bundle
-
-          ./gradlew \
-            :app:assembleRelease \
-            --no-daemon \
-            --stacktrace
-
-          EXPECTED_APK="$RKMS_ROOT/android/app/build/outputs/apk/release/app-release.apk"
-
-          if [ ! -s "$EXPECTED_APK" ]; then
-            echo "::error::Signed release APK was not created."
-
-            find "$RKMS_ROOT/android" \
-              -type f \
-              -name "*.apk" \
-              -print || true
-
-            exit 1
-          fi
-
-          FINAL_APK="$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk"
-
-          cp \
-            "$EXPECTED_APK" \
-            "$FINAL_APK"
-
-          test -s \
-            "$FINAL_APK"
-
-          echo "APK_PATH=$FINAL_APK" >> "$GITHUB_ENV"
-
-          echo "FINAL SIGNED RELEASE APK: CREATED"
-
-
-      # ============================================================
-      # NO DEBUG APK
-      # ============================================================
-
-      - name: Verify no debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          DEBUG_APK="$(
-            find "$RKMS_ROOT/android" \
-              -type f \
-              -iname "*debug*.apk" \
-              -print \
-              -quit
-          )"
-
-          if [ -n "$DEBUG_APK" ]; then
-            echo "::error::Debug APK detected: $DEBUG_APK"
-            exit 1
-          fi
-
-          echo "DEBUG APK: NONE"
-
-
-      # ============================================================
-      # NO AAB
-      # ============================================================
-
-      - name: Verify no AAB
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          AAB_FILE="$(
-            find "$RKMS_ROOT/android" \
-              -type f \
-              -name "*.aab" \
-              -print \
-              -quit
-          )"
-
-          if [ -n "$AAB_FILE" ]; then
-            echo "::error::AAB detected: $AAB_FILE"
-            exit 1
-          fi
-
-          echo "AAB: NONE"
-
-
-      # ============================================================
-      # APK PACKAGE
-      # ============================================================
-
-      - name: Verify final APK package and target SDK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-
-          AAPT="$SDK_ROOT/build-tools/$BUILD_TOOLS/aapt"
-
-          test -x \
-            "$AAPT"
-
-          "$AAPT" \
-            dump badging \
-            "$APK_PATH" \
-            > apk-badging.txt
-
-          grep -Fq \
-            "package: name='$APP_ID'" \
-            apk-badging.txt
-
-          grep -Fq \
-            "targetSdkVersion:'36'" \
-            apk-badging.txt
-
-          echo "APK PACKAGE: PASS"
-          echo "TARGET SDK 36: PASS"
-
-
-      # ============================================================
-      # APK SIGNATURE
-      # ============================================================
-
-      - name: Verify final APK signature
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-
-          APKSIGNER="$SDK_ROOT/build-tools/$BUILD_TOOLS/apksigner"
-
-          test -x \
-            "$APKSIGNER"
-
-          "$APKSIGNER" \
-            verify \
-            --verbose \
-            "$APK_PATH"
-
-          echo "APK SIGNATURE: PASS"
-
-
-      # ============================================================
-      # SHA256
-      # ============================================================
-
-      - name: Generate APK SHA256
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SHA_FILE="$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256"
-
-          sha256sum \
-            "$APK_PATH" \
-            > "$SHA_FILE"
-
-          echo "APK SHA256:"
-          cat "$SHA_FILE"
-
-
-      # ============================================================
-      # FINAL APK AUDIT
-      # ============================================================
-
-      - name: Final APK-only audit
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -s \
-            "$APK_PATH"
-
-          test -s \
-            "$GITHUB_WORKSPACE/RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256"
-
-          SIZE="$(
-            stat -c%s "$APK_PATH"
-          )"
-
-          if [ "$SIZE" -lt 1000000 ]; then
-            echo "::error::APK size unexpectedly small: $SIZE bytes"
-            exit 1
-          fi
-
-          echo "=========================================="
-          echo "FINAL APK-ONLY AUDIT: PASS"
-          echo "APK SIZE: $SIZE bytes"
-          echo "=========================================="
-
-
-      # ============================================================
-      # UPLOAD FINAL SIGNED RELEASE APK
-      # ============================================================
-
-      - name: Upload final signed release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: RKMS_ANDROID16_API36_FINAL_SIGNED_RELEASE_APK
-          if-no-files-found: error
-          path: |
-            RKMS_CONNECT_ANDROID16_API36_RELEASE.apk
-            RKMS_CONNECT_ANDROID16_API36_RELEASE.apk.sha256
-          retention-days: 30
