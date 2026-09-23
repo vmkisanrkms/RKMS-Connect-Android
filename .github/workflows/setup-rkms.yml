@@ -14,7 +14,10 @@ env:
   AGP_VERSION: "8.9.1"
   GRADLE_VERSION: "8.11.1"
   APP_ID: "org.rkms.connect"
-  SOURCE_ZIP: "SOURCE_ZIP: "RKMS_CONNECT_WEBVIEW_NOTIFICATION_APPWIDE_FINAL_20260923.zip""
+
+  # IMPORTANT:
+  # This is the actual ZIP present in the GitHub repository.
+  SOURCE_ZIP: "RKMS_CONNECT_WEBVIEW_NOTIFICATION_APPWIDE_FINAL_20260923.zip"
 
 jobs:
   build-release-apk:
@@ -23,9 +26,15 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ============================================================
+      # 2. JAVA 17
+      # ============================================================
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
@@ -36,9 +45,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           java -version
           javac -version
 
+      # ============================================================
+      # 3. NODE 22
+      # ============================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -48,9 +61,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           node --version
           npm --version
 
+      # ============================================================
+      # 4. ANDROID SDK
+      # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
@@ -87,20 +104,39 @@ jobs:
 
           "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt" version
           "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" version
+
           adb version
           sdkmanager --version
 
+      # ============================================================
+      # 5. LOCATE CORRECT RKMS ZIP
+      # ============================================================
       - name: Locate RKMS source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "Looking for:"
+          echo "$SOURCE_ZIP"
+
           if [ ! -f "$SOURCE_ZIP" ]; then
-            FOUND_ZIP="$(find . -type f -name "$SOURCE_ZIP" -print -quit || true)"
+            FOUND_ZIP="$(
+              find . \
+                -type f \
+                -name "$SOURCE_ZIP" \
+                -print -quit || true
+            )"
 
             if [ -z "$FOUND_ZIP" ]; then
               echo "ERROR: Source ZIP not found."
-              find . -type f -iname "*.zip" -print || true
+
+              echo
+              echo "ZIP files available in repository:"
+              find . \
+                -type f \
+                -iname "*.zip" \
+                -print || true
+
               exit 1
             fi
 
@@ -108,19 +144,31 @@ jobs:
           fi
 
           test -f "$SOURCE_ZIP"
+
+          echo "Source ZIP found:"
           ls -lh "$SOURCE_ZIP"
 
+      # ============================================================
+      # 6. EXTRACT SOURCE
+      # ============================================================
       - name: Extract RKMS source
         shell: bash
         run: |
           set -euo pipefail
 
           rm -rf source extracted
-          mkdir -p source extracted
+
+          mkdir -p source
+          mkdir -p extracted
 
           unzip -q "$SOURCE_ZIP" -d extracted
 
-          PACKAGE_JSON="$(find extracted -type f -name package.json -print -quit || true)"
+          PACKAGE_JSON="$(
+            find extracted \
+              -type f \
+              -name package.json \
+              -print -quit || true
+          )"
 
           if [ -z "$PACKAGE_JSON" ]; then
             echo "ERROR: package.json not found inside ZIP."
@@ -133,6 +181,11 @@ jobs:
 
           echo "SOURCE_ROOT=$SOURCE_ROOT"
 
+          test -f source/package.json
+
+      # ============================================================
+      # 7. REQUIRED SOURCE FILES
+      # ============================================================
       - name: Verify required source files
         shell: bash
         run: |
@@ -158,11 +211,15 @@ jobs:
               echo "ERROR: Missing required file: $file"
               exit 1
             }
+
             echo "FOUND: $file"
           done
 
           echo "Required source files: PASS"
 
+      # ============================================================
+      # 8. CAPACITOR VERSIONS
+      # ============================================================
       - name: Verify Capacitor versions
         shell: bash
         run: |
@@ -202,6 +259,9 @@ jobs:
           }
           NODE
 
+      # ============================================================
+      # 9. CAPACITOR CONFIG
+      # ============================================================
       - name: Verify Capacitor configuration
         shell: bash
         run: |
@@ -213,6 +273,9 @@ jobs:
 
           echo "Capacitor APP ID: PASS"
 
+      # ============================================================
+      # 10. FIREBASE CONFIG
+      # ============================================================
       - name: Verify Firebase configuration
         shell: bash
         run: |
@@ -228,6 +291,9 @@ jobs:
 
           echo "Firebase package: PASS"
 
+      # ============================================================
+      # 11. VERIFICATION SCRIPTS
+      # ============================================================
       - name: Verify FCM pipeline
         shell: bash
         run: |
@@ -305,6 +371,9 @@ jobs:
             python3 scripts/verify-android-16.py
           fi
 
+      # ============================================================
+      # 12. NPM
+      # ============================================================
       - name: Install npm dependencies
         shell: bash
         run: |
@@ -323,13 +392,18 @@ jobs:
 
           node -e "
             const p=require('./node_modules/@capacitor/push-notifications/package.json');
+
             if(p.version!=='6.0.3'){
               console.error('Wrong push-notifications version:',p.version);
               process.exit(1);
             }
+
             console.log('push-notifications:',p.version);
           "
 
+      # ============================================================
+      # 13. WEB BUILD
+      # ============================================================
       - name: Build web application
         shell: bash
         run: |
@@ -344,6 +418,9 @@ jobs:
 
           echo "Web build: PASS"
 
+      # ============================================================
+      # 14. FRESH ANDROID PROJECT
+      # ============================================================
       - name: Create fresh Android project
         shell: bash
         run: |
@@ -355,6 +432,9 @@ jobs:
 
           npx cap add android
 
+      # ============================================================
+      # 15. ANDROID 16
+      # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
         run: |
@@ -363,6 +443,7 @@ jobs:
           cd source
 
           chmod +x scripts/configure-android-16.sh
+
           ./scripts/configure-android-16.sh
 
       - name: Enforce Android SDK 36
@@ -388,6 +469,9 @@ jobs:
 
           fi
 
+      # ============================================================
+      # 16. CAP SYNC
+      # ============================================================
       - name: Sync Capacitor
         shell: bash
         run: |
@@ -397,6 +481,9 @@ jobs:
 
           npx cap sync android
 
+      # ============================================================
+      # 17. RKMS NATIVE SETUP
+      # ============================================================
       - name: Setup RKMS Android native integration
         shell: bash
         run: |
@@ -408,6 +495,9 @@ jobs:
 
           ./scripts/setup-android-native.sh
 
+      # ============================================================
+      # 18. GOOGLE SERVICES 4.4.3
+      # ============================================================
       - name: Fix Google Services plugin version
         shell: bash
         run: |
@@ -447,6 +537,9 @@ jobs:
 
           echo "Google Services: PASS"
 
+      # ============================================================
+      # 19. FIREBASE NATIVE
+      # ============================================================
       - name: Verify Firebase native configuration
         shell: bash
         run: |
@@ -462,6 +555,9 @@ jobs:
 
           echo "Firebase native configuration: PASS"
 
+      # ============================================================
+      # 20. MAIN ACTIVITY
+      # ============================================================
       - name: Verify MainActivity
         shell: bash
         run: |
@@ -484,6 +580,9 @@ jobs:
 
           echo "MainActivity: PASS"
 
+      # ============================================================
+      # 21. FIREBASE MESSAGING
+      # ============================================================
       - name: Ensure Firebase Messaging dependency
         shell: bash
         run: |
@@ -521,6 +620,9 @@ jobs:
 
           grep -q "firebase-messaging" "$APP_GRADLE"
 
+      # ============================================================
+      # 22. FINAL ANDROID CONFIG
+      # ============================================================
       - name: Verify final Android configuration
         shell: bash
         run: |
@@ -537,6 +639,9 @@ jobs:
 
           echo "Android configuration: PASS"
 
+      # ============================================================
+      # 23. GRADLE DEPENDENCIES
+      # ============================================================
       - name: Resolve Gradle dependencies
         shell: bash
         run: |
@@ -549,6 +654,9 @@ jobs:
             --stacktrace \
             dependencies
 
+      # ============================================================
+      # 24. STATIC ANDROID AUDIT
+      # ============================================================
       - name: Static Android audit
         shell: bash
         run: |
@@ -577,6 +685,9 @@ jobs:
 
           echo "Static Android audit: PASS"
 
+      # ============================================================
+      # 25. SIGNING SECRETS
+      # ============================================================
       - name: Verify release signing secrets
         shell: bash
         env:
@@ -594,6 +705,9 @@ jobs:
 
           echo "Release signing secrets: PASS"
 
+      # ============================================================
+      # 26. ORIGINAL SIGNING SCRIPT
+      # ============================================================
       - name: Configure release signing
         shell: bash
         env:
@@ -611,9 +725,10 @@ jobs:
           ./scripts/configure-release-signing.sh
 
       # ============================================================
-      # FINAL SIGNING FIX
-      # Remove EVERY old null-producing storeFile reference.
-      # Then write ONE absolute keystore path.
+      # 27. FINAL SIGNING FIX
+      #
+      # Removes every old null-producing storeFile reference.
+      # Writes one absolute keystore path.
       # ============================================================
       - name: Fix release signing configuration
         shell: bash
@@ -639,13 +754,19 @@ jobs:
 
           if [ -z "$KEYSTORE" ]; then
             echo "ERROR: Release keystore not found."
-            find android -type f \
+
+            find android \
+              -type f \
               \( -name "*.jks" -o -name "*.keystore" \) \
               -print || true
+
             exit 1
           fi
 
-          KEYSTORE_ABS="$(cd "$(dirname "$KEYSTORE")" && pwd)/$(basename "$KEYSTORE")"
+          KEYSTORE_ABS="$(
+            cd "$(dirname "$KEYSTORE")" &&
+            pwd
+          )/$(basename "$KEYSTORE")"
 
           echo "Release keystore found:"
           echo "$KEYSTORE_ABS"
@@ -671,9 +792,7 @@ jobs:
           )
 
           # --------------------------------------------------------
-          # 1. Replace EVERY old environment-based storeFile.
-          # This is the actual cause of:
-          # path may not be null or empty string. path='null'
+          # Replace every old environment-based storeFile.
           # --------------------------------------------------------
 
           patterns = [
@@ -690,32 +809,32 @@ jobs:
               )
 
           # --------------------------------------------------------
-          # 2. Remove our previous FORCE block if present.
+          # Remove previous RKMS force/final signing blocks.
           # --------------------------------------------------------
 
-          marker = "// RKMS FORCE RELEASE SIGNING CONFIGURATION"
-
-          if marker in text:
-              text = text.split(marker, 1)[0].rstrip() + "\n"
-
-          # --------------------------------------------------------
-          # 3. Remove any remaining exact null-producing expression.
-          # --------------------------------------------------------
-
-          if "System.getenv('RKMS_KEYSTORE_ABS')" in text:
-              text = text.replace(
-                  "System.getenv('RKMS_KEYSTORE_ABS')",
-                  f"'{keystore_escaped}'"
-              )
-
-          if 'System.getenv("RKMS_KEYSTORE_ABS")' in text:
-              text = text.replace(
-                  'System.getenv("RKMS_KEYSTORE_ABS")',
-                  f"'{keystore_escaped}'"
-              )
+          for marker in [
+              "// RKMS FORCE RELEASE SIGNING CONFIGURATION",
+              "// RKMS FINAL RELEASE SIGNING CONFIGURATION"
+          ]:
+              if marker in text:
+                  text = text.split(marker, 1)[0].rstrip() + "\n"
 
           # --------------------------------------------------------
-          # 4. Add one final deterministic release signing block.
+          # Remove remaining exact environment references.
+          # --------------------------------------------------------
+
+          text = text.replace(
+              "System.getenv('RKMS_KEYSTORE_ABS')",
+              f"'{keystore_escaped}'"
+          )
+
+          text = text.replace(
+              'System.getenv("RKMS_KEYSTORE_ABS")',
+              f"'{keystore_escaped}'"
+          )
+
+          # --------------------------------------------------------
+          # Add one deterministic release signing configuration.
           # --------------------------------------------------------
 
           block = f"""
@@ -743,7 +862,7 @@ jobs:
           p.write_text(text)
 
           # --------------------------------------------------------
-          # 5. Hard verification.
+          # Hard verification.
           # --------------------------------------------------------
 
           final_text = p.read_text()
@@ -778,6 +897,7 @@ jobs:
           if grep -q \
             'System.getenv.*RKMS_KEYSTORE_ABS' \
             "$APP_GRADLE"; then
+
             echo "ERROR: RKMS_KEYSTORE_ABS still present."
             exit 1
           fi
@@ -790,6 +910,9 @@ jobs:
           echo
           echo "Release signing configuration: PASS"
 
+      # ============================================================
+      # 28. KEYSTORE VALIDATION
+      # ============================================================
       - name: Validate release keystore
         shell: bash
         env:
@@ -816,6 +939,9 @@ jobs:
 
           echo "Keystore validation: PASS"
 
+      # ============================================================
+      # 29. GRADLE VERSION
+      # ============================================================
       - name: Verify Gradle version
         shell: bash
         run: |
@@ -825,6 +951,9 @@ jobs:
 
           ./gradlew --version
 
+      # ============================================================
+      # 30. FIX MAINACTIVITY JAVA
+      # ============================================================
       - name: Fix MainActivity Java syntax
         shell: bash
         run: |
@@ -852,6 +981,7 @@ jobs:
           if grep -q \
             '""NOT_READY""\|""ERROR""' \
             "$MAIN_ACTIVITY"; then
+
             echo "ERROR: Malformed Java quotes still present."
             exit 1
           fi
@@ -859,9 +989,7 @@ jobs:
           echo "MainActivity Java syntax fix: PASS"
 
       # ============================================================
-      # IMPORTANT:
-      # Compile + manifest validation only.
-      # Signing path is already hard-coded above.
+      # 31. VALIDATE RELEASE CONFIGURATION
       # ============================================================
       - name: Validate release configuration
         shell: bash
@@ -880,6 +1008,9 @@ jobs:
             :app:compileReleaseJavaWithJavac \
             :app:processReleaseMainManifest
 
+      # ============================================================
+      # 32. CLEAN
+      # ============================================================
       - name: Clean release build
         shell: bash
         run: |
@@ -892,7 +1023,8 @@ jobs:
             clean
 
       # ============================================================
-      # ONLY SIGNED RELEASE APK
+      # 33. ONLY SIGNED RELEASE APK
+      #
       # NO DEBUG APK
       # NO AAB
       # ============================================================
@@ -912,6 +1044,9 @@ jobs:
             --stacktrace \
             :app:assembleRelease
 
+      # ============================================================
+      # 34. VERIFY APK
+      # ============================================================
       - name: Verify release APK output
         shell: bash
         run: |
@@ -942,6 +1077,9 @@ jobs:
 
           echo "Release APK output: PASS"
 
+      # ============================================================
+      # 35. NO AAB
+      # ============================================================
       - name: Verify no AAB is required
         shell: bash
         run: |
@@ -960,6 +1098,9 @@ jobs:
 
           echo "APK-only output: PASS"
 
+      # ============================================================
+      # 36. VERIFY PACKAGE
+      # ============================================================
       - name: Verify APK package name
         shell: bash
         run: |
@@ -988,6 +1129,9 @@ jobs:
 
           echo "Package name: PASS"
 
+      # ============================================================
+      # 37. VERIFY SIGNATURE
+      # ============================================================
       - name: Verify APK signature
         shell: bash
         run: |
@@ -1010,6 +1154,9 @@ jobs:
 
           echo "APK signature: PASS"
 
+      # ============================================================
+      # 38. SHA256
+      # ============================================================
       - name: Generate APK SHA256
         shell: bash
         run: |
@@ -1026,6 +1173,9 @@ jobs:
 
           sha256sum "$APK"
 
+      # ============================================================
+      # 39. PREPARE FINAL APK
+      # ============================================================
       - name: Prepare final APK
         shell: bash
         run: |
@@ -1051,6 +1201,9 @@ jobs:
             ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk \
             ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
 
+      # ============================================================
+      # 40. UPLOAD ONLY FINAL SIGNED APK
+      # ============================================================
       - name: Upload final signed release APK
         uses: actions/upload-artifact@v4
         with:
