@@ -47,7 +47,6 @@ jobs:
 
       # ============================================================
       # 3. NODE 22
-      # package-lock is inside source ZIP, therefore NO npm cache
       # ============================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -421,7 +420,7 @@ jobs:
           fi
 
       # ============================================================
-      # 18. INSTALL NPM
+      # 18. INSTALL NPM DEPENDENCIES
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -433,7 +432,7 @@ jobs:
           npm ci --no-audit --no-fund
 
       # ============================================================
-      # 19. VERIFY PUSH NOTIFICATIONS
+      # 19. VERIFY INSTALLED PUSH NOTIFICATIONS
       # ============================================================
       - name: Verify installed push notifications
         shell: bash
@@ -479,7 +478,7 @@ jobs:
           echo "Web build: PASS"
 
       # ============================================================
-      # 21. CREATE FRESH ANDROID
+      # 21. CREATE FRESH ANDROID PROJECT
       # ============================================================
       - name: Create fresh Android project
         shell: bash
@@ -507,7 +506,7 @@ jobs:
           ./scripts/configure-android-16.sh
 
       # ============================================================
-      # 23. FORCE SDK 36
+      # 23. ENFORCE ANDROID SDK 36
       # ============================================================
       - name: Enforce Android SDK 36
         shell: bash
@@ -533,6 +532,7 @@ jobs:
           fi
 
           echo "Android SDK configuration:"
+
           grep -RniE \
             "compileSdk|targetSdk|minSdk" \
             android \
@@ -567,9 +567,10 @@ jobs:
           ./scripts/setup-android-native.sh
 
       # ============================================================
-      # 26. FORCE GOOGLE SERVICES 4.4.3
+      # 26. FIX FROM THE PREVIOUS FAILURE
       #
-      # THIS IS THE IMPORTANT FIX
+      # Google Services plugin is explicitly normalized here.
+      # This is the step added immediately after the failed point.
       # ============================================================
       - name: Force Google Services plugin 4.4.3
         shell: bash
@@ -592,11 +593,8 @@ jobs:
           app_text = app.read_text()
 
           # --------------------------------------------------------
-          # Root Gradle:
-          # Remove any existing google-services classpath and add
-          # exactly version 4.4.3.
+          # Remove every old Google Services classpath entry.
           # --------------------------------------------------------
-
           root_text = re.sub(
               r'^[ \t]*classpath[ \t]+["\']com\.google\.gms:google-services:[^"\']+["\'][ \t]*\n?',
               '',
@@ -604,29 +602,33 @@ jobs:
               flags=re.MULTILINE
           )
 
-          if 'com.google.gms:google-services:4.4.3' not in root_text:
+          # --------------------------------------------------------
+          # Ensure dependencies block exists.
+          # --------------------------------------------------------
+          if "dependencies {" not in root_text:
+              raise SystemExit(
+                  "ERROR: android/build.gradle dependencies block not found."
+              )
 
-              marker = 'dependencies {'
-
-              if marker not in root_text:
-                  raise SystemExit(
-                      'ERROR: android/build.gradle dependencies block missing'
-                  )
+          # --------------------------------------------------------
+          # Add exactly Google Services 4.4.3.
+          # --------------------------------------------------------
+          if "com.google.gms:google-services:4.4.3" not in root_text:
 
               root_text = root_text.replace(
-                  marker,
-                  marker +
-                  '\n        classpath "com.google.gms:google-services:4.4.3"',
+                  "dependencies {",
+                  (
+                      "dependencies {\n"
+                      '        classpath "com.google.gms:google-services:4.4.3"'
+                  ),
                   1
               )
 
           root.write_text(root_text)
 
           # --------------------------------------------------------
-          # App Gradle:
-          # Remove old apply-plugin lines and add exact plugin.
+          # Remove existing app plugin application.
           # --------------------------------------------------------
-
           app_text = re.sub(
               r'^[ \t]*apply[ \t]+plugin:[ \t]*["\']com\.google\.gms\.google-services["\'][ \t]*\n?',
               '',
@@ -634,26 +636,39 @@ jobs:
               flags=re.MULTILINE
           )
 
-          app_text = app_text.rstrip() + (
-              '\n\n'
-              '// RKMS FCM: Google Services plugin\n'
-              'apply plugin: "com.google.gms.google-services"\n'
+          # --------------------------------------------------------
+          # Remove accidental duplicate plugin comments from previous
+          # workflow runs.
+          # --------------------------------------------------------
+          app_text = re.sub(
+              r'\n?[ \t]*// RKMS FCM: Google Services plugin[ \t]*\n?',
+              '\n',
+              app_text
           )
+
+          # --------------------------------------------------------
+          # Apply plugin once at the end.
+          # --------------------------------------------------------
+          app_text = app_text.rstrip() + """
+
+// RKMS FCM: Google Services plugin
+apply plugin: "com.google.gms.google-services"
+"""
 
           app.write_text(app_text)
 
-          print("Google Services root plugin forced to 4.4.3")
-          print("Google Services app plugin forced ON")
+          print("Google Services plugin normalized to 4.4.3.")
+          print("Google Services app plugin applied.")
           PY
 
           echo
-          echo "Root Google Services configuration:"
+          echo "===== android/build.gradle ====="
           grep -nE \
             "google-services|google\.gms" \
             android/build.gradle || true
 
           echo
-          echo "App Google Services configuration:"
+          echo "===== android/app/build.gradle ====="
           grep -nE \
             "google-services|google\.gms" \
             android/app/build.gradle || true
@@ -668,24 +683,24 @@ jobs:
 
           cd source
 
-          echo "Verifying Google Services plugin..."
-
           test -f android/build.gradle
           test -f android/app/build.gradle
 
+          # Exact root dependency
           grep -q \
             'com.google.gms:google-services:4.4.3' \
             android/build.gradle
 
+          # Exact app plugin
           grep -q \
             'com.google.gms.google-services' \
             android/app/build.gradle
 
-          echo "Google Services root plugin 4.4.3: PASS"
+          echo "Google Services plugin 4.4.3: PASS"
           echo "Google Services app plugin: PASS"
 
       # ============================================================
-      # 28. VERIFY FIREBASE NATIVE CONFIG
+      # 28. VERIFY FIREBASE NATIVE CONFIGURATION
       # ============================================================
       - name: Verify Firebase native configuration
         shell: bash
@@ -726,9 +741,17 @@ jobs:
 
           echo "MainActivity: $MAIN_ACTIVITY"
 
-          grep -q "RKMSNativeBridge" "$MAIN_ACTIVITY"
-          grep -q "FirebaseApp.initializeApp" "$MAIN_ACTIVITY"
-          grep -q "onNewIntent" "$MAIN_ACTIVITY"
+          grep -q \
+            "RKMSNativeBridge" \
+            "$MAIN_ACTIVITY"
+
+          grep -q \
+            "FirebaseApp.initializeApp" \
+            "$MAIN_ACTIVITY"
+
+          grep -q \
+            "onNewIntent" \
+            "$MAIN_ACTIVITY"
 
           echo "MainActivity native bridge: PASS"
 
@@ -766,7 +789,7 @@ jobs:
 
           if "dependencies {" not in text:
               raise SystemExit(
-                  "dependencies block not found"
+                  "ERROR: dependencies block not found."
               )
 
           text = text.replace(
@@ -788,6 +811,8 @@ jobs:
             "firebase-messaging" \
             "$APP_GRADLE"
 
+          echo "Firebase Messaging: PASS"
+
       # ============================================================
       # 31. VERIFY FINAL ANDROID CONFIGURATION
       # ============================================================
@@ -802,19 +827,29 @@ jobs:
 
           chmod +x android/gradlew
 
-          echo "Gradle wrapper:"
+          echo "===== Gradle Wrapper ====="
+
           grep -n \
             "distributionUrl" \
             android/gradle/wrapper/gradle-wrapper.properties
 
           echo
-          echo "Android SDK configuration:"
+          echo "===== Android SDK ====="
+
           grep -RniE \
             "compileSdk|targetSdk|minSdk" \
             android \
             --include="*.gradle" \
             --include="*.gradle.kts" \
             | head -40
+
+          echo
+          echo "===== Google Services ====="
+
+          grep -nE \
+            "google-services|google\.gms" \
+            android/build.gradle \
+            android/app/build.gradle || true
 
           echo
           echo "Android configuration: PASS"
@@ -851,6 +886,8 @@ jobs:
               -print -quit
           )"
 
+          test -n "$MAIN_ACTIVITY"
+
           grep -q \
             "FirebaseApp.initializeApp" \
             "$MAIN_ACTIVITY"
@@ -874,7 +911,7 @@ jobs:
           echo "Static Android audit: PASS"
 
       # ============================================================
-      # 34. CHECK RELEASE SIGNING SECRETS
+      # 34. VERIFY RELEASE SIGNING SECRETS
       # ============================================================
       - name: Verify release signing secrets
         shell: bash
@@ -929,7 +966,7 @@ jobs:
           ./scripts/configure-release-signing.sh
 
       # ============================================================
-      # 36. VALIDATE KEYSTORE
+      # 36. VALIDATE RELEASE KEYSTORE
       # ============================================================
       - name: Validate release keystore
         shell: bash
@@ -956,7 +993,8 @@ jobs:
             exit 1
           fi
 
-          echo "Keystore found."
+          echo "Keystore found:"
+          echo "$KEYSTORE"
 
           keytool \
             -list \
@@ -995,7 +1033,7 @@ jobs:
             :app:processReleaseMainManifest
 
       # ============================================================
-      # 39. CLEAN
+      # 39. CLEAN RELEASE BUILD
       # ============================================================
       - name: Clean release build
         shell: bash
@@ -1024,7 +1062,7 @@ jobs:
             :app:assembleRelease
 
       # ============================================================
-      # 41. VERIFY RELEASE APK
+      # 41. VERIFY RELEASE APK OUTPUT
       # ============================================================
       - name: Verify release APK output
         shell: bash
@@ -1058,7 +1096,7 @@ jobs:
           echo "Release APK output: PASS"
 
       # ============================================================
-      # 42. NO AAB
+      # 42. VERIFY APK ONLY / NO AAB
       # ============================================================
       - name: Verify no AAB is required
         shell: bash
@@ -1066,6 +1104,8 @@ jobs:
           set -euo pipefail
 
           cd source
+
+          echo "This workflow intentionally builds APK only."
 
           if find android/app/build/outputs \
             -type f \
@@ -1079,7 +1119,7 @@ jobs:
           echo "APK-only output: PASS"
 
       # ============================================================
-      # 43. VERIFY PACKAGE NAME
+      # 43. VERIFY APK PACKAGE NAME
       # ============================================================
       - name: Verify APK package name
         shell: bash
@@ -1137,7 +1177,7 @@ jobs:
           echo "APK signature: PASS"
 
       # ============================================================
-      # 45. SHA256
+      # 45. GENERATE SHA256
       # ============================================================
       - name: Generate APK SHA256
         shell: bash
