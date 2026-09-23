@@ -545,12 +545,6 @@ jobs:
 
       # ============================================================
       # 26. FIX GOOGLE SERVICES VERSION
-      #
-      # PREVIOUS RUN:
-      # android/build.gradle contained 4.4.0
-      # workflow expected 4.4.3
-      #
-      # ONLY THIS FAILURE POINT IS FIXED.
       # ============================================================
       - name: Fix Google Services plugin version
         shell: bash
@@ -568,13 +562,10 @@ jobs:
             android/build.gradle \
             android/app/build.gradle || true
 
-          # Change only the existing 4.4.0 dependency to 4.4.3.
           sed -i \
             's/com\.google\.gms:google-services:4\.4\.0/com.google.gms:google-services:4.4.3/g' \
             android/build.gradle
 
-          # If the app plugin is already present, leave it untouched.
-          # If it is missing, add it safely at the end.
           if ! grep -q \
             "com.google.gms.google-services" \
             android/app/build.gradle; then
@@ -899,7 +890,71 @@ jobs:
           ./gradlew --version
 
       # ============================================================
-      # 38. VALIDATE RELEASE CONFIGURATION
+      # 38. FIX MAINACTIVITY JAVA QUOTES
+      #
+      # THIS IS THE NEW FIX FROM THE ACTUAL FAILURE POINT.
+      #
+      # Previous error:
+      # ""NOT_READY""
+      # ""ERROR""
+      #
+      # Correct:
+      # "NOT_READY"
+      # "ERROR"
+      # ============================================================
+      - name: Fix MainActivity Java syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          MAIN_ACTIVITY="$(
+            find android/app/src/main \
+              -type f \
+              -name MainActivity.java \
+              -print -quit || true
+          )"
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: MainActivity.java not found."
+            exit 1
+          fi
+
+          echo "Fixing MainActivity:"
+          echo "$MAIN_ACTIVITY"
+
+          # Fix the exact malformed Java string literals reported
+          # by the failed compile.
+          sed -i \
+            's/""NOT_READY""/"NOT_READY"/g' \
+            "$MAIN_ACTIVITY"
+
+          sed -i \
+            's/""ERROR""/"ERROR"/g' \
+            "$MAIN_ACTIVITY"
+
+          echo
+          echo "Checking corrected lines:"
+
+          grep -n \
+            -E 'NOT_READY|ERROR' \
+            "$MAIN_ACTIVITY" \
+            | head -20 || true
+
+          # The malformed double-double quote pattern must not remain.
+          if grep -q \
+            '""NOT_READY""\|""ERROR""' \
+            "$MAIN_ACTIVITY"; then
+
+            echo "ERROR: Malformed Java quotes still present."
+            exit 1
+          fi
+
+          echo "MainActivity Java quote fix: PASS"
+
+      # ============================================================
+      # 39. VALIDATE RELEASE CONFIGURATION
       # ============================================================
       - name: Validate release configuration
         shell: bash
@@ -915,7 +970,7 @@ jobs:
             :app:processReleaseMainManifest
 
       # ============================================================
-      # 39. CLEAN
+      # 40. CLEAN
       # ============================================================
       - name: Clean release build
         shell: bash
@@ -929,7 +984,7 @@ jobs:
             clean
 
       # ============================================================
-      # 40. BUILD ONLY SIGNED RELEASE APK
+      # 41. BUILD ONLY SIGNED RELEASE APK
       # ============================================================
       - name: Build Signed Release APK
         shell: bash
@@ -944,7 +999,7 @@ jobs:
             :app:assembleRelease
 
       # ============================================================
-      # 41. VERIFY RELEASE APK OUTPUT
+      # 42. VERIFY RELEASE APK OUTPUT
       # ============================================================
       - name: Verify release APK output
         shell: bash
@@ -978,7 +1033,7 @@ jobs:
           echo "Release APK output: PASS"
 
       # ============================================================
-      # 42. VERIFY NO AAB
+      # 43. VERIFY NO AAB
       # ============================================================
       - name: Verify no AAB is required
         shell: bash
@@ -1001,7 +1056,7 @@ jobs:
           echo "APK-only output: PASS"
 
       # ============================================================
-      # 43. VERIFY APK PACKAGE
+      # 44. VERIFY APK PACKAGE
       # ============================================================
       - name: Verify APK package name
         shell: bash
@@ -1032,7 +1087,7 @@ jobs:
           echo "Package name: PASS"
 
       # ============================================================
-      # 44. VERIFY APK SIGNATURE
+      # 45. VERIFY APK SIGNATURE
       # ============================================================
       - name: Verify APK signature
         shell: bash
@@ -1057,7 +1112,7 @@ jobs:
           echo "APK signature: PASS"
 
       # ============================================================
-      # 45. SHA256
+      # 46. SHA256
       # ============================================================
       - name: Generate APK SHA256
         shell: bash
@@ -1076,7 +1131,7 @@ jobs:
           sha256sum "$APK"
 
       # ============================================================
-      # 46. PREPARE FINAL APK
+      # 47. PREPARE FINAL APK
       # ============================================================
       - name: Prepare final APK
         shell: bash
@@ -1104,7 +1159,7 @@ jobs:
             ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
 
       # ============================================================
-      # 47. UPLOAD ONLY FINAL SIGNED RELEASE APK
+      # 48. UPLOAD ONLY FINAL SIGNED RELEASE APK
       # ============================================================
       - name: Upload final signed release APK
         uses: actions/upload-artifact@v4
