@@ -111,9 +111,6 @@ jobs:
 
           EXPECTED="$GITHUB_WORKSPACE/$SOURCE_ZIP"
 
-          echo "Expected source ZIP:"
-          echo "$EXPECTED"
-
           if [ ! -s "$EXPECTED" ]; then
             echo "::error::Configured source ZIP was not found:"
             echo "$EXPECTED"
@@ -138,7 +135,6 @@ jobs:
           echo "RKMS_SOURCE_ZIP=$EXPECTED" >> "$GITHUB_ENV"
           echo "RKMS_SOURCE_SHA256=$SOURCE_SHA256" >> "$GITHUB_ENV"
 
-          echo ""
           echo "SOURCE ZIP:"
           echo "$EXPECTED"
 
@@ -449,10 +445,6 @@ jobs:
           fi
 
           echo "NATIVE SETUP SCRIPT: PASS"
-          echo "RKMSNativeBridge: PASS"
-          echo "Firebase initialization: PASS"
-          echo "Credential Manager: PASS"
-          echo "NO CHANNEL DELETION: PASS"
 
       - name: Install npm dependencies
         shell: bash
@@ -488,26 +480,15 @@ jobs:
             exit 1
           fi
 
-          echo "Checking Capacitor Push Notifications Android plugin..."
-
           if grep -Rqs \
             "firebase-messaging" \
             "$PLUGIN_DIR"
           then
-            echo "Firebase Messaging dependency found in Capacitor plugin: PASS"
+            echo "FIREBASE MESSAGING PLUGIN: PASS"
           else
-            echo "::error::Firebase Messaging dependency not found in Capacitor Push Notifications plugin."
-            echo ""
-            echo "Plugin files:"
-            find "$PLUGIN_DIR" \
-              -maxdepth 3 \
-              -type f \
-              -print \
-              | sort
+            echo "::error::Firebase Messaging dependency not found in Capacitor plugin."
             exit 1
           fi
-
-          echo "CAPACITOR FCM DEPENDENCY: PASS"
 
       - name: Build web application
         shell: bash
@@ -562,9 +543,6 @@ jobs:
           bash \
             scripts/configure-android-16.sh
 
-          test -f \
-            android/gradle/wrapper/gradle-wrapper.properties
-
           grep -Fq \
             "gradle-8.11.1-bin.zip" \
             android/gradle/wrapper/gradle-wrapper.properties
@@ -614,6 +592,58 @@ jobs:
             scripts/setup-android-native.sh
 
           echo "RKMS NATIVE ANDROID SETUP: PASS"
+
+      # IMPORTANT:
+      # MainActivity directly calls FirebaseApp.initializeApp(this).
+      # The Capacitor push-notifications plugin contains Firebase Messaging,
+      # but its dependency can remain on the plugin's runtime classpath.
+      # Add Firebase Messaging directly to the app module so FirebaseApp
+      # is available during app Java compilation.
+      - name: Add Firebase Messaging to app compile classpath
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/build.gradle")
+          s = p.read_text()
+
+          dependency = '    implementation "com.google.firebase:firebase-messaging:25.0.1"'
+
+          if "com.google.firebase:firebase-messaging:" not in s:
+              marker = "dependencies {"
+
+              if marker in s:
+                  s = s.replace(
+                      marker,
+                      marker + "\n" + dependency,
+                      1
+                  )
+              else:
+                  s += (
+                      "\n\n"
+                      "dependencies {\n"
+                      f"{dependency}\n"
+                      "}\n"
+                  )
+
+              p.write_text(s)
+
+          print(
+              "Firebase Messaging direct app dependency: PASS"
+          )
+          PY
+
+          grep -Fq \
+            "com.google.firebase:firebase-messaging:" \
+            android/app/build.gradle
+
+          echo "FIREBASE APP COMPILE DEPENDENCY: PASS"
 
       - name: Verify generated MainActivity
         shell: bash
@@ -674,6 +704,10 @@ jobs:
             "org.rkms.connect" \
             android/app/google-services.json
 
+          grep -Fq \
+            "com.google.firebase:firebase-messaging:" \
+            android/app/build.gradle
+
           PLUGIN_DIR="node_modules/@capacitor/push-notifications/android"
 
           if [ ! -d "$PLUGIN_DIR" ]; then
@@ -685,9 +719,9 @@ jobs:
             "firebase-messaging" \
             "$PLUGIN_DIR"
           then
-            echo "Firebase Messaging dependency in Capacitor plugin: PASS"
+            echo "Capacitor Firebase Messaging: PASS"
           else
-            echo "::error::Firebase Messaging dependency not found in Capacitor plugin."
+            echo "::error::Firebase Messaging plugin dependency missing."
             exit 1
           fi
 
@@ -726,16 +760,11 @@ jobs:
             exit 1
           fi
 
-          if grep -Rqs \
-            "firebase-messaging" \
-            node_modules/@capacitor/push-notifications/android
-          then
-            echo "FIREBASE MESSAGING PLUGIN: PASS"
-          else
-            echo "::error::Firebase Messaging plugin implementation not found."
-            exit 1
-          fi
+          grep -Fq \
+            "com.google.firebase:firebase-messaging:" \
+            android/app/build.gradle
 
+          echo "FIREBASE MESSAGING APP DEPENDENCY: PASS"
           echo "NO CHANNEL DELETION: PASS"
 
       - name: Run RKMS static audits
@@ -886,14 +915,33 @@ jobs:
             echo "RESOLVED FIREBASE MESSAGING DEPENDENCY: PASS"
           else
             echo "::error::Firebase Messaging was not resolved in releaseRuntimeClasspath."
+
             echo ""
             echo "Relevant dependency output:"
+
             grep -Ei \
               "firebase|capacitor|messaging" \
               firebase-runtime-dependencies.txt \
               | head -200 || true
+
             exit 1
           fi
+
+      - name: Verify FirebaseApp compile class
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT/android"
+
+          echo "Verifying FirebaseApp is available to the app compile classpath..."
+
+          ./gradlew \
+            :app:compileReleaseJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+          echo "FIREBASEAPP JAVA COMPILE: PASS"
 
       - name: Build signed release APK
         shell: bash
