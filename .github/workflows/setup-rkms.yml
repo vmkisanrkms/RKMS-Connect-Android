@@ -192,7 +192,7 @@ jobs:
 
 
       # ============================================================
-      # REPAIR OLD MALFORMED NATIVE SCRIPT
+      # REPAIR MALFORMED NATIVE SCRIPT
       # ============================================================
 
       - name: Repair RKMS native setup script
@@ -220,10 +220,6 @@ jobs:
 
           marker = "# Stable white notification icon for FCM system notifications."
 
-          # ----------------------------------------------------------
-          # If already valid, do not modify it.
-          # ----------------------------------------------------------
-
           if marker not in text:
 
               result = subprocess.run(
@@ -242,10 +238,6 @@ jobs:
 
           marker_pos = text.index(marker)
 
-          # ----------------------------------------------------------
-          # Find the malformed Python heredoc opening.
-          # ----------------------------------------------------------
-
           start = text.rfind(
               "python3 - <<'PY3'",
               0,
@@ -257,11 +249,8 @@ jobs:
                   "Malformed native script start marker not found."
               )
 
-          # ----------------------------------------------------------
-          # Find the old PY3 closing marker.
-          # ----------------------------------------------------------
-
           end_marker = "\nPY3"
+
           end = text.find(
               end_marker,
               marker_pos
@@ -273,10 +262,6 @@ jobs:
               )
 
           end += len(end_marker)
-
-          # ----------------------------------------------------------
-          # Correct Bash + Python structure.
-          # ----------------------------------------------------------
 
           replacement = r'''# Stable white notification icon for FCM system notifications.
 
@@ -308,63 +293,33 @@ jobs:
 
           s = p.read_text()
 
-          # ----------------------------------------------------------
-          # RECORD_AUDIO permission
-          # ----------------------------------------------------------
-
           if "android.permission.RECORD_AUDIO" not in s:
+              pos = s.find("<application")
 
-              app_pos = s.find("<application")
-
-              if app_pos < 0:
+              if pos < 0:
                   raise SystemExit(
                       "AndroidManifest application tag missing"
                   )
 
               s = (
-                  s[:app_pos]
+                  s[:pos]
                   + '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
-                  + s[app_pos:]
+                  + s[pos:]
               )
-
-          # ----------------------------------------------------------
-          # POST_NOTIFICATIONS permission
-          # ----------------------------------------------------------
 
           if "android.permission.POST_NOTIFICATIONS" not in s:
+              pos = s.find("<application")
 
-              app_pos = s.find("<application")
-
-              if app_pos < 0:
+              if pos < 0:
                   raise SystemExit(
                       "AndroidManifest application tag missing"
                   )
 
               s = (
-                  s[:app_pos]
+                  s[:pos]
                   + '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
-                  + s[app_pos:]
+                  + s[pos:]
               )
-
-          # ----------------------------------------------------------
-          # Firebase default notification channel
-          # ----------------------------------------------------------
-
-          channel_meta = (
-              '    <meta-data '
-              'android:name="com.google.firebase.messaging.default_notification_channel_id" '
-              'android:value="@string/rkms_default_notification_channel_id" />\n'
-          )
-
-          # ----------------------------------------------------------
-          # Firebase default notification icon
-          # ----------------------------------------------------------
-
-          icon_meta = (
-              '    <meta-data '
-              'android:name="com.google.firebase.messaging.default_notification_icon" '
-              'android:resource="@drawable/ic_stat_rkms" />\n'
-          )
 
           closing = "</application>"
 
@@ -372,6 +327,18 @@ jobs:
               raise SystemExit(
                   "AndroidManifest application closing tag missing"
               )
+
+          channel_meta = (
+              '    <meta-data '
+              'android:name="com.google.firebase.messaging.default_notification_channel_id" '
+              'android:value="@string/rkms_default_notification_channel_id" />\n'
+          )
+
+          icon_meta = (
+              '    <meta-data '
+              'android:name="com.google.firebase.messaging.default_notification_icon" '
+              'android:resource="@drawable/ic_stat_rkms" />\n'
+          )
 
           if (
               "com.google.firebase.messaging.default_notification_channel_id"
@@ -525,7 +492,7 @@ jobs:
 
 
       # ============================================================
-      # FIREBASE
+      # FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -710,7 +677,7 @@ jobs:
 
 
       # ============================================================
-      # REPAIR / VERIFY GENERATED MAIN ACTIVITY
+      # REPAIR GENERATED MAIN ACTIVITY
       # ============================================================
 
       - name: Repair generated MainActivity
@@ -736,23 +703,25 @@ jobs:
           test -s \
             "$MAIN_ACTIVITY"
 
-          echo "MAIN ACTIVITY:"
-          echo "$MAIN_ACTIVITY"
-
-          python3 - "$MAIN_ACTIVITY" <<'PY'
-          import sys
+          MAIN_ACTIVITY_ENV="$MAIN_ACTIVITY" python3 <<'PY'
+          import os
           from pathlib import Path
 
-          path = Path(sys.argv[1])
+          path = Path(os.environ["MAIN_ACTIVITY_ENV"])
           text = path.read_text()
 
-          firebase_line = (
-              "        com.google.firebase.FirebaseApp.initializeApp(this);"
+          class_marker = (
+              "public class MainActivity extends BridgeActivity {"
           )
 
-          # ----------------------------------------------------------
-          # Add Firebase initialization if missing.
-          # ----------------------------------------------------------
+          if class_marker not in text:
+              raise SystemExit(
+                  "MainActivity class marker not found"
+              )
+
+          # ========================================================
+          # FIREBASE INITIALIZATION
+          # ========================================================
 
           if "FirebaseApp.initializeApp(this)" not in text:
 
@@ -772,38 +741,22 @@ jobs:
                           "onCreate opening brace not found"
                       )
 
-                  insert_at = brace + 1
-
                   text = (
-                      text[:insert_at]
+                      text[:brace + 1]
                       + "\n"
-                      + firebase_line
+                      + "        com.google.firebase.FirebaseApp.initializeApp(this);"
                       + "\n"
-                      + text[insert_at:]
-                  )
-
-                  print(
-                      "Firebase initialization inserted into existing onCreate."
+                      + text[brace + 1:]
                   )
 
               else:
-
-                  class_marker = (
-                      "public class MainActivity extends BridgeActivity {"
-                  )
-
-                  if class_marker not in text:
-                      raise SystemExit(
-                          "MainActivity class marker not found."
-                      )
 
                   replacement = (
                       class_marker
                       + "\n"
                       + "    @Override\n"
                       + "    public void onCreate(android.os.Bundle savedInstanceState) {\n"
-                      + firebase_line
-                      + "\n"
+                      + "        com.google.firebase.FirebaseApp.initializeApp(this);\n"
                       + "        super.onCreate(savedInstanceState);\n"
                       + "    }\n"
                   )
@@ -814,20 +767,268 @@ jobs:
                       1
                   )
 
-                  print(
-                      "Firebase onCreate block created."
+          # ========================================================
+          # RKMS NATIVE BRIDGE
+          # ========================================================
+
+          if "RKMSNativeBridge(this, rkmsWebView)" not in text:
+
+              oncreate_marker = (
+                  "public void onCreate(android.os.Bundle savedInstanceState)"
+              )
+
+              if oncreate_marker not in text:
+                  raise SystemExit(
+                      "Cannot install RKMSNativeBridge: onCreate missing"
                   )
+
+              oncreate_pos = text.find(oncreate_marker)
+
+              brace = text.find(
+                  "{",
+                  oncreate_pos
+              )
+
+              if brace < 0:
+                  raise SystemExit(
+                      "onCreate opening brace not found"
+                  )
+
+              bridge_code = r'''
+                  getWindow().setSoftInputMode(
+                      android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                  );
+
+                  android.webkit.WebView rkmsWebView =
+                      getBridge().getWebView();
+
+                  rkmsWebView.setImportantForAutofill(
+                      android.view.View.IMPORTANT_FOR_AUTOFILL_YES
+                  );
+
+                  rkmsWebView.setSaveEnabled(true);
+
+                  rkmsWebView.getSettings()
+                      .setMediaPlaybackRequiresUserGesture(false);
+
+                  rkmsWebView.addJavascriptInterface(
+                      new RKMSNativeBridge(this, rkmsWebView),
+                      "RKMSNative"
+                  );
+
+                  if (rkmsInstallWebAudioPermissionBridge != null) {
+                      rkmsInstallWebAudioPermissionBridge(rkmsWebView);
+                  }
+
+                  if (createRkmsNotificationChannel != null) {
+                      createRkmsNotificationChannel();
+                  }
+          '''
+
+              # Do not use invalid Java references to methods as variables.
+              bridge_code = r'''
+                  getWindow().setSoftInputMode(
+                      android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                  );
+
+                  android.webkit.WebView rkmsWebView =
+                      getBridge().getWebView();
+
+                  rkmsWebView.setImportantForAutofill(
+                      android.view.View.IMPORTANT_FOR_AUTOFILL_YES
+                  );
+
+                  rkmsWebView.setSaveEnabled(true);
+
+                  rkmsWebView.getSettings()
+                      .setMediaPlaybackRequiresUserGesture(false);
+
+                  rkmsWebView.addJavascriptInterface(
+                      new RKMSNativeBridge(this, rkmsWebView),
+                      "RKMSNative"
+                  );
+
+                  rkmsInstallWebAudioPermissionBridge(rkmsWebView);
+
+                  createRkmsNotificationChannel();
+          '''
+
+              text = (
+                  text[:brace + 1]
+                  + bridge_code
+                  + text[brace + 1:]
+              )
+
+          # ========================================================
+          # NOTIFICATION ROUTE SUPPORT
+          # ========================================================
+
+          route_methods = r'''
+              private volatile String rkmsPendingNotificationRoute = "";
+
+              private String rkmsExtractNotificationRoute(
+                  android.content.Intent intent
+              ) {
+                  if (
+                      intent == null ||
+                      intent.getExtras() == null
+                  ) {
+                      return "";
+                  }
+
+                  android.os.Bundle b = intent.getExtras();
+
+                  String route = b.getString("route", "");
+                  String type = b.getString("type", "");
+                  String cid = b.getString("conversation_id", "");
+
+                  if (
+                      (route == null || route.trim().isEmpty()) &&
+                      "rkms_chat".equalsIgnoreCase(type) &&
+                      cid != null &&
+                      !cid.trim().isEmpty()
+                  ) {
+                      route = "chat/" + cid.trim();
+                  }
+
+                  if (route == null) {
+                      route = "";
+                  }
+
+                  return route
+                      .trim()
+                      .replaceFirst("^#?[/]", "");
+              }
+
+              private void rkmsCaptureNotificationIntent(
+                  android.content.Intent intent
+              ) {
+                  String route =
+                      rkmsExtractNotificationRoute(intent);
+
+                  if (route.isEmpty()) {
+                      return;
+                  }
+
+                  rkmsPendingNotificationRoute = route;
+
+                  rkmsDispatchNotificationRoute();
+              }
+
+              private void rkmsDispatchNotificationRoute() {
+                  final String route =
+                      rkmsPendingNotificationRoute;
+
+                  if (
+                      route == null ||
+                      route.isEmpty()
+                  ) {
+                      return;
+                  }
+
+                  android.webkit.WebView w =
+                      getBridge() == null
+                          ? null
+                          : getBridge().getWebView();
+
+                  if (w == null) {
+                      new android.os.Handler(
+                          android.os.Looper.getMainLooper()
+                      ).postDelayed(
+                          this::rkmsDispatchNotificationRoute,
+                          300
+                      );
+                      return;
+                  }
+
+                  String js =
+                      "window.rkmsOpenNotificationRoute && " +
+                      "window.rkmsOpenNotificationRoute(" +
+                      org.json.JSONObject.quote(route) +
+                      ");";
+
+                  w.post(
+                      () -> w.evaluateJavascript(
+                          js,
+                          value ->
+                              rkmsPendingNotificationRoute = ""
+                      )
+                  );
+              }
+
+              @Override
+              protected void onNewIntent(
+                  android.content.Intent intent
+              ) {
+                  super.onNewIntent(intent);
+                  setIntent(intent);
+                  rkmsCaptureNotificationIntent(intent);
+              }
+          '''
+
+          if "rkmsCaptureNotificationIntent" not in text:
+
+              # Insert route methods before the final class brace.
+              last_brace = text.rfind("}")
+
+              if last_brace < 0:
+                  raise SystemExit(
+                      "MainActivity closing brace not found"
+                  )
+
+              text = (
+                  text[:last_brace]
+                  + route_methods
+                  + "\n"
+                  + text[last_brace:]
+              )
+
+          # ========================================================
+          # INITIAL NOTIFICATION INTENT
+          # ========================================================
+
+          if (
+              "rkmsCaptureNotificationIntent(getIntent())"
+              not in text
+          ):
+
+              oncreate_marker = (
+                  "public void onCreate(android.os.Bundle savedInstanceState)"
+              )
+
+              oncreate_pos = text.find(oncreate_marker)
+
+              if oncreate_pos >= 0:
+
+                  brace = text.find(
+                      "{",
+                      oncreate_pos
+                  )
+
+                  close = text.find(
+                      "}",
+                      brace
+                  )
+
+                  if brace >= 0 and close >= 0:
+
+                      insertion = (
+                          "\n"
+                          "        rkmsCaptureNotificationIntent(getIntent());\n"
+                          "        new android.os.Handler(android.os.Looper.getMainLooper())"
+                          ".postDelayed(this::rkmsDispatchNotificationRoute, 700);\n"
+                      )
+
+                      text = (
+                          text[:close]
+                          + insertion
+                          + text[close:]
+                      )
 
           path.write_text(text)
 
-          print(
-              "MainActivity repair completed."
-          )
+          print("MainActivity repair completed.")
           PY
-
-          grep -Fq \
-            "FirebaseApp.initializeApp(this)" \
-            "$MAIN_ACTIVITY"
 
           echo "MAIN ACTIVITY REPAIR: PASS"
 
@@ -868,13 +1069,59 @@ jobs:
             "$MAIN_ACTIVITY"
 
           grep -Fq \
+            "rkmsCaptureNotificationIntent" \
+            "$MAIN_ACTIVITY"
+
+          grep -Fq \
             "onNewIntent" \
+            "$MAIN_ACTIVITY"
+
+          grep -Fq \
+            "rkmsOpenNotificationRoute" \
             "$MAIN_ACTIVITY"
 
           echo "RKMSNativeBridge: PASS"
           echo "Firebase initialization: PASS"
-          echo "Notification intent handling: PASS"
+          echo "Notification route capture: PASS"
+          echo "onNewIntent: PASS"
           echo "MAINACTIVITY: PASS"
+
+
+      # ============================================================
+      # VERIFY MAIN ACTIVITY JAVA SYNTAX STRUCTURE
+      # ============================================================
+
+      - name: Verify MainActivity native source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          MAIN_ACTIVITY="$(
+            find android/app/src/main \
+              -type f \
+              -name "MainActivity.java" \
+              -print \
+              -quit
+          )"
+
+          test -s \
+            "$MAIN_ACTIVITY"
+
+          grep -Fq \
+            "public class MainActivity extends BridgeActivity" \
+            "$MAIN_ACTIVITY"
+
+          grep -Fq \
+            "super.onCreate(savedInstanceState)" \
+            "$MAIN_ACTIVITY"
+
+          grep -Fq \
+            "setIntent(intent)" \
+            "$MAIN_ACTIVITY"
+
+          echo "MAINACTIVITY SOURCE AUDIT: PASS"
 
 
       # ============================================================
@@ -917,8 +1164,17 @@ jobs:
             "rkms_priority_v1" \
             scripts/setup-android-native.sh
 
+          if grep -Fq \
+            "deleteNotificationChannel" \
+            scripts/setup-android-native.sh
+          then
+            echo "::error::Notification channel deletion detected."
+            exit 1
+          fi
+
           echo "Normal notification channel: PASS"
           echo "Priority notification channel: PASS"
+          echo "No notification channel deletion: PASS"
           echo "NOTIFICATION CHANNEL AUDIT: PASS"
 
 
@@ -1281,7 +1537,7 @@ jobs:
 
 
       # ============================================================
-      # FINAL AUDIT
+      # FINAL APK AUDIT
       # ============================================================
 
       - name: Final APK-only audit
