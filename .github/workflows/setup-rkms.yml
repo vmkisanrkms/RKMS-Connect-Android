@@ -585,7 +585,6 @@ jobs:
                   continue
 
               s = p.read_text()
-
               original = s
 
               replacements = [
@@ -1152,24 +1151,88 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner" \
+          APKSIGNER="$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner"
+
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "::error::apksigner not found:"
+            echo "$APKSIGNER"
+            exit 1
+          fi
+
+          echo "=============================================="
+          echo "VERIFYING APK SIGNATURE"
+          echo "=============================================="
+
+          set +e
+
+          "$APKSIGNER" \
             verify \
             --verbose \
-            "$RKMS_RELEASE_APK"
+            "$RKMS_RELEASE_APK" \
+            > apk-signature-verify.txt \
+            2>&1
 
-          "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner" \
+          VERIFY_EXIT=$?
+
+          set -e
+
+          cat apk-signature-verify.txt
+
+          if [ "$VERIFY_EXIT" -ne 0 ]; then
+            echo "::error::APK signature verification failed."
+            exit "$VERIFY_EXIT"
+          fi
+
+          if ! grep -Eq \
+            "Verified using v2 scheme.*true" \
+            apk-signature-verify.txt
+          then
+            echo "::error::APK v2 signature verification is not true."
+
+            grep -Ei \
+              "Verified using|Signer|certificate|ERROR|WARNING" \
+              apk-signature-verify.txt \
+              || true
+
+            exit 1
+          fi
+
+          echo "APK V1 SIGNATURE: VERIFIED"
+          echo "APK V2 SIGNATURE: VERIFIED"
+
+          echo ""
+          echo "Reading APK certificate information..."
+
+          set +e
+
+          "$APKSIGNER" \
             verify \
             --print-certs \
             "$RKMS_RELEASE_APK" \
-            > apk-signature.txt
+            > apk-signature-certificate.txt \
+            2>&1
 
-          grep -Fq \
-            "Verified using v2 scheme" \
-            apk-signature.txt
+          CERT_EXIT=$?
 
+          set -e
+
+          cat apk-signature-certificate.txt
+
+          if [ "$CERT_EXIT" -ne 0 ]; then
+            echo "::error::APK certificate information command failed."
+            exit "$CERT_EXIT"
+          fi
+
+          if ! grep -Eiq \
+            "Signer|Signer #1 certificate|SHA-256 digest" \
+            apk-signature-certificate.txt
+          then
+            echo "::error::APK certificate information could not be read."
+            exit 1
+          fi
+
+          echo "APK CERTIFICATE: PASS"
           echo "APK SIGNATURE VERIFICATION: PASS"
-
-          cat apk-signature.txt
 
       - name: Generate APK SHA256
         shell: bash
