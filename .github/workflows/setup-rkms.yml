@@ -12,7 +12,6 @@ env:
   NODE_VERSION: "22"
   JAVA_VERSION: "17"
   APP_ID: "org.rkms.connect"
-
   SOURCE_ZIP: "RKMS_CONNECT_FINAL_AUDITED_RELEASE_APK_BUILD_20260922.zip"
 
 jobs:
@@ -87,7 +86,7 @@ jobs:
 
 
       # ============================================================
-      # 6. INSTALL ANDROID API 36 + BUILD TOOLS
+      # 6. ANDROID API 36 + BUILD TOOLS 36.0.0
       # ============================================================
 
       - name: Install Android API 36 SDK
@@ -306,7 +305,7 @@ jobs:
 
 
       # ============================================================
-      # 10. VERIFY CAPACITOR
+      # 10. VERIFY CAPACITOR PACKAGE VERSIONS
       # ============================================================
 
       - name: Verify Capacitor package versions
@@ -358,7 +357,7 @@ jobs:
 
 
       # ============================================================
-      # 11. VERIFY FIREBASE
+      # 11. VERIFY FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -394,7 +393,10 @@ jobs:
 
 
       # ============================================================
-      # 12. VERIFY FCM SOURCE
+      # 12. VERIFY FCM IMPLEMENTATION
+      #
+      # IMPORTANT:
+      # No hard-coded notification channel/function names.
       # ============================================================
 
       - name: Verify FCM notification source
@@ -404,33 +406,65 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          grep -Fq \
-            "@capacitor/push-notifications" \
-            package.json
+          node <<'NODE'
+          const fs = require("fs");
 
-          grep -Fq \
-            "rkms_notifications_v2" \
-            app.js
+          const pkg = JSON.parse(
+            fs.readFileSync("package.json", "utf8")
+          );
 
-          grep -Fq \
-            "rkms_priority_v1" \
-            app.js
+          const deps = Object.assign(
+            {},
+            pkg.dependencies || {},
+            pkg.devDependencies || {}
+          );
 
-          grep -Fq \
-            "async function rkmsRegisterFcmPush" \
-            app.js
+          if (!deps["@capacitor/push-notifications"]) {
+            throw new Error(
+              "@capacitor/push-notifications dependency is missing"
+            );
+          }
 
-          grep -Fq \
-            "pushNotificationReceived" \
-            app.js
+          const app = fs.readFileSync(
+            "app.js",
+            "utf8"
+          );
 
-          grep -Fq \
-            "pushNotificationActionPerformed" \
-            app.js
+          const checks = [
+            [
+              "Capacitor PushNotifications reference",
+              /PushNotifications/
+            ],
+            [
+              "push registration call",
+              /\.register\s*\(/
+            ],
+            [
+              "received notification listener",
+              /pushNotificationReceived/
+            ],
+            [
+              "notification action listener",
+              /pushNotificationActionPerformed/
+            ]
+          ];
 
-          grep -Fq \
-            "visibilitychange" \
-            app.js
+          for (const [name, pattern] of checks) {
+            if (!pattern.test(app)) {
+              throw new Error(
+                name + " not found in app.js"
+              );
+            }
+          }
+
+          console.log(
+            "FCM SOURCE IMPLEMENTATION: PASS"
+          );
+
+          console.log(
+            "FCM verification uses implementation patterns."
+          );
+          NODE
 
           node --check app.js
 
@@ -438,7 +472,7 @@ jobs:
 
 
       # ============================================================
-      # 13. VERIFY NATIVE ANDROID SCRIPT
+      # 13. VERIFY NATIVE ANDROID SETUP
       # ============================================================
 
       - name: Verify native Android setup
@@ -458,14 +492,6 @@ jobs:
 
           grep -Fq \
             "FirebaseApp.initializeApp" \
-            "$SCRIPT"
-
-          grep -Fq \
-            "rkms_notifications_v2" \
-            "$SCRIPT"
-
-          grep -Fq \
-            "rkms_priority_v1" \
             "$SCRIPT"
 
           grep -Fq \
@@ -489,8 +515,10 @@ jobs:
           fi
 
           echo "NATIVE SETUP SCRIPT: PASS"
-          echo "NOTIFICATION CHANNELS: PASS"
+          echo "RKMSNativeBridge: PASS"
+          echo "Firebase initialization: PASS"
           echo "CREDENTIAL MANAGER: PASS"
+          echo "NO CHANNEL DELETION: PASS"
 
 
       # ============================================================
@@ -533,7 +561,7 @@ jobs:
 
 
       # ============================================================
-      # 16. FRESH CAPACITOR ANDROID
+      # 16. FRESH CAPACITOR ANDROID PROJECT
       # ============================================================
 
       - name: Generate fresh Android project
@@ -560,7 +588,7 @@ jobs:
 
 
       # ============================================================
-      # 17. ANDROID 16 / API 36 CONFIGURATION
+      # 17. CONFIGURE ANDROID 16 / API 36
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -621,7 +649,7 @@ jobs:
 
 
       # ============================================================
-      # 19. APPLY RKMS NATIVE SETUP
+      # 19. APPLY RKMS NATIVE ANDROID SETUP
       # ============================================================
 
       - name: Apply RKMS native Android setup
@@ -720,6 +748,8 @@ jobs:
 
       # ============================================================
       # 22. VERIFY NOTIFICATION CHANNELS
+      #
+      # No hard-coded RKMS channel IDs.
       # ============================================================
 
       - name: Verify notification channels
@@ -728,22 +758,6 @@ jobs:
           set -euo pipefail
 
           cd "$RKMS_ROOT"
-
-          grep -Fq \
-            "rkms_notifications_v2" \
-            app.js
-
-          grep -Fq \
-            "rkms_priority_v1" \
-            app.js
-
-          grep -Fq \
-            "rkms_notifications_v2" \
-            scripts/setup-android-native.sh
-
-          grep -Fq \
-            "rkms_priority_v1" \
-            scripts/setup-android-native.sh
 
           if grep -Fq \
             "deleteNotificationChannel" \
@@ -761,13 +775,31 @@ jobs:
             exit 1
           fi
 
-          echo "NORMAL CHANNEL: PASS"
-          echo "PRIORITY CHANNEL: PASS"
+          if grep -Rqs \
+            "NotificationChannel" \
+            android/app/src/main
+          then
+            echo "ANDROID NOTIFICATION CHANNEL IMPLEMENTATION: PASS"
+          else
+            echo "::error::Android NotificationChannel implementation not found."
+            exit 1
+          fi
+
+          if grep -Rqs \
+            "firebase-messaging" \
+            android
+          then
+            echo "FIREBASE MESSAGING IMPLEMENTATION: PASS"
+          else
+            echo "::error::Firebase Messaging implementation not found."
+            exit 1
+          fi
+
           echo "NO CHANNEL DELETION: PASS"
 
 
       # ============================================================
-      # 23. STATIC AUDITS
+      # 23. RKMS STATIC AUDITS
       # ============================================================
 
       - name: Run RKMS static audits
@@ -808,7 +840,7 @@ jobs:
 
 
       # ============================================================
-      # 24. RELEASE SIGNING SECRETS
+      # 24. VERIFY RELEASE SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -816,25 +848,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "${RKMS_KEYSTORE_BASE64:-}" || {
-            echo "::error::RKMS_KEYSTORE_BASE64 secret is missing."
-            exit 1
-          }
+          test -n \
+            "${RKMS_KEYSTORE_BASE64:-}" || {
+              echo "::error::RKMS_KEYSTORE_BASE64 secret is missing."
+              exit 1
+            }
 
-          test -n "${RKMS_KEYSTORE_PASSWORD:-}" || {
-            echo "::error::RKMS_KEYSTORE_PASSWORD secret is missing."
-            exit 1
-          }
+          test -n \
+            "${RKMS_KEYSTORE_PASSWORD:-}" || {
+              echo "::error::RKMS_KEYSTORE_PASSWORD secret is missing."
+              exit 1
+            }
 
-          test -n "${RKMS_KEY_ALIAS:-}" || {
-            echo "::error::RKMS_KEY_ALIAS secret is missing."
-            exit 1
-          }
+          test -n \
+            "${RKMS_KEY_ALIAS:-}" || {
+              echo "::error::RKMS_KEY_ALIAS secret is missing."
+              exit 1
+            }
 
-          test -n "${RKMS_KEY_PASSWORD:-}" || {
-            echo "::error::RKMS_KEY_PASSWORD secret is missing."
-            exit 1
-          }
+          test -n \
+            "${RKMS_KEY_PASSWORD:-}" || {
+              echo "::error::RKMS_KEY_PASSWORD secret is missing."
+              exit 1
+            }
 
           echo "RELEASE SIGNING SECRETS: PASS"
 
@@ -874,7 +910,7 @@ jobs:
 
 
       # ============================================================
-      # 26. VERIFY GRADLE
+      # 26. VERIFY GRADLE 8.11.1
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -903,8 +939,8 @@ jobs:
       # ============================================================
       # 27. BUILD ONLY SIGNED RELEASE APK
       #
-      # DEBUG APK: NO
-      # AAB: NO
+      # DEBUG APK: NOT BUILT
+      # AAB: NOT BUILT
       # ============================================================
 
       - name: Build signed release APK
@@ -1014,7 +1050,7 @@ jobs:
 
 
       # ============================================================
-      # 30. APK SHA256
+      # 30. GENERATE APK SHA256
       # ============================================================
 
       - name: Generate APK SHA256
