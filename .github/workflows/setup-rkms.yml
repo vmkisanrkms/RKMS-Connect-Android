@@ -47,8 +47,7 @@ jobs:
 
       # ============================================================
       # 3. NODE 22
-      # IMPORTANT:
-      # NO npm cache here because package-lock.json is inside SOURCE ZIP
+      # package-lock is inside source ZIP, therefore NO npm cache
       # ============================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -104,6 +103,7 @@ jobs:
 
           "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt" version
           "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" version
+
           adb version
           sdkmanager --version
 
@@ -119,10 +119,16 @@ jobs:
           echo "$SOURCE_ZIP"
 
           if [ ! -f "$SOURCE_ZIP" ]; then
+
             echo "Exact ZIP not found at repository root."
             echo "Searching repository..."
 
-            FOUND_ZIP="$(find . -type f -name "$SOURCE_ZIP" -print -quit || true)"
+            FOUND_ZIP="$(
+              find . \
+                -type f \
+                -name "$SOURCE_ZIP" \
+                -print -quit || true
+            )"
 
             if [ -z "$FOUND_ZIP" ]; then
               echo "ERROR: Source ZIP not found."
@@ -148,6 +154,7 @@ jobs:
           set -euo pipefail
 
           rm -rf source extracted
+
           mkdir -p source extracted
 
           unzip -q "$SOURCE_ZIP" -d extracted
@@ -155,7 +162,12 @@ jobs:
           echo "Extracted source:"
           find extracted -maxdepth 3 -type f | head -100
 
-          PACKAGE_JSON="$(find extracted -type f -name package.json -print -quit || true)"
+          PACKAGE_JSON="$(
+            find extracted \
+              -type f \
+              -name package.json \
+              -print -quit || true
+          )"
 
           if [ -z "$PACKAGE_JSON" ]; then
             echo "ERROR: package.json not found inside ZIP."
@@ -196,6 +208,7 @@ jobs:
           )
 
           for file in "${REQUIRED_FILES[@]}"; do
+
             if [ ! -f "$file" ]; then
               echo "ERROR: Missing required file: $file"
               exit 1
@@ -237,6 +250,7 @@ jobs:
           };
 
           for (const [name, version] of Object.entries(expected)) {
+
             if (all[name] !== version) {
               console.error(
                 `ERROR: ${name} expected ${version}, found ${all[name] || 'missing'}`
@@ -407,7 +421,7 @@ jobs:
           fi
 
       # ============================================================
-      # 18. INSTALL NPM DEPENDENCIES
+      # 18. INSTALL NPM
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -419,7 +433,7 @@ jobs:
           npm ci --no-audit --no-fund
 
       # ============================================================
-      # 19. VERIFY INSTALLED PUSH NOTIFICATIONS
+      # 19. VERIFY PUSH NOTIFICATIONS
       # ============================================================
       - name: Verify installed push notifications
         shell: bash
@@ -429,14 +443,22 @@ jobs:
           cd source
 
           node -e "
-            const p=require('./node_modules/@capacitor/push-notifications/package.json');
+            const p=require(
+              './node_modules/@capacitor/push-notifications/package.json'
+            );
 
             if(p.version!=='6.0.3'){
-              console.error('Wrong push-notifications version:',p.version);
+              console.error(
+                'Wrong push-notifications version:',
+                p.version
+              );
               process.exit(1);
             }
 
-            console.log('push-notifications:',p.version);
+            console.log(
+              'push-notifications:',
+              p.version
+            );
           "
 
       # ============================================================
@@ -457,7 +479,7 @@ jobs:
           echo "Web build: PASS"
 
       # ============================================================
-      # 21. CREATE FRESH ANDROID PROJECT
+      # 21. CREATE FRESH ANDROID
       # ============================================================
       - name: Create fresh Android project
         shell: bash
@@ -471,7 +493,7 @@ jobs:
           npx cap add android
 
       # ============================================================
-      # 22. CONFIGURE ANDROID 16 / API 36
+      # 22. CONFIGURE ANDROID 16 API 36
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
@@ -485,7 +507,7 @@ jobs:
           ./scripts/configure-android-16.sh
 
       # ============================================================
-      # 23. FORCE SDK CONFIGURATION
+      # 23. FORCE SDK 36
       # ============================================================
       - name: Enforce Android SDK 36
         shell: bash
@@ -510,12 +532,13 @@ jobs:
 
           fi
 
+          echo "Android SDK configuration:"
           grep -RniE \
-            "compileSdkVersion[[:space:]]*=[[:space:]]*36|compileSdk[[:space:]]+36" \
+            "compileSdk|targetSdk|minSdk" \
             android \
             --include="*.gradle" \
             --include="*.gradle.kts" \
-            | head -20 || true
+            | head -40 || true
 
       # ============================================================
       # 24. CAPACITOR SYNC
@@ -544,9 +567,99 @@ jobs:
           ./scripts/setup-android-native.sh
 
       # ============================================================
-      # 26. VERIFY GOOGLE SERVICES PLUGIN
-      # FIXED:
-      # Supports old Gradle classpath AND modern plugins DSL.
+      # 26. FORCE GOOGLE SERVICES 4.4.3
+      #
+      # THIS IS THE IMPORTANT FIX
+      # ============================================================
+      - name: Force Google Services plugin 4.4.3
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          test -f android/build.gradle
+          test -f android/app/build.gradle
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("android/build.gradle")
+          app = Path("android/app/build.gradle")
+
+          root_text = root.read_text()
+          app_text = app.read_text()
+
+          # --------------------------------------------------------
+          # Root Gradle:
+          # Remove any existing google-services classpath and add
+          # exactly version 4.4.3.
+          # --------------------------------------------------------
+
+          root_text = re.sub(
+              r'^[ \t]*classpath[ \t]+["\']com\.google\.gms:google-services:[^"\']+["\'][ \t]*\n?',
+              '',
+              root_text,
+              flags=re.MULTILINE
+          )
+
+          if 'com.google.gms:google-services:4.4.3' not in root_text:
+
+              marker = 'dependencies {'
+
+              if marker not in root_text:
+                  raise SystemExit(
+                      'ERROR: android/build.gradle dependencies block missing'
+                  )
+
+              root_text = root_text.replace(
+                  marker,
+                  marker +
+                  '\n        classpath "com.google.gms:google-services:4.4.3"',
+                  1
+              )
+
+          root.write_text(root_text)
+
+          # --------------------------------------------------------
+          # App Gradle:
+          # Remove old apply-plugin lines and add exact plugin.
+          # --------------------------------------------------------
+
+          app_text = re.sub(
+              r'^[ \t]*apply[ \t]+plugin:[ \t]*["\']com\.google\.gms\.google-services["\'][ \t]*\n?',
+              '',
+              app_text,
+              flags=re.MULTILINE
+          )
+
+          app_text = app_text.rstrip() + (
+              '\n\n'
+              '// RKMS FCM: Google Services plugin\n'
+              'apply plugin: "com.google.gms.google-services"\n'
+          )
+
+          app.write_text(app_text)
+
+          print("Google Services root plugin forced to 4.4.3")
+          print("Google Services app plugin forced ON")
+          PY
+
+          echo
+          echo "Root Google Services configuration:"
+          grep -nE \
+            "google-services|google\.gms" \
+            android/build.gradle || true
+
+          echo
+          echo "App Google Services configuration:"
+          grep -nE \
+            "google-services|google\.gms" \
+            android/app/build.gradle || true
+
+      # ============================================================
+      # 27. VERIFY GOOGLE SERVICES PLUGIN
       # ============================================================
       - name: Verify Google Services plugin
         shell: bash
@@ -555,57 +668,24 @@ jobs:
 
           cd source
 
-          echo "Checking Google Services plugin..."
+          echo "Verifying Google Services plugin..."
 
-          test -d android
+          test -f android/build.gradle
+          test -f android/app/build.gradle
 
-          if grep -RqsE \
-            "com\.google\.gms:google-services:4\.4\.3|id[[:space:]]*['\"]com\.google\.gms\.google-services['\"][[:space:]]*version[[:space:]]*['\"]4\.4\.3['\"]" \
-            android \
-            --include="*.gradle" \
-            --include="*.gradle.kts"; then
+          grep -q \
+            'com.google.gms:google-services:4.4.3' \
+            android/build.gradle
 
-            echo "Google Services plugin version 4.4.3: PASS"
+          grep -q \
+            'com.google.gms.google-services' \
+            android/app/build.gradle
 
-          else
-
-            echo "ERROR: Google Services plugin version 4.4.3 not found."
-
-            echo "Google Services references found:"
-            grep -RniE \
-              "google-services|google\.gms" \
-              android \
-              --include="*.gradle" \
-              --include="*.gradle.kts" \
-              || true
-
-            exit 1
-          fi
-
-          if grep -RqsE \
-            "com\.google\.gms\.google-services" \
-            android/app \
-            --include="*.gradle" \
-            --include="*.gradle.kts"; then
-
-            echo "Google Services app plugin: PASS"
-
-          else
-
-            echo "ERROR: Google Services plugin is not applied to app module."
-
-            grep -RniE \
-              "google-services|google\.gms" \
-              android/app \
-              --include="*.gradle" \
-              --include="*.gradle.kts" \
-              || true
-
-            exit 1
-          fi
+          echo "Google Services root plugin 4.4.3: PASS"
+          echo "Google Services app plugin: PASS"
 
       # ============================================================
-      # 27. VERIFY FIREBASE NATIVE CONFIG
+      # 28. VERIFY FIREBASE NATIVE CONFIG
       # ============================================================
       - name: Verify Firebase native configuration
         shell: bash
@@ -623,7 +703,7 @@ jobs:
           echo "android/app/google-services.json: PASS"
 
       # ============================================================
-      # 28. VERIFY MAIN ACTIVITY
+      # 29. VERIFY MAIN ACTIVITY
       # ============================================================
       - name: Verify MainActivity
         shell: bash
@@ -653,7 +733,7 @@ jobs:
           echo "MainActivity native bridge: PASS"
 
       # ============================================================
-      # 29. ENSURE FIREBASE MESSAGING
+      # 30. ENSURE FIREBASE MESSAGING
       # ============================================================
       - name: Ensure Firebase Messaging dependency
         shell: bash
@@ -685,7 +765,9 @@ jobs:
           """
 
           if "dependencies {" not in text:
-              raise SystemExit("dependencies block not found")
+              raise SystemExit(
+                  "dependencies block not found"
+              )
 
           text = text.replace(
               "dependencies {",
@@ -695,15 +777,19 @@ jobs:
 
           p.write_text(text)
 
-          print("Firebase Messaging dependency added.")
+          print(
+              "Firebase Messaging dependency added."
+          )
           PY
 
           fi
 
-          grep -q "firebase-messaging" "$APP_GRADLE"
+          grep -q \
+            "firebase-messaging" \
+            "$APP_GRADLE"
 
       # ============================================================
-      # 30. VERIFY FINAL ANDROID CONFIGURATION
+      # 31. VERIFY FINAL ANDROID CONFIGURATION
       # ============================================================
       - name: Verify final Android configuration
         shell: bash
@@ -717,11 +803,12 @@ jobs:
           chmod +x android/gradlew
 
           echo "Gradle wrapper:"
-          grep -n "distributionUrl" \
+          grep -n \
+            "distributionUrl" \
             android/gradle/wrapper/gradle-wrapper.properties
 
           echo
-          echo "Compile SDK / target SDK:"
+          echo "Android SDK configuration:"
           grep -RniE \
             "compileSdk|targetSdk|minSdk" \
             android \
@@ -733,7 +820,7 @@ jobs:
           echo "Android configuration: PASS"
 
       # ============================================================
-      # 31. RESOLVE GRADLE DEPENDENCIES
+      # 32. RESOLVE GRADLE DEPENDENCIES
       # ============================================================
       - name: Resolve Gradle dependencies
         shell: bash
@@ -748,7 +835,7 @@ jobs:
             dependencies
 
       # ============================================================
-      # 32. STATIC ANDROID AUDIT
+      # 33. STATIC ANDROID AUDIT
       # ============================================================
       - name: Static Android audit
         shell: bash
@@ -764,20 +851,30 @@ jobs:
               -print -quit
           )"
 
-          grep -q "FirebaseApp.initializeApp" "$MAIN_ACTIVITY"
-          grep -q "RKMSNativeBridge" "$MAIN_ACTIVITY"
-          grep -q "onNewIntent" "$MAIN_ACTIVITY"
+          grep -q \
+            "FirebaseApp.initializeApp" \
+            "$MAIN_ACTIVITY"
 
-          grep -Rqs "POST_NOTIFICATIONS" \
+          grep -q \
+            "RKMSNativeBridge" \
+            "$MAIN_ACTIVITY"
+
+          grep -q \
+            "onNewIntent" \
+            "$MAIN_ACTIVITY"
+
+          grep -Rqs \
+            "POST_NOTIFICATIONS" \
             android/app/src/main
 
-          grep -Rqs "RECORD_AUDIO" \
+          grep -Rqs \
+            "RECORD_AUDIO" \
             android/app/src/main
 
           echo "Static Android audit: PASS"
 
       # ============================================================
-      # 33. CHECK RELEASE SIGNING SECRETS
+      # 34. CHECK RELEASE SIGNING SECRETS
       # ============================================================
       - name: Verify release signing secrets
         shell: bash
@@ -812,7 +909,7 @@ jobs:
           echo "Release signing secrets: PASS"
 
       # ============================================================
-      # 34. CONFIGURE RELEASE SIGNING
+      # 35. CONFIGURE RELEASE SIGNING
       # ============================================================
       - name: Configure release signing
         shell: bash
@@ -826,12 +923,13 @@ jobs:
 
           cd source
 
-          chmod +x scripts/configure-release-signing.sh
+          chmod +x \
+            scripts/configure-release-signing.sh
 
           ./scripts/configure-release-signing.sh
 
       # ============================================================
-      # 35. VALIDATE KEYSTORE
+      # 36. VALIDATE KEYSTORE
       # ============================================================
       - name: Validate release keystore
         shell: bash
@@ -845,7 +943,11 @@ jobs:
           KEYSTORE="$(
             find android \
               -type f \
-              \( -name "*.jks" -o -name "*.keystore" \) \
+              \( \
+                -name "*.jks" \
+                -o \
+                -name "*.keystore" \
+              \) \
               -print -quit || true
           )"
 
@@ -865,7 +967,7 @@ jobs:
           echo "Keystore validation: PASS"
 
       # ============================================================
-      # 36. VERIFY GRADLE VERSION
+      # 37. VERIFY GRADLE VERSION
       # ============================================================
       - name: Verify Gradle version
         shell: bash
@@ -877,7 +979,7 @@ jobs:
           ./gradlew --version
 
       # ============================================================
-      # 37. VALIDATE RELEASE CONFIGURATION
+      # 38. VALIDATE RELEASE CONFIGURATION
       # ============================================================
       - name: Validate release configuration
         shell: bash
@@ -893,7 +995,7 @@ jobs:
             :app:processReleaseMainManifest
 
       # ============================================================
-      # 38. CLEAN
+      # 39. CLEAN
       # ============================================================
       - name: Clean release build
         shell: bash
@@ -907,7 +1009,7 @@ jobs:
             clean
 
       # ============================================================
-      # 39. BUILD ONLY SIGNED RELEASE APK
+      # 40. BUILD ONLY SIGNED RELEASE APK
       # ============================================================
       - name: Build Signed Release APK
         shell: bash
@@ -922,7 +1024,7 @@ jobs:
             :app:assembleRelease
 
       # ============================================================
-      # 40. VERIFY RELEASE APK OUTPUT
+      # 41. VERIFY RELEASE APK
       # ============================================================
       - name: Verify release APK output
         shell: bash
@@ -956,7 +1058,7 @@ jobs:
           echo "Release APK output: PASS"
 
       # ============================================================
-      # 41. VERIFY NO AAB
+      # 42. NO AAB
       # ============================================================
       - name: Verify no AAB is required
         shell: bash
@@ -965,21 +1067,19 @@ jobs:
 
           cd source
 
-          echo "This workflow intentionally builds APK only."
-
           if find android/app/build/outputs \
             -type f \
             -name "*.aab" \
             | grep -q .; then
 
-            echo "ERROR: AAB was generated. APK-only workflow expected."
+            echo "ERROR: AAB was generated."
             exit 1
           fi
 
           echo "APK-only output: PASS"
 
       # ============================================================
-      # 42. VERIFY APK PACKAGE
+      # 43. VERIFY PACKAGE NAME
       # ============================================================
       - name: Verify APK package name
         shell: bash
@@ -999,7 +1099,9 @@ jobs:
 
           PACKAGE_NAME="$(
             "$AAPT" dump badging "$APK" \
-              | sed -n "s/^package: name='\([^']*\)'.*/\1/p" \
+              | sed \
+                -n \
+                "s/^package: name='\([^']*\)'.*/\1/p" \
               | head -1
           )"
 
@@ -1010,7 +1112,7 @@ jobs:
           echo "Package name: PASS"
 
       # ============================================================
-      # 43. VERIFY APK SIGNATURE
+      # 44. VERIFY APK SIGNATURE
       # ============================================================
       - name: Verify APK signature
         shell: bash
@@ -1035,7 +1137,7 @@ jobs:
           echo "APK signature: PASS"
 
       # ============================================================
-      # 44. SHA256
+      # 45. SHA256
       # ============================================================
       - name: Generate APK SHA256
         shell: bash
@@ -1054,7 +1156,7 @@ jobs:
           sha256sum "$APK"
 
       # ============================================================
-      # 45. PREPARE FINAL APK
+      # 46. PREPARE FINAL APK
       # ============================================================
       - name: Prepare final APK
         shell: bash
@@ -1070,7 +1172,8 @@ jobs:
               -print -quit
           )"
 
-          cp "$APK" \
+          cp \
+            "$APK" \
             ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk
 
           sha256sum \
@@ -1082,7 +1185,7 @@ jobs:
             ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
 
       # ============================================================
-      # 46. UPLOAD ONLY FINAL SIGNED RELEASE APK
+      # 47. UPLOAD ONLY FINAL SIGNED RELEASE APK
       # ============================================================
       - name: Upload final signed release APK
         uses: actions/upload-artifact@v4
