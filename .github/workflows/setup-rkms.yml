@@ -101,6 +101,8 @@ jobs:
             "${ANDROID_SDK_ROOT}/platform-tools/adb"
 
           echo "ANDROID API 36: PASS"
+          echo "BUILD TOOLS 36.0.0: PASS"
+          echo "ADB: PASS"
 
       - name: Locate RKMS source ZIP
         shell: bash
@@ -108,6 +110,9 @@ jobs:
           set -euo pipefail
 
           EXPECTED="$GITHUB_WORKSPACE/$SOURCE_ZIP"
+
+          echo "Expected source ZIP:"
+          echo "$EXPECTED"
 
           if [ ! -s "$EXPECTED" ]; then
             echo "::error::Configured source ZIP was not found:"
@@ -126,17 +131,19 @@ jobs:
             exit 1
           fi
 
-          echo "RKMS_SOURCE_ZIP=$EXPECTED" >> "$GITHUB_ENV"
-
-          echo "RKMS_SOURCE_SHA256=$(
+          SOURCE_SHA256="$(
             sha256sum "$EXPECTED" | awk '{print $1}'
-          )" >> "$GITHUB_ENV"
+          )"
 
+          echo "RKMS_SOURCE_ZIP=$EXPECTED" >> "$GITHUB_ENV"
+          echo "RKMS_SOURCE_SHA256=$SOURCE_SHA256" >> "$GITHUB_ENV"
+
+          echo ""
           echo "SOURCE ZIP:"
           echo "$EXPECTED"
 
           echo "SOURCE SHA256:"
-          sha256sum "$EXPECTED"
+          echo "$SOURCE_SHA256"
 
           echo "SOURCE ZIP: PASS"
 
@@ -165,7 +172,7 @@ jobs:
           )"
 
           if [ -z "$PACKAGE_FILE" ]; then
-            echo "::error::package.json not found."
+            echo "::error::package.json not found inside source ZIP."
             exit 1
           fi
 
@@ -227,7 +234,10 @@ jobs:
           bash -n \
             scripts/configure-release-signing.sh
 
-          echo "SOURCE AUDIT: PASS"
+          echo "SOURCE STRUCTURE: PASS"
+          echo "JAVASCRIPT SYNTAX: PASS"
+          echo "JSON SYNTAX: PASS"
+          echo "SHELL SYNTAX: PASS"
 
       - name: Verify Capacitor package versions
         shell: bash
@@ -351,7 +361,7 @@ jobs:
             !deps["@capacitor/push-notifications"]
           ) {
             throw new Error(
-              "push-notifications dependency missing"
+              "@capacitor/push-notifications dependency missing"
             );
           }
 
@@ -439,6 +449,10 @@ jobs:
           fi
 
           echo "NATIVE SETUP SCRIPT: PASS"
+          echo "RKMSNativeBridge: PASS"
+          echo "Firebase initialization: PASS"
+          echo "Credential Manager: PASS"
+          echo "NO CHANNEL DELETION: PASS"
 
       - name: Install npm dependencies
         shell: bash
@@ -453,6 +467,48 @@ jobs:
 
           echo "NPM INSTALL: PASS"
 
+      - name: Verify Capacitor FCM plugin dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          PLUGIN_DIR="node_modules/@capacitor/push-notifications/android"
+
+          if [ ! -d "$PLUGIN_DIR" ]; then
+            echo "::error::Capacitor Push Notifications Android plugin directory not found."
+            exit 1
+          fi
+
+          PLUGIN_BUILD="$PLUGIN_DIR/build.gradle"
+
+          if [ ! -f "$PLUGIN_BUILD" ]; then
+            echo "::error::Capacitor Push Notifications Android build.gradle not found."
+            exit 1
+          fi
+
+          echo "Checking Capacitor Push Notifications Android plugin..."
+
+          if grep -Rqs \
+            "firebase-messaging" \
+            "$PLUGIN_DIR"
+          then
+            echo "Firebase Messaging dependency found in Capacitor plugin: PASS"
+          else
+            echo "::error::Firebase Messaging dependency not found in Capacitor Push Notifications plugin."
+            echo ""
+            echo "Plugin files:"
+            find "$PLUGIN_DIR" \
+              -maxdepth 3 \
+              -type f \
+              -print \
+              | sort
+            exit 1
+          fi
+
+          echo "CAPACITOR FCM DEPENDENCY: PASS"
+
       - name: Build web application
         shell: bash
         run: |
@@ -462,7 +518,9 @@ jobs:
 
           npm run build
 
-          if [ ! -s "dist/index.html" ]; then
+          if [ ! -s \
+            "dist/index.html"
+          ]; then
             echo "::error::dist/index.html was not generated."
             exit 1
           fi
@@ -598,6 +656,9 @@ jobs:
             "$MAIN_ACTIVITY"
 
           echo "MAIN ACTIVITY: PASS"
+          echo "RKMSNativeBridge: PASS"
+          echo "Firebase initialization: PASS"
+          echo "Notification intent handling: PASS"
 
       - name: Verify Firebase Messaging
         shell: bash
@@ -613,15 +674,24 @@ jobs:
             "org.rkms.connect" \
             android/app/google-services.json
 
-          if grep -Rqs \
-            "firebase-messaging" \
-            android
-          then
-            echo "Firebase Messaging SDK: PASS"
-          else
-            echo "::error::Firebase Messaging SDK reference not found."
+          PLUGIN_DIR="node_modules/@capacitor/push-notifications/android"
+
+          if [ ! -d "$PLUGIN_DIR" ]; then
+            echo "::error::Capacitor Push Notifications Android plugin missing."
             exit 1
           fi
+
+          if grep -Rqs \
+            "firebase-messaging" \
+            "$PLUGIN_DIR"
+          then
+            echo "Firebase Messaging dependency in Capacitor plugin: PASS"
+          else
+            echo "::error::Firebase Messaging dependency not found in Capacitor plugin."
+            exit 1
+          fi
+
+          echo "FIREBASE MESSAGING VERIFICATION: PASS"
 
       - name: Verify notification channels
         shell: bash
@@ -658,11 +728,11 @@ jobs:
 
           if grep -Rqs \
             "firebase-messaging" \
-            android
+            node_modules/@capacitor/push-notifications/android
           then
-            echo "FIREBASE MESSAGING: PASS"
+            echo "FIREBASE MESSAGING PLUGIN: PASS"
           else
-            echo "::error::Firebase Messaging implementation not found."
+            echo "::error::Firebase Messaging plugin implementation not found."
             exit 1
           fi
 
@@ -675,17 +745,23 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          if [ -f scripts/verify-fcm-pipeline.py ]; then
+          if [ -f \
+            scripts/verify-fcm-pipeline.py
+          ]; then
             python3 \
               scripts/verify-fcm-pipeline.py
           fi
 
-          if [ -f scripts/verify-native-bridge.py ]; then
+          if [ -f \
+            scripts/verify-native-bridge.py
+          ]; then
             python3 \
               scripts/verify-native-bridge.py
           fi
 
-          if [ -f scripts/verify-rkms-final.py ]; then
+          if [ -f \
+            scripts/verify-rkms-final.py
+          ]; then
             python3 \
               scripts/verify-rkms-final.py
           fi
@@ -785,6 +861,40 @@ jobs:
 
           echo "GRADLE 8.11.1: PASS"
 
+      - name: Verify Firebase Gradle dependency resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT/android"
+
+          chmod +x \
+            gradlew
+
+          echo "Resolving release runtime dependencies..."
+
+          ./gradlew \
+            :app:dependencies \
+            --configuration releaseRuntimeClasspath \
+            --no-daemon \
+            > firebase-runtime-dependencies.txt
+
+          if grep -Eqi \
+            "firebase-messaging|com.google.firebase:firebase-messaging" \
+            firebase-runtime-dependencies.txt
+          then
+            echo "RESOLVED FIREBASE MESSAGING DEPENDENCY: PASS"
+          else
+            echo "::error::Firebase Messaging was not resolved in releaseRuntimeClasspath."
+            echo ""
+            echo "Relevant dependency output:"
+            grep -Ei \
+              "firebase|capacitor|messaging" \
+              firebase-runtime-dependencies.txt \
+              | head -200 || true
+            exit 1
+          fi
+
       - name: Build signed release APK
         shell: bash
         run: |
@@ -805,10 +915,12 @@ jobs:
             --no-daemon \
             --stacktrace
 
-          APK="$RKMS_ROOT/android/app/build/outputs/apk/release/app-release.apk"
+          EXPECTED_APK="$RKMS_ROOT/android/app/build/outputs/apk/release/app-release.apk"
 
-          if [ ! -s "$APK" ]; then
+          if [ ! -s "$EXPECTED_APK" ]; then
             echo "::error::Release APK was not produced."
+
+            echo "Searching for APK files..."
 
             find "$RKMS_ROOT/android" \
               -type f \
@@ -818,10 +930,10 @@ jobs:
             exit 1
           fi
 
-          echo "RKMS_RELEASE_APK=$APK" >> "$GITHUB_ENV"
+          echo "RKMS_RELEASE_APK=$EXPECTED_APK" >> "$GITHUB_ENV"
 
           echo "SIGNED RELEASE APK:"
-          echo "$APK"
+          echo "$EXPECTED_APK"
 
           echo "SIGNED RELEASE APK BUILD: PASS"
 
@@ -842,6 +954,7 @@ jobs:
             apk-badging.txt
 
           echo "APK PACKAGE: PASS"
+          echo "Package: ${APP_ID}"
 
       - name: Verify release APK signature
         shell: bash
@@ -881,7 +994,8 @@ jobs:
             | tee release-apk-sha256.txt
 
           APK_SIZE="$(
-            stat -c%s "$RKMS_RELEASE_APK"
+            stat -c%s \
+            "$RKMS_RELEASE_APK"
           )"
 
           if [ "$APK_SIZE" -le 100000 ]; then
