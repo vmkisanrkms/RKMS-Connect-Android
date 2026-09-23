@@ -47,8 +47,6 @@ jobs:
 
       # ============================================================
       # 3. NODE 22
-      # IMPORTANT:
-      # NO npm cache here because package-lock.json is inside SOURCE ZIP
       # ============================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -890,17 +888,18 @@ jobs:
           ./gradlew --version
 
       # ============================================================
-      # 38. FIX MAINACTIVITY JAVA QUOTES
+      # 38. FIX MAINACTIVITY JAVA SYNTAX
       #
-      # THIS IS THE NEW FIX FROM THE ACTUAL FAILURE POINT.
-      #
-      # Previous error:
+      # LAST RUN FAILED HERE:
+      # MainActivity.java contained:
       # ""NOT_READY""
       # ""ERROR""
       #
-      # Correct:
+      # Correct Java strings are:
       # "NOT_READY"
       # "ERROR"
+      #
+      # NOTHING BEFORE THIS STEP IS CHANGED.
       # ============================================================
       - name: Fix MainActivity Java syntax
         shell: bash
@@ -921,11 +920,16 @@ jobs:
             exit 1
           fi
 
-          echo "Fixing MainActivity:"
+          echo "MainActivity:"
           echo "$MAIN_ACTIVITY"
 
-          # Fix the exact malformed Java string literals reported
-          # by the failed compile.
+          echo
+          echo "Checking malformed Java strings before fix:"
+          grep -n \
+            -E '""NOT_READY""|""ERROR""' \
+            "$MAIN_ACTIVITY" || true
+
+          # Fix only the malformed strings reported by javac.
           sed -i \
             's/""NOT_READY""/"NOT_READY"/g' \
             "$MAIN_ACTIVITY"
@@ -936,13 +940,11 @@ jobs:
 
           echo
           echo "Checking corrected lines:"
-
           grep -n \
             -E 'NOT_READY|ERROR' \
             "$MAIN_ACTIVITY" \
             | head -20 || true
 
-          # The malformed double-double quote pattern must not remain.
           if grep -q \
             '""NOT_READY""\|""ERROR""' \
             "$MAIN_ACTIVITY"; then
@@ -951,7 +953,8 @@ jobs:
             exit 1
           fi
 
-          echo "MainActivity Java quote fix: PASS"
+          echo
+          echo "MainActivity Java syntax fix: PASS"
 
       # ============================================================
       # 39. VALIDATE RELEASE CONFIGURATION
