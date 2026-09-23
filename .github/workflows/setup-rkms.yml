@@ -842,7 +842,126 @@ jobs:
           ./scripts/configure-release-signing.sh
 
       # ============================================================
-      # 36. VALIDATE KEYSTORE
+      # 36. FORCE RELEASE SIGNING CONFIGURATION
+      #
+      # LAST RUN:
+      # compile + clean PASSED
+      # packageRelease FAILED because release signingConfig
+      # was missing storePassword.
+      #
+      # This step explicitly configures the release signing block.
+      # ============================================================
+      - name: Force release signing configuration
+        shell: bash
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          APP_GRADLE="android/app/build.gradle"
+
+          test -f "$APP_GRADLE"
+
+          KEYSTORE_PATH=""
+
+          for candidate in \
+            android/rkms-release.jks \
+            android/rkms-release.keystore \
+            android/app/rkms-release.jks \
+            android/app/rkms-release.keystore \
+            android/app/release.jks \
+            android/app/release.keystore
+          do
+            if [ -f "$candidate" ]; then
+              KEYSTORE_PATH="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$KEYSTORE_PATH" ]; then
+            KEYSTORE_PATH="$(
+              find android \
+                -type f \
+                \( -name "*.jks" -o -name "*.keystore" \) \
+                -print -quit || true
+            )"
+          fi
+
+          if [ -z "$KEYSTORE_PATH" ]; then
+            echo "ERROR: No release keystore found."
+            exit 1
+          fi
+
+          echo "Release keystore found."
+          echo "Keystore path: $KEYSTORE_PATH"
+
+          # Convert to an absolute path so Gradle can always resolve it.
+          KEYSTORE_ABS="$(cd "$(dirname "$KEYSTORE_PATH")" && pwd)/$(basename "$KEYSTORE_PATH")"
+
+          export RKMS_KEYSTORE_ABS="$KEYSTORE_ABS"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/build.gradle")
+          text = p.read_text()
+
+          marker = "// RKMS FORCE RELEASE SIGNING CONFIGURATION"
+
+          # Remove an earlier copy of our own injected block if one exists.
+          if marker in text:
+              text = text.split(marker, 1)[0].rstrip() + "\n"
+
+          block = r'''
+          // RKMS FORCE RELEASE SIGNING CONFIGURATION
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file(System.getenv("RKMS_KEYSTORE_ABS"))
+                      storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("RKMS_KEY_ALIAS")
+                      keyPassword System.getenv("RKMS_KEY_PASSWORD")
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+          '''
+
+          p.write_text(text.rstrip() + "\n\n" + block.strip() + "\n")
+
+          print("Release signing configuration injected.")
+          PY
+
+          echo
+          echo "Checking release signing configuration:"
+
+          grep -n \
+            -A12 \
+            -B3 \
+            "RKMS FORCE RELEASE SIGNING CONFIGURATION" \
+            "$APP_GRADLE"
+
+          echo
+          echo "Signing secrets are present."
+
+          test -n "$RKMS_KEYSTORE_PASSWORD"
+          test -n "$RKMS_KEY_ALIAS"
+          test -n "$RKMS_KEY_PASSWORD"
+
+          echo "Release signing configuration: PASS"
+
+      # ============================================================
+      # 37. VALIDATE KEYSTORE
       # ============================================================
       - name: Validate release keystore
         shell: bash
@@ -876,7 +995,7 @@ jobs:
           echo "Keystore validation: PASS"
 
       # ============================================================
-      # 37. VERIFY GRADLE VERSION
+      # 38. VERIFY GRADLE VERSION
       # ============================================================
       - name: Verify Gradle version
         shell: bash
@@ -888,18 +1007,7 @@ jobs:
           ./gradlew --version
 
       # ============================================================
-      # 38. FIX MAINACTIVITY JAVA SYNTAX
-      #
-      # LAST RUN FAILED HERE:
-      # MainActivity.java contained:
-      # ""NOT_READY""
-      # ""ERROR""
-      #
-      # Correct Java strings are:
-      # "NOT_READY"
-      # "ERROR"
-      #
-      # NOTHING BEFORE THIS STEP IS CHANGED.
+      # 39. FIX MAINACTIVITY JAVA SYNTAX
       # ============================================================
       - name: Fix MainActivity Java syntax
         shell: bash
@@ -920,16 +1028,6 @@ jobs:
             exit 1
           fi
 
-          echo "MainActivity:"
-          echo "$MAIN_ACTIVITY"
-
-          echo
-          echo "Checking malformed Java strings before fix:"
-          grep -n \
-            -E '""NOT_READY""|""ERROR""' \
-            "$MAIN_ACTIVITY" || true
-
-          # Fix only the malformed strings reported by javac.
           sed -i \
             's/""NOT_READY""/"NOT_READY"/g' \
             "$MAIN_ACTIVITY"
@@ -938,26 +1036,17 @@ jobs:
             's/""ERROR""/"ERROR"/g' \
             "$MAIN_ACTIVITY"
 
-          echo
-          echo "Checking corrected lines:"
-          grep -n \
-            -E 'NOT_READY|ERROR' \
-            "$MAIN_ACTIVITY" \
-            | head -20 || true
-
           if grep -q \
             '""NOT_READY""\|""ERROR""' \
             "$MAIN_ACTIVITY"; then
-
             echo "ERROR: Malformed Java quotes still present."
             exit 1
           fi
 
-          echo
           echo "MainActivity Java syntax fix: PASS"
 
       # ============================================================
-      # 39. VALIDATE RELEASE CONFIGURATION
+      # 40. VALIDATE RELEASE CONFIGURATION
       # ============================================================
       - name: Validate release configuration
         shell: bash
@@ -973,7 +1062,7 @@ jobs:
             :app:processReleaseMainManifest
 
       # ============================================================
-      # 40. CLEAN
+      # 41. CLEAN
       # ============================================================
       - name: Clean release build
         shell: bash
@@ -987,14 +1076,42 @@ jobs:
             clean
 
       # ============================================================
-      # 41. BUILD ONLY SIGNED RELEASE APK
+      # 42. BUILD ONLY SIGNED RELEASE APK
       # ============================================================
       - name: Build Signed Release APK
         shell: bash
+        env:
+          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
+          RKMS_KEYSTORE_ABS: ${{ github.workspace }}/source/android/rkms-release.jks
         run: |
           set -euo pipefail
 
-          cd source/android
+          cd source
+
+          # Locate the actual keystore produced by the signing setup.
+          KEYSTORE="$(
+            find android \
+              -type f \
+              \( -name "*.jks" -o -name "*.keystore" \) \
+              -print -quit || true
+          )"
+
+          if [ -z "$KEYSTORE" ]; then
+            echo "ERROR: Release keystore not found before build."
+            exit 1
+          fi
+
+          KEYSTORE_ABS="$(cd "$(dirname "$KEYSTORE")" && pwd)/$(basename "$KEYSTORE")"
+
+          echo "Using release keystore:"
+          echo "$KEYSTORE_ABS"
+
+          export RKMS_KEYSTORE_ABS="$KEYSTORE_ABS"
+
+          cd android
 
           ./gradlew \
             --no-daemon \
@@ -1002,7 +1119,7 @@ jobs:
             :app:assembleRelease
 
       # ============================================================
-      # 42. VERIFY RELEASE APK OUTPUT
+      # 43. VERIFY RELEASE APK OUTPUT
       # ============================================================
       - name: Verify release APK output
         shell: bash
@@ -1036,7 +1153,7 @@ jobs:
           echo "Release APK output: PASS"
 
       # ============================================================
-      # 43. VERIFY NO AAB
+      # 44. VERIFY NO AAB
       # ============================================================
       - name: Verify no AAB is required
         shell: bash
@@ -1059,7 +1176,7 @@ jobs:
           echo "APK-only output: PASS"
 
       # ============================================================
-      # 44. VERIFY APK PACKAGE
+      # 45. VERIFY APK PACKAGE
       # ============================================================
       - name: Verify APK package name
         shell: bash
@@ -1090,7 +1207,7 @@ jobs:
           echo "Package name: PASS"
 
       # ============================================================
-      # 45. VERIFY APK SIGNATURE
+      # 46. VERIFY APK SIGNATURE
       # ============================================================
       - name: Verify APK signature
         shell: bash
@@ -1115,7 +1232,7 @@ jobs:
           echo "APK signature: PASS"
 
       # ============================================================
-      # 46. SHA256
+      # 47. SHA256
       # ============================================================
       - name: Generate APK SHA256
         shell: bash
@@ -1134,7 +1251,7 @@ jobs:
           sha256sum "$APK"
 
       # ============================================================
-      # 47. PREPARE FINAL APK
+      # 48. PREPARE FINAL APK
       # ============================================================
       - name: Prepare final APK
         shell: bash
@@ -1162,7 +1279,7 @@ jobs:
             ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
 
       # ============================================================
-      # 48. UPLOAD ONLY FINAL SIGNED RELEASE APK
+      # 49. UPLOAD ONLY FINAL SIGNED RELEASE APK
       # ============================================================
       - name: Upload final signed release APK
         uses: actions/upload-artifact@v4
