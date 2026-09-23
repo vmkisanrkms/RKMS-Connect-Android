@@ -105,7 +105,7 @@ jobs:
             "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/aapt"
 
           test -x \
-            "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner
+            "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner"
 
           echo "ANDROID API 36: PASS"
           echo "BUILD TOOLS 36.0.0: PASS"
@@ -189,6 +189,205 @@ jobs:
 
           echo "RKMS ROOT:"
           echo "$RKMS_ROOT"
+
+
+      # ============================================================
+      # REPAIR OLD MALFORMED NATIVE SCRIPT
+      #
+      # IMPORTANT:
+      # The ZIP currently stored in the repository has a malformed
+      # setup-android-native.sh section.
+      #
+      # Repair is intentionally BEFORE bash -n source validation.
+      # ============================================================
+
+      - name: Repair RKMS native setup script
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          SCRIPT="scripts/setup-android-native.sh"
+
+          test -s "$SCRIPT"
+
+          cp \
+            "$SCRIPT" \
+            "$SCRIPT.before-repair"
+
+          python3 - "$SCRIPT" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+
+          marker = "# Stable white notification icon for FCM system notifications."
+
+          if marker not in text:
+              print("Notification icon marker not found.")
+              print("Checking whether script is already valid...")
+
+              try:
+                  import subprocess
+                  subprocess.run(
+                      ["bash", "-n", str(path)],
+                      check=True
+                  )
+                  print("Native setup script is already valid.")
+                  raise SystemExit(0)
+              except subprocess.CalledProcessError:
+                  raise SystemExit(
+                      "Native setup script is malformed and repair marker was not found."
+                  )
+
+          start = text.rfind(
+              "python3 - <<'PY3'",
+              0,
+              text.index(marker)
+          )
+
+          if start < 0:
+              raise SystemExit(
+                  "Malformed native script start marker not found."
+              )
+
+          end_marker = "\nPY3"
+          end = text.find(end_marker, text.index(marker))
+
+          if end < 0:
+              raise SystemExit(
+                  "Malformed native script end marker not found."
+              )
+
+          end += len(end_marker)
+
+          replacement = r'''# Stable white notification icon for FCM system notifications.
+
+          DRAWABLE_DIR="$RES_DIR/drawable"
+
+          mkdir -p "$DRAWABLE_DIR"
+
+          cat > "$DRAWABLE_DIR/ic_stat_rkms.xml" <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>
+          </vector>
+          XML
+
+          python3 - <<'PYMANIFEST'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+
+          if not p.exists():
+              raise SystemExit(
+                  "AndroidManifest.xml not found"
+              )
+
+          s = p.read_text()
+
+          permissions = (
+              '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
+              '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
+          )
+
+          if "android.permission.RECORD_AUDIO" not in s:
+              app_pos = s.find("<application")
+
+              if app_pos < 0:
+                  raise SystemExit(
+                      "AndroidManifest application tag missing"
+                  )
+
+              s = s[:app_pos] + permissions + s[app_pos:]
+          elif "android.permission.POST_NOTIFICATIONS" not in s:
+              app_pos = s.find("<application")
+
+              if app_pos < 0:
+                  raise SystemExit(
+                      "AndroidManifest application tag missing"
+                  )
+
+              s = (
+                  s[:app_pos]
+                  + '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
+                  + s[app_pos:]
+              )
+
+          channel_meta = (
+              '    <meta-data '
+              'android:name="com.google.firebase.messaging.default_notification_channel_id" '
+              'android:value="@string/rkms_default_notification_channel_id" />\n'
+          )
+
+          icon_meta = (
+              '    <meta-data '
+              'android:name="com.google.firebase.messaging.default_notification_icon" '
+              'android:resource="@drawable/ic_stat_rkms" />\n'
+          )
+
+          if (
+              "com.google.firebase.messaging.default_notification_channel_id"
+              not in s
+          ):
+              closing = "</application>"
+
+              if closing not in s:
+                  raise SystemExit(
+                      "AndroidManifest application closing tag missing"
+                  )
+
+              s = s.replace(
+                  closing,
+                  channel_meta + icon_meta + closing,
+                  1
+              )
+          elif (
+              "com.google.firebase.messaging.default_notification_icon"
+              not in s
+          ):
+              closing = "</application>"
+
+              if closing not in s:
+                  raise SystemExit(
+                      "AndroidManifest application closing tag missing"
+                  )
+
+              s = s.replace(
+                  closing,
+                  icon_meta + closing,
+                  1
+              )
+
+          p.write_text(s)
+          PYMANIFEST
+          '''
+
+          text = (
+              text[:start]
+              + replacement
+              + text[end:]
+          )
+
+          path.write_text(text)
+
+          print("Malformed native setup block repaired successfully.")
+          PY
+
+          chmod +x \
+            "$SCRIPT"
+
+          bash -n \
+            "$SCRIPT"
+
+          echo "RKMS NATIVE SCRIPT REPAIR: PASS"
 
 
       # ============================================================
@@ -359,157 +558,6 @@ jobs:
 
 
       # ============================================================
-      # REPAIR MALFORMED NATIVE SCRIPT
-      #
-      # IMPORTANT:
-      # The old ZIP contains a malformed section where Bash commands
-      # were accidentally placed inside a Python heredoc.
-      #
-      # This step repairs ONLY that malformed section.
-      # It does not rewrite the rest of the native script.
-      # ============================================================
-
-      - name: Repair RKMS native setup script
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          SCRIPT="scripts/setup-android-native.sh"
-
-          cp \
-            "$SCRIPT" \
-            "$SCRIPT.before-repair"
-
-          python3 - "$SCRIPT" <<'PY'
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          text = path.read_text()
-
-          start_marker = (
-              "python3 - <<'PY3'\n"
-              "from pathlib import Path\n"
-              "# Stable white notification icon"
-          )
-
-          end_marker = (
-              "\nPY3\n\n\n"
-              "MAIN=\"$MAIN_ACTIVITY\""
-          )
-
-          if start_marker not in text:
-              print("Native script repair marker not found.")
-              print("The source may already be repaired.")
-              raise SystemExit(0)
-
-          start = text.index(start_marker)
-          end = text.index(end_marker, start) + len("\nPY3")
-
-          replacement = r'''# Stable white notification icon for FCM system notifications.
-          DRAWABLE_DIR="$RES_DIR/drawable"
-
-          mkdir -p "$DRAWABLE_DIR"
-
-          cat > "$DRAWABLE_DIR/ic_stat_rkms.xml" <<'XML'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="24dp"
-              android:height="24dp"
-              android:viewportWidth="24"
-              android:viewportHeight="24">
-              <path
-                  android:fillColor="#FFFFFFFF"
-                  android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>
-          </vector>
-          XML
-
-          python3 - <<'PYMANIFEST'
-          from pathlib import Path
-
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          s = p.read_text()
-
-          perm = (
-              '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
-              '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
-          )
-
-          if "android.permission.RECORD_AUDIO" not in s:
-              pos = s.find("<application")
-
-              if pos < 0:
-                  raise SystemExit(
-                      "AndroidManifest application tag missing"
-                  )
-
-              s = s[:pos] + perm + s[pos:]
-
-          meta = (
-              '    <meta-data '
-              'android:name="com.google.firebase.messaging.default_notification_channel_id" '
-              'android:value="@string/rkms_default_notification_channel_id" />\n'
-              '    <meta-data '
-              'android:name="com.google.firebase.messaging.default_notification_icon" '
-              'android:resource="@drawable/ic_stat_rkms" />\n'
-          )
-
-          if (
-              "com.google.firebase.messaging.default_notification_channel_id"
-              not in s
-          ):
-              marker = "<application"
-
-              if marker not in s:
-                  raise SystemExit(
-                      "AndroidManifest application tag missing"
-                  )
-
-              s = s.replace(
-                  marker,
-                  '<application android:enableOnBackInvokedCallback="true"',
-                  1
-              )
-
-              marker = "</application>"
-
-              if marker not in s:
-                  raise SystemExit(
-                      "AndroidManifest application closing tag missing"
-                  )
-
-              s = s.replace(
-                  marker,
-                  meta + marker,
-                  1
-              )
-
-          p.write_text(s)
-          PYMANIFEST
-          '''
-
-          text = (
-              text[:start]
-              + replacement
-              + text[end:]
-          )
-
-          path.write_text(text)
-
-          print("Native setup malformed block repaired.")
-          PY
-
-          chmod +x \
-            "$SCRIPT"
-
-          bash -n \
-            "$SCRIPT"
-
-          echo "RKMS NATIVE SCRIPT REPAIR: PASS"
-
-
-      # ============================================================
       # NPM
       # ============================================================
 
@@ -540,8 +588,10 @@ jobs:
 
           npm run build
 
-          test -s \
-            dist/index.html
+          if [ ! -s "dist/index.html" ]; then
+            echo "::error::dist/index.html was not created."
+            exit 1
+          fi
 
           echo "WEB BUILD: PASS"
 
@@ -624,6 +674,9 @@ jobs:
           bash -n \
             "$SCRIPT"
 
+          chmod +x \
+            "$SCRIPT"
+
           ./"$SCRIPT"
 
           echo "RKMS NATIVE ANDROID SETUP: PASS"
@@ -656,27 +709,21 @@ jobs:
           test -s \
             "$MAIN_ACTIVITY"
 
-          if grep -Fq \
+          grep -Fq \
             "RKMSNativeBridge" \
             "$MAIN_ACTIVITY"
-          then
-            echo "RKMSNativeBridge: PASS"
-          fi
 
-          if grep -Fq \
+          grep -Fq \
             "FirebaseApp.initializeApp(this)" \
             "$MAIN_ACTIVITY"
-          then
-            echo "Firebase initialization: PASS"
-          fi
 
-          if grep -Fq \
+          grep -Fq \
             "onNewIntent" \
             "$MAIN_ACTIVITY"
-          then
-            echo "Notification intent handling: PASS"
-          fi
 
+          echo "RKMSNativeBridge: PASS"
+          echo "Firebase initialization: PASS"
+          echo "Notification intent handling: PASS"
           echo "MAINACTIVITY: PASS"
 
 
@@ -712,20 +759,16 @@ jobs:
 
           cd "$RKMS_ROOT"
 
-          if grep -Fq \
+          grep -Fq \
             "rkms_notifications_v2" \
             scripts/setup-android-native.sh
-          then
-            echo "Normal notification channel: PASS"
-          fi
 
-          if grep -Fq \
+          grep -Fq \
             "rkms_priority_v1" \
             scripts/setup-android-native.sh
-          then
-            echo "Priority notification channel: PASS"
-          fi
 
+          echo "Normal notification channel: PASS"
+          echo "Priority notification channel: PASS"
           echo "NOTIFICATION CHANNEL AUDIT: PASS"
 
 
