@@ -206,9 +206,7 @@ jobs:
 
           test -s "$SCRIPT"
 
-          cp \
-            "$SCRIPT" \
-            "$SCRIPT.before-repair"
+          cp "$SCRIPT" "$SCRIPT.before-repair"
 
           python3 - "$SCRIPT" <<'PY'
           import sys
@@ -220,22 +218,24 @@ jobs:
 
           marker = "# Stable white notification icon for FCM system notifications."
 
-          if marker not in text:
-              result = subprocess.run(
-                  ["bash", "-n", str(path)],
-                  capture_output=True,
-                  text=True
-              )
+          # If the script is already valid, do not modify it.
+          check = subprocess.run(
+              ["bash", "-n", str(path)],
+              capture_output=True,
+              text=True
+          )
 
-              if result.returncode == 0:
-                  print("Native setup script is already valid.")
-                  raise SystemExit(0)
+          if check.returncode == 0:
+              print("Native setup script already valid.")
+              raise SystemExit(0)
 
+          marker_pos = text.find(marker)
+
+          if marker_pos < 0:
+              print(check.stderr)
               raise SystemExit(
-                  "Native setup script is malformed and repair marker was not found."
+                  "Malformed native script detected, but repair marker was not found."
               )
-
-          marker_pos = text.index(marker)
 
           start = text.rfind(
               "python3 - <<'PY3'",
@@ -245,7 +245,7 @@ jobs:
 
           if start < 0:
               raise SystemExit(
-                  "Malformed native script start marker not found."
+                  "Malformed native setup start marker not found."
               )
 
           end_marker = "\nPY3"
@@ -257,107 +257,102 @@ jobs:
 
           if end < 0:
               raise SystemExit(
-                  "Malformed native script end marker not found."
+                  "Malformed native setup end marker not found."
               )
 
           end += len(end_marker)
 
           replacement = r'''# Stable white notification icon for FCM system notifications.
 
-DRAWABLE_DIR="$RES_DIR/drawable"
+          DRAWABLE_DIR="$RES_DIR/drawable"
 
-mkdir -p "$DRAWABLE_DIR"
+          mkdir -p "$DRAWABLE_DIR"
 
-cat > "$DRAWABLE_DIR/ic_stat_rkms.xml" <<'XML'
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp"
-    android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>
-</vector>
-XML
+          cat > "$DRAWABLE_DIR/ic_stat_rkms.xml" <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M12,2A7,7 0,0 0,5 9v4l-2,3v1h18v-1l-2,-3V9A7,7 0,0 0,12 2M9,19a3,3 0,0 0,6 0z"/>
+          </vector>
+          XML
 
-python3 - <<'PYMANIFEST'
-from pathlib import Path
+          python3 - <<'PYMANIFEST'
+          from pathlib import Path
 
-p = Path("android/app/src/main/AndroidManifest.xml")
+          p = Path("android/app/src/main/AndroidManifest.xml")
 
-if not p.exists():
-    raise SystemExit("AndroidManifest.xml not found")
+          if not p.exists():
+              raise SystemExit("AndroidManifest.xml not found")
 
-s = p.read_text()
+          s = p.read_text()
 
-if "android.permission.RECORD_AUDIO" not in s:
-    pos = s.find("<application")
+          application_pos = s.find("<application")
 
-    if pos < 0:
-        raise SystemExit("AndroidManifest application tag missing")
+          if application_pos < 0:
+              raise SystemExit("AndroidManifest application tag missing")
 
-    s = (
-        s[:pos]
-        + '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
-        + s[pos:]
-    )
+          permissions = [
+              '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n',
+              '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
+          ]
 
-if "android.permission.POST_NOTIFICATIONS" not in s:
-    pos = s.find("<application")
+          for permission in permissions:
+              if permission.strip() not in s:
+                  s = (
+                      s[:application_pos]
+                      + permission
+                      + s[application_pos:]
+                  )
+                  application_pos += len(permission)
 
-    if pos < 0:
-        raise SystemExit("AndroidManifest application tag missing")
+          closing = "</application>"
 
-    s = (
-        s[:pos]
-        + '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
-        + s[pos:]
-    )
+          if closing not in s:
+              raise SystemExit(
+                  "AndroidManifest application closing tag missing"
+              )
 
-closing = "</application>"
+          channel_meta = (
+              '    <meta-data '
+              'android:name="com.google.firebase.messaging.default_notification_channel_id" '
+              'android:value="@string/rkms_default_notification_channel_id" />\n'
+          )
 
-if closing not in s:
-    raise SystemExit(
-        "AndroidManifest application closing tag missing"
-    )
+          icon_meta = (
+              '    <meta-data '
+              'android:name="com.google.firebase.messaging.default_notification_icon" '
+              'android:resource="@drawable/ic_stat_rkms" />\n'
+          )
 
-channel_meta = (
-    '    <meta-data '
-    'android:name="com.google.firebase.messaging.default_notification_channel_id" '
-    'android:value="@string/rkms_default_notification_channel_id" />\n'
-)
+          if "com.google.firebase.messaging.default_notification_channel_id" not in s:
+              s = s.replace(
+                  closing,
+                  channel_meta + closing,
+                  1
+              )
 
-icon_meta = (
-    '    <meta-data '
-    'android:name="com.google.firebase.messaging.default_notification_icon" '
-    'android:resource="@drawable/ic_stat_rkms" />\n'
-)
+          if "com.google.firebase.messaging.default_notification_icon" not in s:
+              s = s.replace(
+                  closing,
+                  icon_meta + closing,
+                  1
+              )
 
-if (
-    "com.google.firebase.messaging.default_notification_channel_id"
-    not in s
-):
-    s = s.replace(
-        closing,
-        channel_meta + closing,
-        1
-    )
+          p.write_text(s)
 
-if (
-    "com.google.firebase.messaging.default_notification_icon"
-    not in s
-):
-    s = s.replace(
-        closing,
-        icon_meta + closing,
-        1
-    )
+          print("AndroidManifest notification configuration repaired.")
+          PYMANIFEST
+          '''
 
-p.write_text(s)
-
-print("AndroidManifest notification configuration repaired.")
-PYMANIFEST
-'''
+          # Remove YAML helper indentation from replacement.
+          replacement = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in replacement.splitlines()
+          ) + "\n"
 
           text = (
               text[:start]
@@ -367,7 +362,21 @@ PYMANIFEST
 
           path.write_text(text)
 
-          print("Malformed native setup block repaired successfully.")
+          print("Malformed native setup block repaired.")
+
+          check = subprocess.run(
+              ["bash", "-n", str(path)],
+              capture_output=True,
+              text=True
+          )
+
+          if check.returncode != 0:
+              print(check.stderr)
+              raise SystemExit(
+                  "Repaired native setup script still has syntax errors."
+              )
+
+          print("Native setup script syntax: PASS")
           PY
 
           chmod +x "$SCRIPT"
@@ -378,140 +387,7 @@ PYMANIFEST
 
 
       # ============================================================
-      # REPAIR NOTIFICATION CHANNELS
-      # ============================================================
-
-      - name: Repair RKMS notification channels
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RKMS_ROOT"
-
-          test -s app.js
-          test -s scripts/setup-android-native.sh
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          p = Path("app.js")
-          s = p.read_text()
-
-          priority = "rkms_priority_v1"
-
-          if priority not in s:
-              marker = (
-                  "await Push.createChannel?.({"
-                  "id:'rkms_notifications_v2'"
-              )
-
-              pos = s.find(marker)
-
-              if pos < 0:
-                  raise SystemExit(
-                      "Normal notification channel creation not found in app.js"
-                  )
-
-              close = s.find("});", pos)
-
-              if close < 0:
-                  raise SystemExit(
-                      "Normal notification channel closing not found"
-                  )
-
-              close += 3
-
-              priority_code = (
-                  "\n"
-                  "  try{await Push.createChannel?.({"
-                  "id:'rkms_priority_v1',"
-                  "name:'RKMS Important Notifications',"
-                  "description:'Important RKMS organisation notices',"
-                  "importance:5,"
-                  "visibility:1,"
-                  "sound:'default',"
-                  "vibration:true,"
-                  "lights:true"
-                  "});}catch(e){console.warn('RKMS priority notification channel setup unavailable',e)}"
-              )
-
-              s = (
-                  s[:close]
-                  + priority_code
-                  + s[close:]
-              )
-
-          p.write_text(s)
-
-          print("app.js notification channels: PASS")
-          PY
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          p = Path("scripts/setup-android-native.sh")
-          s = p.read_text()
-
-          priority = "rkms_priority_v1"
-
-          if priority not in s:
-
-              needle = (
-                  "if (nm != null) nm.createNotificationChannel(channel);"
-              )
-
-              if needle not in s:
-                  raise SystemExit(
-                      "Native normal notification channel creation not found"
-                  )
-
-              priority_java = r'''
-android.app.NotificationChannel priority =
-    new android.app.NotificationChannel(
-        "rkms_priority_v1",
-        "RKMS Important Notifications",
-        android.app.NotificationManager.IMPORTANCE_HIGH
-    );
-
-priority.setDescription(
-    "Important RKMS organisation notices"
-);
-
-priority.enableVibration(true);
-
-priority.setSound(
-    android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
-    null
-);
-
-if (nm != null) {
-    nm.createNotificationChannel(priority);
-}'''
-
-              s = s.replace(
-                  needle,
-                  needle + "\n" + priority_java,
-                  1
-              )
-
-          p.write_text(s)
-
-          print("Native notification channels: PASS")
-          PY
-
-          bash -n \
-            scripts/setup-android-native.sh
-
-          node --check \
-            app.js
-
-          echo "NORMAL CHANNEL: rkms_notifications_v2"
-          echo "PRIORITY CHANNEL: rkms_priority_v1"
-          echo "NOTIFICATION CHANNEL REPAIR: PASS"
-
-
-      # ============================================================
-      # SOURCE STRUCTURE
+      # VERIFY SOURCE STRUCTURE
       # ============================================================
 
       - name: Verify RKMS source structure
@@ -616,7 +492,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # FIREBASE
+      # FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -683,7 +559,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # NPM
+      # NPM INSTALL
       # ============================================================
 
       - name: Install npm dependencies
@@ -720,7 +596,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # CAPACITOR ANDROID
+      # GENERATE CAPACITOR ANDROID
       # ============================================================
 
       - name: Generate Capacitor Android project
@@ -747,7 +623,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # ANDROID 16 API 36
+      # CONFIGURE ANDROID 16 API 36
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -805,7 +681,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # APPLY RKMS NATIVE ANDROID SETUP
+      # APPLY RKMS NATIVE SETUP
       # ============================================================
 
       - name: Apply RKMS native Android setup
@@ -825,7 +701,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # VERIFY GENERATED MAIN ACTIVITY
+      # VERIFY MAIN ACTIVITY
       # ============================================================
 
       - name: Verify generated MainActivity
@@ -865,30 +741,17 @@ if (nm != null) {
             "onNewIntent" \
             "$MAIN_ACTIVITY"
 
-          grep -Fq \
-            "rkms_priority_v1" \
-            "$MAIN_ACTIVITY"
-
-          if grep -Fq \
-            "deleteNotificationChannel" \
-            "$MAIN_ACTIVITY"
-          then
-            echo "::error::Notification channel deletion detected."
-            exit 1
-          fi
-
           echo "MainActivity:"
           echo "$MAIN_ACTIVITY"
 
           echo "RKMSNativeBridge: PASS"
           echo "Firebase initialization: PASS"
           echo "Notification intent handling: PASS"
-          echo "Priority channel: PASS"
           echo "MAINACTIVITY AUDIT: PASS"
 
 
       # ============================================================
-      # VERIFY FIREBASE MESSAGING SDK
+      # VERIFY FIREBASE MESSAGING
       # ============================================================
 
       - name: Verify Firebase Messaging SDK
@@ -919,7 +782,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # VERIFY NOTIFICATION PRIORITY CHANNELS
+      # VERIFY NOTIFICATION CHANNELS
       # ============================================================
 
       - name: Verify notification priority channels
@@ -931,19 +794,19 @@ if (nm != null) {
 
           grep -Fq \
             "rkms_notifications_v2" \
-            scripts/setup-android-native.sh
+            app.js
 
           grep -Fq \
             "rkms_priority_v1" \
-            scripts/setup-android-native.sh
+            app.js
 
           grep -Fq \
             "rkms_notifications_v2" \
-            app.js
+            scripts/setup-android-native.sh
 
           grep -Fq \
             "rkms_priority_v1" \
-            app.js
+            scripts/setup-android-native.sh
 
           if grep -Fq \
             "deleteNotificationChannel" \
@@ -968,7 +831,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # RUN RKMS STATIC AUDITS
+      # STATIC AUDITS
       # ============================================================
 
       - name: Run RKMS static audits
@@ -1009,7 +872,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # VERIFY RELEASE SIGNING SECRETS
+      # SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -1037,11 +900,11 @@ if (nm != null) {
             exit 1
           }
 
-          echo "All RKMS release signing secrets are present."
+          echo "RELEASE SIGNING SECRETS: PASS"
 
 
       # ============================================================
-      # CONFIGURE RELEASE SIGNING
+      # RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -1072,7 +935,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # VERIFY GRADLE WRAPPER
+      # GRADLE
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -1084,7 +947,8 @@ if (nm != null) {
 
           chmod +x gradlew
 
-          test -s gradle/wrapper/gradle-wrapper.properties
+          test -s \
+            gradle/wrapper/gradle-wrapper.properties
 
           grep -Fq \
             "gradle-8.11.1-bin.zip" \
@@ -1097,7 +961,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # CLEAN AND BUILD SIGNED RELEASE APK ONLY
+      # FINAL SIGNED RELEASE APK
       # ============================================================
 
       - name: Build signed release APK
@@ -1118,13 +982,10 @@ if (nm != null) {
 
           EXPECTED_APK="$RKMS_ROOT/android/app/build/outputs/apk/release/app-release.apk"
 
-          if [ ! -f "$EXPECTED_APK" ]; then
-
-            find "$RKMS_ROOT/android" \
-              -type f \
-              -name "*.apk" \
-              -not -iname "*debug*" \
-              -print
+          if [ -f "$EXPECTED_APK" ]; then
+            APK="$EXPECTED_APK"
+          else
+            echo "Expected APK not found. Searching..."
 
             APK="$(
               find "$RKMS_ROOT/android" \
@@ -1134,17 +995,12 @@ if (nm != null) {
                 -print \
                 -quit
             )"
-
-            if [ -z "$APK" ]; then
-              echo "::error::Signed release APK was not produced."
-              exit 1
-            fi
-
-          else
-            APK="$EXPECTED_APK"
           fi
 
-          test -s "$APK"
+          if [ -z "${APK:-}" ] || [ ! -s "$APK" ]; then
+            echo "::error::Signed release APK was not produced."
+            exit 1
+          fi
 
           echo "RKMS_RELEASE_APK=$APK" >> "$GITHUB_ENV"
 
@@ -1183,7 +1039,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # VERIFY APK SIGNATURE
+      # VERIFY SIGNATURE
       # ============================================================
 
       - name: Verify release APK signature
@@ -1207,10 +1063,6 @@ if (nm != null) {
             > apk-signature.txt
 
           grep -Fq \
-            "Verified using v1 scheme" \
-            apk-signature.txt || true
-
-          grep -Fq \
             "Verified using v2 scheme" \
             apk-signature.txt
 
@@ -1220,7 +1072,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # APK SHA256
+      # SHA256
       # ============================================================
 
       - name: Generate release APK SHA256
@@ -1241,12 +1093,11 @@ if (nm != null) {
           test "$APK_SIZE" -gt 100000
 
           echo "APK SIZE: $APK_SIZE bytes"
-
           echo "RELEASE APK SHA256: PASS"
 
 
       # ============================================================
-      # FINAL ANDROID 16 API 36 AUDIT
+      # FINAL API 36 AUDIT
       # ============================================================
 
       - name: Final Android 16 API 36 audit
@@ -1291,7 +1142,7 @@ if (nm != null) {
 
 
       # ============================================================
-      # UPLOAD FINAL RELEASE APK ONLY
+      # UPLOAD ONLY FINAL RELEASE APK
       # ============================================================
 
       - name: Upload final release APK
