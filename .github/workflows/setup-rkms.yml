@@ -150,9 +150,6 @@ jobs:
 
           unzip -q "$SOURCE_ZIP" -d extracted
 
-          echo "Extracted source:"
-          find extracted -maxdepth 3 -type f | head -100
-
           PACKAGE_JSON="$(find extracted -type f -name package.json -print -quit || true)"
 
           if [ -z "$PACKAGE_JSON" ]; then
@@ -167,8 +164,6 @@ jobs:
           cp -a "$SOURCE_ROOT"/. source/
 
           echo "Source copied."
-
-          ls -la source
 
       # ============================================================
       # 7. VERIFY REQUIRED FILES
@@ -194,10 +189,10 @@ jobs:
           )
 
           for file in "${REQUIRED_FILES[@]}"; do
-            if [ ! -f "$file" ]; then
+            test -f "$file" || {
               echo "ERROR: Missing required file: $file"
               exit 1
-            fi
+            }
 
             echo "FOUND: $file"
           done
@@ -275,7 +270,7 @@ jobs:
           NODE
 
       # ============================================================
-      # 10. VERIFY FIREBASE CONFIG
+      # 10. VERIFY FIREBASE
       # ============================================================
       - name: Verify Firebase configuration
         shell: bash
@@ -293,7 +288,7 @@ jobs:
           echo "Firebase package: PASS"
 
       # ============================================================
-      # 11. VERIFY FCM PIPELINE
+      # 11. VERIFY FCM
       # ============================================================
       - name: Verify FCM pipeline
         shell: bash
@@ -304,8 +299,6 @@ jobs:
 
           if [ -f scripts/verify-fcm-pipeline.py ]; then
             python3 scripts/verify-fcm-pipeline.py
-          else
-            echo "FCM verification script not found; continuing."
           fi
 
       # ============================================================
@@ -320,8 +313,6 @@ jobs:
 
           if [ -f scripts/verify-saved-login.py ]; then
             python3 scripts/verify-saved-login.py
-          else
-            echo "Saved-login verification script not found; continuing."
           fi
 
       # ============================================================
@@ -336,8 +327,6 @@ jobs:
 
           if [ -f scripts/verify-native-bridge.py ]; then
             python3 scripts/verify-native-bridge.py
-          else
-            echo "Native bridge verification script not found; continuing."
           fi
 
       # ============================================================
@@ -352,8 +341,6 @@ jobs:
 
           if [ -f scripts/verify-rkms-final.py ]; then
             python3 scripts/verify-rkms-final.py
-          else
-            echo "RKMS final verification script not found; continuing."
           fi
 
       # ============================================================
@@ -368,8 +355,6 @@ jobs:
 
           if [ -f scripts/verify-chat-mic-final.py ]; then
             python3 scripts/verify-chat-mic-final.py
-          else
-            echo "Chat mic verification script not found; continuing."
           fi
 
       # ============================================================
@@ -384,8 +369,6 @@ jobs:
 
           if [ -f scripts/verify-final-three-point-fix.py ]; then
             python3 scripts/verify-final-three-point-fix.py
-          else
-            echo "Three-point verification script not found; continuing."
           fi
 
       # ============================================================
@@ -400,12 +383,10 @@ jobs:
 
           if [ -f scripts/verify-android-16.py ]; then
             python3 scripts/verify-android-16.py
-          else
-            echo "Android 16 verification script not found; continuing."
           fi
 
       # ============================================================
-      # 18. INSTALL NPM DEPENDENCIES
+      # 18. NPM
       # ============================================================
       - name: Install npm dependencies
         shell: bash
@@ -413,11 +394,10 @@ jobs:
           set -euo pipefail
 
           cd source
-
           npm ci --no-audit --no-fund
 
       # ============================================================
-      # 19. VERIFY INSTALLED PUSH NOTIFICATIONS
+      # 19. PUSH NOTIFICATIONS
       # ============================================================
       - name: Verify installed push notifications
         shell: bash
@@ -428,17 +408,15 @@ jobs:
 
           node -e "
             const p=require('./node_modules/@capacitor/push-notifications/package.json');
-
             if(p.version!=='6.0.3'){
               console.error('Wrong push-notifications version:',p.version);
               process.exit(1);
             }
-
             console.log('push-notifications:',p.version);
           "
 
       # ============================================================
-      # 20. BUILD WEB
+      # 20. WEB BUILD
       # ============================================================
       - name: Build web application
         shell: bash
@@ -455,7 +433,7 @@ jobs:
           echo "Web build: PASS"
 
       # ============================================================
-      # 21. CREATE FRESH ANDROID PROJECT
+      # 21. FRESH ANDROID
       # ============================================================
       - name: Create fresh Android project
         shell: bash
@@ -469,7 +447,7 @@ jobs:
           npx cap add android
 
       # ============================================================
-      # 22. CONFIGURE ANDROID 16 / API 36
+      # 22. ANDROID 16
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
@@ -483,7 +461,7 @@ jobs:
           ./scripts/configure-android-16.sh
 
       # ============================================================
-      # 23. FORCE SDK CONFIGURATION
+      # 23. SDK 36
       # ============================================================
       - name: Enforce Android SDK 36
         shell: bash
@@ -508,13 +486,6 @@ jobs:
 
           fi
 
-          grep -RniE \
-            "compileSdkVersion[[:space:]]*=[[:space:]]*36|compileSdk[[:space:]]+36" \
-            android \
-            --include="*.gradle" \
-            --include="*.gradle.kts" \
-            | head -20 || true
-
       # ============================================================
       # 24. CAPACITOR SYNC
       # ============================================================
@@ -528,7 +499,7 @@ jobs:
           npx cap sync android
 
       # ============================================================
-      # 25. RKMS NATIVE SETUP
+      # 25. NATIVE SETUP
       # ============================================================
       - name: Setup RKMS Android native integration
         shell: bash
@@ -542,7 +513,7 @@ jobs:
           ./scripts/setup-android-native.sh
 
       # ============================================================
-      # 26. FIX GOOGLE SERVICES VERSION
+      # 26. GOOGLE SERVICES FIX
       # ============================================================
       - name: Fix Google Services plugin version
         shell: bash
@@ -553,12 +524,6 @@ jobs:
 
           test -f android/build.gradle
           test -f android/app/build.gradle
-
-          echo "Google Services references before fix:"
-          grep -nE \
-            "google-services|google\.gms" \
-            android/build.gradle \
-            android/app/build.gradle || true
 
           sed -i \
             's/com\.google\.gms:google-services:4\.4\.0/com.google.gms:google-services:4.4.3/g' \
@@ -572,15 +537,8 @@ jobs:
               >> android/app/build.gradle
           fi
 
-          echo
-          echo "Google Services references after fix:"
-          grep -nE \
-            "google-services|google\.gms" \
-            android/build.gradle \
-            android/app/build.gradle || true
-
       # ============================================================
-      # 27. VERIFY GOOGLE SERVICES PLUGIN
+      # 27. VERIFY GOOGLE SERVICES
       # ============================================================
       - name: Verify Google Services plugin
         shell: bash
@@ -588,9 +546,6 @@ jobs:
           set -euo pipefail
 
           cd source
-
-          test -f android/build.gradle
-          test -f android/app/build.gradle
 
           grep -q \
             "com.google.gms:google-services:4.4.3" \
@@ -600,11 +555,10 @@ jobs:
             "com.google.gms.google-services" \
             android/app/build.gradle
 
-          echo "Google Services plugin 4.4.3: PASS"
-          echo "Google Services app plugin: PASS"
+          echo "Google Services: PASS"
 
       # ============================================================
-      # 28. VERIFY FIREBASE NATIVE CONFIG
+      # 28. VERIFY FIREBASE NATIVE
       # ============================================================
       - name: Verify Firebase native configuration
         shell: bash
@@ -619,7 +573,7 @@ jobs:
             '"package_name"[[:space:]]*:[[:space:]]*"org.rkms.connect"' \
             android/app/google-services.json
 
-          echo "android/app/google-services.json: PASS"
+          echo "Firebase native configuration: PASS"
 
       # ============================================================
       # 29. VERIFY MAIN ACTIVITY
@@ -638,21 +592,16 @@ jobs:
               -print -quit || true
           )"
 
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity.java not found."
-            exit 1
-          fi
-
-          echo "MainActivity: $MAIN_ACTIVITY"
+          test -n "$MAIN_ACTIVITY"
 
           grep -q "RKMSNativeBridge" "$MAIN_ACTIVITY"
           grep -q "FirebaseApp.initializeApp" "$MAIN_ACTIVITY"
           grep -q "onNewIntent" "$MAIN_ACTIVITY"
 
-          echo "MainActivity native bridge: PASS"
+          echo "MainActivity: PASS"
 
       # ============================================================
-      # 30. ENSURE FIREBASE MESSAGING
+      # 30. FIREBASE MESSAGING
       # ============================================================
       - name: Ensure Firebase Messaging dependency
         shell: bash
@@ -663,15 +612,7 @@ jobs:
 
           APP_GRADLE="android/app/build.gradle"
 
-          test -f "$APP_GRADLE"
-
-          if grep -q "firebase-messaging" "$APP_GRADLE"; then
-
-            echo "Firebase Messaging dependency already present."
-
-          else
-
-            echo "Firebase Messaging dependency missing. Adding it."
+          if ! grep -q "firebase-messaging" "$APP_GRADLE"; then
 
             python3 - <<'PY'
           from pathlib import Path
@@ -693,8 +634,6 @@ jobs:
           )
 
           p.write_text(text)
-
-          print("Firebase Messaging dependency added.")
           PY
 
           fi
@@ -702,7 +641,7 @@ jobs:
           grep -q "firebase-messaging" "$APP_GRADLE"
 
       # ============================================================
-      # 31. VERIFY FINAL ANDROID CONFIGURATION
+      # 31. FINAL ANDROID CONFIG
       # ============================================================
       - name: Verify final Android configuration
         shell: bash
@@ -715,31 +654,20 @@ jobs:
 
           chmod +x android/gradlew
 
-          echo "Gradle wrapper:"
           grep -n "distributionUrl" \
             android/gradle/wrapper/gradle-wrapper.properties
 
-          echo
-          echo "Compile SDK / target SDK:"
           grep -RniE \
             "compileSdk|targetSdk|minSdk" \
             android \
             --include="*.gradle" \
             --include="*.gradle.kts" \
-            | head -40
+            | head -40 || true
 
-          echo
-          echo "Google Services:"
-          grep -nE \
-            "google-services|google\.gms" \
-            android/build.gradle \
-            android/app/build.gradle
-
-          echo
           echo "Android configuration: PASS"
 
       # ============================================================
-      # 32. RESOLVE GRADLE DEPENDENCIES
+      # 32. GRADLE DEPENDENCIES
       # ============================================================
       - name: Resolve Gradle dependencies
         shell: bash
@@ -754,7 +682,7 @@ jobs:
             dependencies
 
       # ============================================================
-      # 33. STATIC ANDROID AUDIT
+      # 33. STATIC AUDIT
       # ============================================================
       - name: Static Android audit
         shell: bash
@@ -770,10 +698,7 @@ jobs:
               -print -quit
           )"
 
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity.java not found."
-            exit 1
-          fi
+          test -n "$MAIN_ACTIVITY"
 
           grep -q "FirebaseApp.initializeApp" "$MAIN_ACTIVITY"
           grep -q "RKMSNativeBridge" "$MAIN_ACTIVITY"
@@ -788,7 +713,7 @@ jobs:
           echo "Static Android audit: PASS"
 
       # ============================================================
-      # 34. VERIFY RELEASE SIGNING SECRETS
+      # 34. SIGNING SECRETS
       # ============================================================
       - name: Verify release signing secrets
         shell: bash
@@ -800,25 +725,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "$RKMS_KEYSTORE_BASE64" || {
-            echo "ERROR: RKMS_KEYSTORE_BASE64 secret missing."
-            exit 1
-          }
-
-          test -n "$RKMS_KEYSTORE_PASSWORD" || {
-            echo "ERROR: RKMS_KEYSTORE_PASSWORD secret missing."
-            exit 1
-          }
-
-          test -n "$RKMS_KEY_ALIAS" || {
-            echo "ERROR: RKMS_KEY_ALIAS secret missing."
-            exit 1
-          }
-
-          test -n "$RKMS_KEY_PASSWORD" || {
-            echo "ERROR: RKMS_KEY_PASSWORD secret missing."
-            exit 1
-          }
+          test -n "$RKMS_KEYSTORE_BASE64"
+          test -n "$RKMS_KEYSTORE_PASSWORD"
+          test -n "$RKMS_KEY_ALIAS"
+          test -n "$RKMS_KEY_PASSWORD"
 
           echo "Release signing secrets: PASS"
 
@@ -842,19 +752,21 @@ jobs:
           ./scripts/configure-release-signing.sh
 
       # ============================================================
-      # 36. FORCE RELEASE SIGNING CONFIGURATION
+      # 36. FIX RELEASE SIGNING
       #
-      # LAST RUN:
-      # compile + clean PASSED
-      # packageRelease FAILED because release signingConfig
-      # was missing storePassword.
+      # IMPORTANT:
+      # Do NOT use System.getenv("RKMS_KEYSTORE_ABS") inside
+      # build.gradle for storeFile.
       #
-      # This step explicitly configures the release signing block.
+      # The previous run failed because that variable became null
+      # in the next Gradle process.
+      #
+      # We now write the actual absolute keystore path directly
+      # into build.gradle.
       # ============================================================
-      - name: Force release signing configuration
+      - name: Fix release signing configuration
         shell: bash
         env:
-          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
           RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
           RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
           RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
@@ -867,97 +779,93 @@ jobs:
 
           test -f "$APP_GRADLE"
 
-          KEYSTORE_PATH=""
+          KEYSTORE="$(
+            find android \
+              -type f \
+              \( -name "*.jks" -o -name "*.keystore" \) \
+              -print -quit || true
+          )"
 
-          for candidate in \
-            android/rkms-release.jks \
-            android/rkms-release.keystore \
-            android/app/rkms-release.jks \
-            android/app/rkms-release.keystore \
-            android/app/release.jks \
-            android/app/release.keystore
-          do
-            if [ -f "$candidate" ]; then
-              KEYSTORE_PATH="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$KEYSTORE_PATH" ]; then
-            KEYSTORE_PATH="$(
-              find android \
-                -type f \
-                \( -name "*.jks" -o -name "*.keystore" \) \
-                -print -quit || true
-            )"
-          fi
-
-          if [ -z "$KEYSTORE_PATH" ]; then
-            echo "ERROR: No release keystore found."
+          if [ -z "$KEYSTORE" ]; then
+            echo "ERROR: Release keystore not found."
             exit 1
           fi
 
-          echo "Release keystore found."
-          echo "Keystore path: $KEYSTORE_PATH"
+          KEYSTORE_ABS="$(cd "$(dirname "$KEYSTORE")" && pwd)/$(basename "$KEYSTORE")"
 
-          # Convert to an absolute path so Gradle can always resolve it.
-          KEYSTORE_ABS="$(cd "$(dirname "$KEYSTORE_PATH")" && pwd)/$(basename "$KEYSTORE_PATH")"
+          echo "Release keystore located."
+          echo "Path:"
+          echo "$KEYSTORE_ABS"
 
           export RKMS_KEYSTORE_ABS="$KEYSTORE_ABS"
 
-          python3 - <<'PY'
+          python3 - "$KEYSTORE_ABS" <<'PY'
           from pathlib import Path
+          import sys
 
           p = Path("android/app/build.gradle")
           text = p.read_text()
 
+          keystore = sys.argv[1]
+
           marker = "// RKMS FORCE RELEASE SIGNING CONFIGURATION"
 
-          # Remove an earlier copy of our own injected block if one exists.
           if marker in text:
               text = text.split(marker, 1)[0].rstrip() + "\n"
 
-          block = r'''
+          # Escape for Groovy single-quoted string.
+          keystore_escaped = (
+              keystore
+              .replace("\\", "\\\\")
+              .replace("'", "\\'")
+          )
+
+          block = f"""
           // RKMS FORCE RELEASE SIGNING CONFIGURATION
-          android {
-              signingConfigs {
-                  release {
-                      storeFile file(System.getenv("RKMS_KEYSTORE_ABS"))
-                      storePassword System.getenv("RKMS_KEYSTORE_PASSWORD")
-                      keyAlias System.getenv("RKMS_KEY_ALIAS")
-                      keyPassword System.getenv("RKMS_KEY_PASSWORD")
-                  }
-              }
+          android {{
+              signingConfigs {{
+                  release {{
+                      storeFile file('{keystore_escaped}')
+                      storePassword System.getenv('RKMS_KEYSTORE_PASSWORD')
+                      keyAlias System.getenv('RKMS_KEY_ALIAS')
+                      keyPassword System.getenv('RKMS_KEY_PASSWORD')
+                  }}
+              }}
 
-              buildTypes {
-                  release {
+              buildTypes {{
+                  release {{
                       signingConfig signingConfigs.release
-                  }
-              }
-          }
-          '''
+                  }}
+              }}
+          }}
+          """
 
-          p.write_text(text.rstrip() + "\n\n" + block.strip() + "\n")
+          p.write_text(
+              text.rstrip() +
+              "\n\n" +
+              block.strip() +
+              "\n"
+          )
 
-          print("Release signing configuration injected.")
+          print("Release signing configuration written.")
+          print("Absolute keystore path written into Gradle configuration.")
           PY
 
           echo
-          echo "Checking release signing configuration:"
-
+          echo "Release signing block:"
           grep -n \
-            -A12 \
-            -B3 \
+            -A14 \
+            -B2 \
             "RKMS FORCE RELEASE SIGNING CONFIGURATION" \
             "$APP_GRADLE"
 
-          echo
-          echo "Signing secrets are present."
+          test -f "$KEYSTORE_ABS"
 
           test -n "$RKMS_KEYSTORE_PASSWORD"
           test -n "$RKMS_KEY_ALIAS"
           test -n "$RKMS_KEY_PASSWORD"
 
+          echo
           echo "Release signing configuration: PASS"
 
       # ============================================================
@@ -979,10 +887,7 @@ jobs:
               -print -quit || true
           )"
 
-          if [ -z "$KEYSTORE" ]; then
-            echo "ERROR: Release keystore not found."
-            exit 1
-          fi
+          test -n "$KEYSTORE"
 
           echo "Keystore found."
 
@@ -995,7 +900,7 @@ jobs:
           echo "Keystore validation: PASS"
 
       # ============================================================
-      # 38. VERIFY GRADLE VERSION
+      # 38. GRADLE VERSION
       # ============================================================
       - name: Verify Gradle version
         shell: bash
@@ -1007,7 +912,7 @@ jobs:
           ./gradlew --version
 
       # ============================================================
-      # 39. FIX MAINACTIVITY JAVA SYNTAX
+      # 39. FIX MAINACTIVITY JAVA
       # ============================================================
       - name: Fix MainActivity Java syntax
         shell: bash
@@ -1023,10 +928,7 @@ jobs:
               -print -quit || true
           )"
 
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity.java not found."
-            exit 1
-          fi
+          test -n "$MAIN_ACTIVITY"
 
           sed -i \
             's/""NOT_READY""/"NOT_READY"/g' \
@@ -1050,6 +952,10 @@ jobs:
       # ============================================================
       - name: Validate release configuration
         shell: bash
+        env:
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -1081,37 +987,13 @@ jobs:
       - name: Build Signed Release APK
         shell: bash
         env:
-          RKMS_KEYSTORE_BASE64: ${{ secrets.RKMS_KEYSTORE_BASE64 }}
           RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
           RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
           RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
-          RKMS_KEYSTORE_ABS: ${{ github.workspace }}/source/android/rkms-release.jks
         run: |
           set -euo pipefail
 
-          cd source
-
-          # Locate the actual keystore produced by the signing setup.
-          KEYSTORE="$(
-            find android \
-              -type f \
-              \( -name "*.jks" -o -name "*.keystore" \) \
-              -print -quit || true
-          )"
-
-          if [ -z "$KEYSTORE" ]; then
-            echo "ERROR: Release keystore not found before build."
-            exit 1
-          fi
-
-          KEYSTORE_ABS="$(cd "$(dirname "$KEYSTORE")" && pwd)/$(basename "$KEYSTORE")"
-
-          echo "Using release keystore:"
-          echo "$KEYSTORE_ABS"
-
-          export RKMS_KEYSTORE_ABS="$KEYSTORE_ABS"
-
-          cd android
+          cd source/android
 
           ./gradlew \
             --no-daemon \
@@ -1119,7 +1001,7 @@ jobs:
             :app:assembleRelease
 
       # ============================================================
-      # 43. VERIFY RELEASE APK OUTPUT
+      # 43. VERIFY RELEASE APK
       # ============================================================
       - name: Verify release APK output
         shell: bash
@@ -1162,21 +1044,21 @@ jobs:
 
           cd source
 
-          echo "This workflow intentionally builds APK only."
+          echo "APK-only workflow."
 
           if find android/app/build/outputs \
             -type f \
             -name "*.aab" \
             | grep -q .; then
 
-            echo "ERROR: AAB was generated. APK-only workflow expected."
+            echo "ERROR: AAB generated."
             exit 1
           fi
 
           echo "APK-only output: PASS"
 
       # ============================================================
-      # 45. VERIFY APK PACKAGE
+      # 45. VERIFY PACKAGE
       # ============================================================
       - name: Verify APK package name
         shell: bash
@@ -1207,7 +1089,7 @@ jobs:
           echo "Package name: PASS"
 
       # ============================================================
-      # 46. VERIFY APK SIGNATURE
+      # 46. VERIFY SIGNATURE
       # ============================================================
       - name: Verify APK signature
         shell: bash
