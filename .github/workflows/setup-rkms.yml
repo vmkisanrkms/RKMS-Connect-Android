@@ -193,12 +193,6 @@ jobs:
 
       # ============================================================
       # REPAIR OLD MALFORMED NATIVE SCRIPT
-      #
-      # IMPORTANT:
-      # The ZIP currently stored in the repository has a malformed
-      # setup-android-native.sh section.
-      #
-      # Repair is intentionally BEFORE bash -n source validation.
       # ============================================================
 
       - name: Repair RKMS native setup script
@@ -218,6 +212,7 @@ jobs:
 
           python3 - "$SCRIPT" <<'PY'
           import sys
+          import subprocess
           from pathlib import Path
 
           path = Path(sys.argv[1])
@@ -225,27 +220,36 @@ jobs:
 
           marker = "# Stable white notification icon for FCM system notifications."
 
-          if marker not in text:
-              print("Notification icon marker not found.")
-              print("Checking whether script is already valid...")
+          # ----------------------------------------------------------
+          # If already valid, do not modify it.
+          # ----------------------------------------------------------
 
-              try:
-                  import subprocess
-                  subprocess.run(
-                      ["bash", "-n", str(path)],
-                      check=True
-                  )
+          if marker not in text:
+
+              result = subprocess.run(
+                  ["bash", "-n", str(path)],
+                  capture_output=True,
+                  text=True
+              )
+
+              if result.returncode == 0:
                   print("Native setup script is already valid.")
                   raise SystemExit(0)
-              except subprocess.CalledProcessError:
-                  raise SystemExit(
-                      "Native setup script is malformed and repair marker was not found."
-                  )
+
+              raise SystemExit(
+                  "Native setup script is malformed and repair marker was not found."
+              )
+
+          marker_pos = text.index(marker)
+
+          # ----------------------------------------------------------
+          # Find the malformed Python heredoc opening.
+          # ----------------------------------------------------------
 
           start = text.rfind(
               "python3 - <<'PY3'",
               0,
-              text.index(marker)
+              marker_pos
           )
 
           if start < 0:
@@ -253,8 +257,15 @@ jobs:
                   "Malformed native script start marker not found."
               )
 
+          # ----------------------------------------------------------
+          # Find the old PY3 closing marker.
+          # ----------------------------------------------------------
+
           end_marker = "\nPY3"
-          end = text.find(end_marker, text.index(marker))
+          end = text.find(
+              end_marker,
+              marker_pos
+          )
 
           if end < 0:
               raise SystemExit(
@@ -262,6 +273,10 @@ jobs:
               )
 
           end += len(end_marker)
+
+          # ----------------------------------------------------------
+          # Correct Bash + Python structure.
+          # ----------------------------------------------------------
 
           replacement = r'''# Stable white notification icon for FCM system notifications.
 
@@ -293,12 +308,12 @@ jobs:
 
           s = p.read_text()
 
-          permissions = (
-              '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
-              '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
-          )
+          # ----------------------------------------------------------
+          # RECORD_AUDIO permission
+          # ----------------------------------------------------------
 
           if "android.permission.RECORD_AUDIO" not in s:
+
               app_pos = s.find("<application")
 
               if app_pos < 0:
@@ -306,8 +321,18 @@ jobs:
                       "AndroidManifest application tag missing"
                   )
 
-              s = s[:app_pos] + permissions + s[app_pos:]
-          elif "android.permission.POST_NOTIFICATIONS" not in s:
+              s = (
+                  s[:app_pos]
+                  + '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
+                  + s[app_pos:]
+              )
+
+          # ----------------------------------------------------------
+          # POST_NOTIFICATIONS permission
+          # ----------------------------------------------------------
+
+          if "android.permission.POST_NOTIFICATIONS" not in s:
+
               app_pos = s.find("<application")
 
               if app_pos < 0:
@@ -321,11 +346,19 @@ jobs:
                   + s[app_pos:]
               )
 
+          # ----------------------------------------------------------
+          # Firebase default notification channel
+          # ----------------------------------------------------------
+
           channel_meta = (
               '    <meta-data '
               'android:name="com.google.firebase.messaging.default_notification_channel_id" '
               'android:value="@string/rkms_default_notification_channel_id" />\n'
           )
+
+          # ----------------------------------------------------------
+          # Firebase default notification icon
+          # ----------------------------------------------------------
 
           icon_meta = (
               '    <meta-data '
@@ -333,33 +366,27 @@ jobs:
               'android:resource="@drawable/ic_stat_rkms" />\n'
           )
 
+          closing = "</application>"
+
+          if closing not in s:
+              raise SystemExit(
+                  "AndroidManifest application closing tag missing"
+              )
+
           if (
               "com.google.firebase.messaging.default_notification_channel_id"
               not in s
           ):
-              closing = "</application>"
-
-              if closing not in s:
-                  raise SystemExit(
-                      "AndroidManifest application closing tag missing"
-                  )
-
               s = s.replace(
                   closing,
-                  channel_meta + icon_meta + closing,
+                  channel_meta + closing,
                   1
               )
-          elif (
+
+          if (
               "com.google.firebase.messaging.default_notification_icon"
               not in s
           ):
-              closing = "</application>"
-
-              if closing not in s:
-                  raise SystemExit(
-                      "AndroidManifest application closing tag missing"
-                  )
-
               s = s.replace(
                   closing,
                   icon_meta + closing,
@@ -367,6 +394,8 @@ jobs:
               )
 
           p.write_text(s)
+
+          print("AndroidManifest notification configuration repaired.")
           PYMANIFEST
           '''
 
@@ -588,10 +617,8 @@ jobs:
 
           npm run build
 
-          if [ ! -s "dist/index.html" ]; then
-            echo "::error::dist/index.html was not created."
-            exit 1
-          fi
+          test -s \
+            dist/index.html
 
           echo "WEB BUILD: PASS"
 
@@ -624,7 +651,7 @@ jobs:
 
 
       # ============================================================
-      # ANDROID 16
+      # ANDROID 16 API 36
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -683,7 +710,130 @@ jobs:
 
 
       # ============================================================
-      # MAIN ACTIVITY
+      # REPAIR / VERIFY GENERATED MAIN ACTIVITY
+      # ============================================================
+
+      - name: Repair generated MainActivity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          MAIN_ACTIVITY="$(
+            find android/app/src/main \
+              -type f \
+              -name "MainActivity.java" \
+              -print \
+              -quit
+          )"
+
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "::error::MainActivity.java not found."
+            exit 1
+          fi
+
+          test -s \
+            "$MAIN_ACTIVITY"
+
+          echo "MAIN ACTIVITY:"
+          echo "$MAIN_ACTIVITY"
+
+          python3 - "$MAIN_ACTIVITY" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+
+          firebase_line = (
+              "        com.google.firebase.FirebaseApp.initializeApp(this);"
+          )
+
+          # ----------------------------------------------------------
+          # Add Firebase initialization if missing.
+          # ----------------------------------------------------------
+
+          if "FirebaseApp.initializeApp(this)" not in text:
+
+              oncreate_marker = (
+                  "public void onCreate(android.os.Bundle savedInstanceState)"
+              )
+
+              if oncreate_marker in text:
+
+                  brace = text.find(
+                      "{",
+                      text.find(oncreate_marker)
+                  )
+
+                  if brace < 0:
+                      raise SystemExit(
+                          "onCreate opening brace not found"
+                      )
+
+                  insert_at = brace + 1
+
+                  text = (
+                      text[:insert_at]
+                      + "\n"
+                      + firebase_line
+                      + "\n"
+                      + text[insert_at:]
+                  )
+
+                  print(
+                      "Firebase initialization inserted into existing onCreate."
+                  )
+
+              else:
+
+                  class_marker = (
+                      "public class MainActivity extends BridgeActivity {"
+                  )
+
+                  if class_marker not in text:
+                      raise SystemExit(
+                          "MainActivity class marker not found."
+                      )
+
+                  replacement = (
+                      class_marker
+                      + "\n"
+                      + "    @Override\n"
+                      + "    public void onCreate(android.os.Bundle savedInstanceState) {\n"
+                      + firebase_line
+                      + "\n"
+                      + "        super.onCreate(savedInstanceState);\n"
+                      + "    }\n"
+                  )
+
+                  text = text.replace(
+                      class_marker,
+                      replacement,
+                      1
+                  )
+
+                  print(
+                      "Firebase onCreate block created."
+                  )
+
+          path.write_text(text)
+
+          print(
+              "MainActivity repair completed."
+          )
+          PY
+
+          grep -Fq \
+            "FirebaseApp.initializeApp(this)" \
+            "$MAIN_ACTIVITY"
+
+          echo "MAIN ACTIVITY REPAIR: PASS"
+
+
+      # ============================================================
+      # VERIFY GENERATED MAIN ACTIVITY
       # ============================================================
 
       - name: Verify generated MainActivity
@@ -785,6 +935,15 @@ jobs:
 
           node --check app.js
 
+          bash -n \
+            scripts/setup-android-native.sh
+
+          bash -n \
+            scripts/configure-android-16.sh
+
+          bash -n \
+            scripts/configure-release-signing.sh
+
           if [ -f scripts/verify-fcm-pipeline.py ]; then
             python3 scripts/verify-fcm-pipeline.py
           fi
@@ -801,7 +960,7 @@ jobs:
 
 
       # ============================================================
-      # ANDROID SDK AUDIT
+      # ANDROID 16 API 36 AUDIT
       # ============================================================
 
       - name: Final Android 16 API 36 audit
@@ -811,22 +970,32 @@ jobs:
 
           cd "$RKMS_ROOT/android"
 
-          grep -R \
+          if ! grep -R \
             -E \
-            "compileSdk.*36|compileSdkVersion.*36" \
+            "compileSdk(Version)?[[:space:]]*=?[[:space:]]*36" \
             . \
             --include="*.gradle" \
             --include="*.gradle.kts" \
             >/dev/null
+          then
+            echo "::error::compileSdk 36 not found."
+            exit 1
+          fi
 
-          grep -R \
+          if ! grep -R \
             -E \
-            "targetSdk.*36|targetSdkVersion.*36" \
+            "targetSdk(Version)?[[:space:]]*=?[[:space:]]*36" \
             . \
             --include="*.gradle" \
             --include="*.gradle.kts" \
             >/dev/null
+          then
+            echo "::error::targetSdk 36 not found."
+            exit 1
+          fi
 
+          echo "COMPILE SDK 36: PASS"
+          echo "TARGET SDK 36: PASS"
           echo "ANDROID 16 API 36 AUDIT: PASS"
 
 
@@ -1142,7 +1311,7 @@ jobs:
 
 
       # ============================================================
-      # UPLOAD FINAL APK
+      # UPLOAD FINAL SIGNED RELEASE APK
       # ============================================================
 
       - name: Upload final signed release APK
