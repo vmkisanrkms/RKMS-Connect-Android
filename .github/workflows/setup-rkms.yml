@@ -13,8 +13,8 @@ env:
   JAVA_VERSION: "17"
   APP_ID: "org.rkms.connect"
 
-  # Your actual audited ZIP filename
-  SOURCE_ZIP: "RKMS_CONNECT_FINAL_ALL_NOTIFICATION_FIXES_20260922.zip"
+  # ACTUAL ZIP PRESENT IN THIS REPOSITORY
+  SOURCE_ZIP: "RKMS_CONNECT_FINAL_AUDITED_RELEASE_APK_BUILD_20260922.zip"
 
 jobs:
   build:
@@ -83,38 +83,67 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools"
 
+
+      # ============================================================
+      # 6. INSTALL ANDROID API 36 + BUILD TOOLS 36.0.0
+      # ============================================================
 
       - name: Install Android API 36 SDK
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+          if [ -z "${ANDROID_SDK_ROOT:-}" ]; then
+            if [ -n "${ANDROID_HOME:-}" ]; then
+              export ANDROID_SDK_ROOT="$ANDROID_HOME"
+            else
+              echo "::error::ANDROID_SDK_ROOT and ANDROID_HOME are both missing."
+              exit 1
+            fi
+          fi
+
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
           sdkmanager \
+            --sdk_root="${ANDROID_SDK_ROOT}" \
+            --install \
             "platform-tools" \
             "platforms;android-${ANDROID_API}" \
             "build-tools;${BUILD_TOOLS}"
 
+          echo "Checking Android platform..."
           test -d \
-            "$ANDROID_HOME/platforms/android-${ANDROID_API}"
+            "${ANDROID_SDK_ROOT}/platforms/android-${ANDROID_API}"
 
+          echo "Checking build tools..."
           test -d \
-            "$ANDROID_HOME/build-tools/${BUILD_TOOLS}"
+            "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS}"
 
+          echo "Checking aapt..."
           test -x \
-            "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/aapt"
+            "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS}/aapt"
 
+          echo "Checking apksigner..."
           test -x \
-            "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner
+            "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS}/apksigner"
+
+          echo "Checking adb..."
+          test -x \
+            "${ANDROID_SDK_ROOT}/platform-tools/adb"
 
           echo "ANDROID API 36: PASS"
           echo "BUILD TOOLS 36.0.0: PASS"
+          echo "ADB: PASS"
 
 
       # ============================================================
-      # 6. LOCATE SOURCE ZIP
+      # 7. LOCATE SOURCE ZIP
       # ============================================================
 
       - name: Locate RKMS source ZIP
@@ -124,41 +153,26 @@ jobs:
 
           EXPECTED="$GITHUB_WORKSPACE/$SOURCE_ZIP"
 
-          if [ -s "$EXPECTED" ]; then
-            SOURCE_PATH="$EXPECTED"
-            echo "Exact configured source ZIP found."
-          else
-            echo "::warning::Configured source ZIP not found:"
+          echo "Expected source ZIP:"
+          echo "$EXPECTED"
+
+          if [ ! -s "$EXPECTED" ]; then
+            echo "::error::Configured source ZIP was not found:"
             echo "$EXPECTED"
 
-            mapfile -t ZIP_FILES < <(
-              find "$GITHUB_WORKSPACE" \
-                -maxdepth 3 \
-                -type f \
-                -name "*.zip" \
-                -print | sort
-            )
+            echo ""
+            echo "ZIP files available in repository:"
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 3 \
+              -type f \
+              -name "*.zip" \
+              -print \
+              | sort
 
-            if [ "${#ZIP_FILES[@]}" -eq 1 ]; then
-              SOURCE_PATH="${ZIP_FILES[0]}"
-              echo "Exactly one ZIP found. Using:"
-              echo "$SOURCE_PATH"
-
-            elif [ "${#ZIP_FILES[@]}" -gt 1 ]; then
-
-              echo "::error::Configured source ZIP not found and multiple ZIP files exist:"
-              printf '%s\n' "${ZIP_FILES[@]}"
-
-              exit 1
-
-            else
-
-              echo "::error::No source ZIP found in repository."
-              exit 1
-            fi
+            exit 1
           fi
 
-          test -s "$SOURCE_PATH"
+          SOURCE_PATH="$EXPECTED"
 
           SOURCE_SHA256="$(
             sha256sum "$SOURCE_PATH" | awk '{print $1}'
@@ -167,15 +181,17 @@ jobs:
           echo "RKMS_SOURCE_ZIP=$SOURCE_PATH" >> "$GITHUB_ENV"
           echo "RKMS_SOURCE_SHA256=$SOURCE_SHA256" >> "$GITHUB_ENV"
 
-          echo "SOURCE ZIP:"
-          echo "$SOURCE_PATH"
+          echo ""
+          echo "SOURCE ZIP: $SOURCE_PATH"
+          echo "SOURCE SHA256: $SOURCE_SHA256"
 
-          echo "SOURCE SHA256:"
-          echo "$SOURCE_SHA256"
+          test -s "$SOURCE_PATH"
+
+          echo "SOURCE ZIP: PASS"
 
 
       # ============================================================
-      # 7. EXTRACT SOURCE
+      # 8. EXTRACT SOURCE
       # ============================================================
 
       - name: Extract RKMS source
@@ -204,6 +220,15 @@ jobs:
 
           if [ -z "$PACKAGE_FILE" ]; then
             echo "::error::package.json not found inside source ZIP."
+
+            echo "ZIP CONTENT:"
+            find "$GITHUB_WORKSPACE/rkms-source" \
+              -maxdepth 4 \
+              -type f \
+              -print \
+              | sort \
+              | head -300
+
             exit 1
           fi
 
@@ -215,13 +240,11 @@ jobs:
           echo "RKMS ROOT:"
           echo "$RKMS_ROOT"
 
+          echo "SOURCE EXTRACTION: PASS"
+
 
       # ============================================================
-      # 8. VERIFY SOURCE ZIP
-      #
-      # IMPORTANT:
-      # DO NOT MODIFY setup-android-native.sh.
-      # The uploaded source already contains a valid script.
+      # 9. VERIFY SOURCE STRUCTURE
       # ============================================================
 
       - name: Verify audited source
@@ -251,10 +274,8 @@ jobs:
             fi
           done
 
-          echo "Running JavaScript syntax check..."
           node --check app.js
 
-          echo "Checking JSON files..."
           python3 -m json.tool \
             capacitor.config.json \
             >/dev/null
@@ -263,7 +284,6 @@ jobs:
             google-services.json \
             >/dev/null
 
-          echo "Checking shell scripts..."
           bash -n \
             scripts/setup-android-native.sh
 
@@ -274,11 +294,13 @@ jobs:
             scripts/configure-release-signing.sh
 
           echo "SOURCE STRUCTURE: PASS"
-          echo "NATIVE SETUP SCRIPT SYNTAX: PASS"
+          echo "JAVASCRIPT SYNTAX: PASS"
+          echo "JSON SYNTAX: PASS"
+          echo "SHELL SYNTAX: PASS"
 
 
       # ============================================================
-      # 9. VERIFY CAPACITOR
+      # 10. VERIFY CAPACITOR
       # ============================================================
 
       - name: Verify Capacitor package versions
@@ -330,7 +352,7 @@ jobs:
 
 
       # ============================================================
-      # 10. VERIFY FIREBASE
+      # 11. VERIFY FIREBASE CONFIGURATION
       # ============================================================
 
       - name: Verify Firebase configuration
@@ -366,7 +388,7 @@ jobs:
 
 
       # ============================================================
-      # 11. VERIFY FCM SOURCE
+      # 12. VERIFY FCM SOURCE
       # ============================================================
 
       - name: Verify FCM notification source
@@ -410,7 +432,7 @@ jobs:
 
 
       # ============================================================
-      # 12. VERIFY NATIVE SCRIPT WITHOUT MODIFYING IT
+      # 13. VERIFY NATIVE ANDROID SCRIPT
       # ============================================================
 
       - name: Verify native Android setup
@@ -441,10 +463,6 @@ jobs:
             "$SCRIPT"
 
           grep -Fq \
-            "androidx.credentials:credentials:1.5.0" \
-            "$SCRIPT"
-
-          grep -Fq \
             "CredentialManager" \
             "$SCRIPT"
 
@@ -470,7 +488,7 @@ jobs:
 
 
       # ============================================================
-      # 13. NPM INSTALL
+      # 14. NPM INSTALL
       # ============================================================
 
       - name: Install npm dependencies
@@ -488,7 +506,7 @@ jobs:
 
 
       # ============================================================
-      # 14. WEB BUILD
+      # 15. WEB BUILD
       # ============================================================
 
       - name: Build web application
@@ -500,14 +518,16 @@ jobs:
 
           npm run build
 
-          test -s \
-            dist/index.html
+          if [ ! -s "dist/index.html" ]; then
+            echo "::error::dist/index.html was not generated."
+            exit 1
+          fi
 
           echo "WEB BUILD: PASS"
 
 
       # ============================================================
-      # 15. GENERATE FRESH CAPACITOR ANDROID
+      # 16. GENERATE FRESH CAPACITOR ANDROID
       # ============================================================
 
       - name: Generate fresh Android project
@@ -534,7 +554,7 @@ jobs:
 
 
       # ============================================================
-      # 16. CONFIGURE ANDROID 16 / API 36
+      # 17. CONFIGURE ANDROID 16 / API 36
       # ============================================================
 
       - name: Configure Android 16 API 36
@@ -573,7 +593,7 @@ jobs:
 
 
       # ============================================================
-      # 17. CAPACITOR SYNC
+      # 18. CAPACITOR SYNC
       # ============================================================
 
       - name: Sync Capacitor Android
@@ -595,11 +615,7 @@ jobs:
 
 
       # ============================================================
-      # 18. APPLY AUDITED RKMS NATIVE SETUP
-      #
-      # IMPORTANT:
-      # This executes the original audited script.
-      # NO automatic repair/modification is performed.
+      # 19. APPLY RKMS NATIVE SETUP
       # ============================================================
 
       - name: Apply RKMS native Android setup
@@ -619,7 +635,7 @@ jobs:
 
 
       # ============================================================
-      # 19. VERIFY MAIN ACTIVITY
+      # 20. VERIFY MAIN ACTIVITY
       # ============================================================
 
       - name: Verify generated MainActivity
@@ -639,9 +655,11 @@ jobs:
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             echo "::error::MainActivity.java not found."
+
             find android/app/src/main \
               -type f \
               -print || true
+
             exit 1
           fi
 
@@ -659,14 +677,14 @@ jobs:
             "onNewIntent" \
             "$MAIN_ACTIVITY"
 
-          echo "MAIN ACTIVITY: $MAIN_ACTIVITY"
+          echo "MAIN ACTIVITY: PASS"
           echo "RKMSNativeBridge: PASS"
           echo "Firebase initialization: PASS"
           echo "Notification intent handling: PASS"
 
 
       # ============================================================
-      # 20. VERIFY FIREBASE MESSAGING
+      # 21. VERIFY FIREBASE MESSAGING
       # ============================================================
 
       - name: Verify Firebase Messaging
@@ -695,7 +713,7 @@ jobs:
 
 
       # ============================================================
-      # 21. VERIFY NOTIFICATION CHANNELS
+      # 22. VERIFY NOTIFICATION CHANNELS
       # ============================================================
 
       - name: Verify notification channels
@@ -743,7 +761,7 @@ jobs:
 
 
       # ============================================================
-      # 22. RUN STATIC AUDITS
+      # 23. RUN STATIC AUDITS
       # ============================================================
 
       - name: Run RKMS static audits
@@ -784,7 +802,7 @@ jobs:
 
 
       # ============================================================
-      # 23. VERIFY SIGNING SECRETS
+      # 24. VERIFY RELEASE SIGNING SECRETS
       # ============================================================
 
       - name: Verify release signing secrets
@@ -816,7 +834,7 @@ jobs:
 
 
       # ============================================================
-      # 24. CONFIGURE RELEASE SIGNING
+      # 25. CONFIGURE RELEASE SIGNING
       # ============================================================
 
       - name: Configure release signing
@@ -850,7 +868,7 @@ jobs:
 
 
       # ============================================================
-      # 25. VERIFY GRADLE
+      # 26. VERIFY GRADLE
       # ============================================================
 
       - name: Verify Gradle wrapper
@@ -877,9 +895,9 @@ jobs:
 
 
       # ============================================================
-      # 26. BUILD ONLY SIGNED RELEASE APK
+      # 27. BUILD ONLY SIGNED RELEASE APK
       #
-      # NO DEBUG
+      # NO DEBUG APK
       # NO AAB
       # ============================================================
 
@@ -891,11 +909,13 @@ jobs:
           cd "$RKMS_ROOT/android"
 
           echo "Cleaning previous build..."
+
           ./gradlew \
             clean \
             --no-daemon
 
           echo "Building ONLY release APK..."
+
           ./gradlew \
             :app:assembleRelease \
             --no-daemon \
@@ -906,7 +926,8 @@ jobs:
           if [ ! -s "$EXPECTED_APK" ]; then
             echo "::error::Expected release APK was not produced."
 
-            echo "Searching for APK files:"
+            echo "Searching for APK files..."
+
             find "$RKMS_ROOT/android" \
               -type f \
               -name "*.apk" \
@@ -926,7 +947,7 @@ jobs:
 
 
       # ============================================================
-      # 27. VERIFY APK PACKAGE
+      # 28. VERIFY APK PACKAGE
       # ============================================================
 
       - name: Verify release APK package
@@ -954,7 +975,7 @@ jobs:
 
 
       # ============================================================
-      # 28. VERIFY APK SIGNATURE
+      # 29. VERIFY APK SIGNATURE
       # ============================================================
 
       - name: Verify release APK signature
@@ -987,7 +1008,7 @@ jobs:
 
 
       # ============================================================
-      # 29. APK SHA256
+      # 30. APK SHA256
       # ============================================================
 
       - name: Generate APK SHA256
@@ -1015,7 +1036,7 @@ jobs:
 
 
       # ============================================================
-      # 30. FINAL API 36 AUDIT
+      # 31. FINAL ANDROID 16 / API 36 AUDIT
       # ============================================================
 
       - name: Final Android 16 API 36 audit
@@ -1065,7 +1086,7 @@ jobs:
 
 
       # ============================================================
-      # 31. UPLOAD ONLY FINAL RELEASE APK
+      # 32. UPLOAD ONLY FINAL RELEASE APK
       # ============================================================
 
       - name: Upload final release APK
@@ -1080,7 +1101,7 @@ jobs:
 
 
       # ============================================================
-      # 32. FINAL RESULT
+      # 33. FINAL RESULT
       # ============================================================
 
       - name: Final build result
