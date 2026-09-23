@@ -12,6 +12,7 @@ env:
   NODE_VERSION: "22"
   JAVA_VERSION: "17"
   APP_ID: "org.rkms.connect"
+  MIN_SDK: "23"
   SOURCE_ZIP: "RKMS_CONNECT_FINAL_FIXED_RELEASE_APK_BUILD_20260923.zip"
 
 jobs:
@@ -561,6 +562,77 @@ jobs:
 
           echo "ANDROID 16 API 36 CONFIGURATION: PASS"
 
+      - name: Configure minimum Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          candidates = [
+              Path("android/variables.gradle"),
+              Path("android/app/build.gradle"),
+              Path("android/build.gradle"),
+          ]
+
+          changed = []
+
+          for p in candidates:
+              if not p.exists():
+                  continue
+
+              s = p.read_text()
+
+              original = s
+
+              replacements = [
+                  ("minSdkVersion = 22", "minSdkVersion = 23"),
+                  ("minSdkVersion 22", "minSdkVersion 23"),
+                  ("minSdk 22", "minSdk 23"),
+                  ("minSdkVersion=22", "minSdkVersion=23"),
+              ]
+
+              for old, new in replacements:
+                  s = s.replace(old, new)
+
+              if s != original:
+                  p.write_text(s)
+                  changed.append(str(p))
+
+          print("MIN SDK FILES UPDATED:")
+          for p in changed:
+              print(p)
+          PY
+
+          if [ -f android/variables.gradle ]; then
+            sed -i \
+              -E \
+              's/(minSdkVersion[[:space:]]*=[[:space:]]*)22/\123/g' \
+              android/variables.gradle
+          fi
+
+          if grep -Rqs \
+            -E \
+            "minSdkVersion[[:space:]]*22|minSdk[[:space:]]*22" \
+            android
+          then
+            echo "::error::minSdk 22 is still present in Android project."
+
+            grep -Rni \
+              -E \
+              "minSdkVersion|minSdk" \
+              android \
+              | head -100 || true
+
+            exit 1
+          fi
+
+          echo "MIN SDK REQUIRED BY FIREBASE: 23"
+          echo "MIN SDK CONFIGURATION: PASS"
+
       - name: Sync Capacitor Android
         shell: bash
         run: |
@@ -578,6 +650,38 @@ jobs:
 
           echo "CAPACITOR SYNC: PASS"
 
+      - name: Re-apply minimum Android SDK after Capacitor sync
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          if [ -f android/variables.gradle ]; then
+            sed -i \
+              -E \
+              's/(minSdkVersion[[:space:]]*=[[:space:]]*)22/\123/g' \
+              android/variables.gradle
+          fi
+
+          if grep -Rqs \
+            -E \
+            "minSdkVersion[[:space:]]*22|minSdk[[:space:]]*22" \
+            android
+          then
+            echo "::error::minSdk 22 remains after Capacitor sync."
+
+            grep -Rni \
+              -E \
+              "minSdkVersion|minSdk" \
+              android \
+              | head -100 || true
+
+            exit 1
+          fi
+
+          echo "POST-SYNC MIN SDK 23: PASS"
+
       - name: Apply RKMS native Android setup
         shell: bash
         run: |
@@ -593,12 +697,6 @@ jobs:
 
           echo "RKMS NATIVE ANDROID SETUP: PASS"
 
-      # IMPORTANT:
-      # MainActivity directly calls FirebaseApp.initializeApp(this).
-      # The Capacitor push-notifications plugin contains Firebase Messaging,
-      # but its dependency can remain on the plugin's runtime classpath.
-      # Add Firebase Messaging directly to the app module so FirebaseApp
-      # is available during app Java compilation.
       - name: Add Firebase Messaging to app compile classpath
         shell: bash
         run: |
@@ -608,12 +706,14 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
-          import re
 
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          dependency = '    implementation "com.google.firebase:firebase-messaging:25.0.1"'
+          dependency = (
+              '    implementation '
+              '"com.google.firebase:firebase-messaging:25.0.1"'
+          )
 
           if "com.google.firebase:firebase-messaging:" not in s:
               marker = "dependencies {"
@@ -890,15 +990,43 @@ jobs:
 
           echo "GRADLE 8.11.1: PASS"
 
+      - name: Verify Android SDK levels
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT"
+
+          if [ -f android/variables.gradle ]; then
+
+            grep -Eq \
+              "compileSdkVersion[[:space:]]*=[[:space:]]*36" \
+              android/variables.gradle
+
+            grep -Eq \
+              "targetSdkVersion[[:space:]]*=[[:space:]]*36" \
+              android/variables.gradle
+
+            grep -Eq \
+              "minSdkVersion[[:space:]]*=[[:space:]]*23" \
+              android/variables.gradle
+
+          else
+            echo "::error::android/variables.gradle missing."
+            exit 1
+          fi
+
+          echo "COMPILE SDK: 36"
+          echo "TARGET SDK: 36"
+          echo "MIN SDK: 23"
+          echo "ANDROID SDK LEVELS: PASS"
+
       - name: Verify Firebase Gradle dependency resolution
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$RKMS_ROOT/android"
-
-          chmod +x \
-            gradlew
 
           echo "Resolving release runtime dependencies..."
 
@@ -915,9 +1043,6 @@ jobs:
             echo "RESOLVED FIREBASE MESSAGING DEPENDENCY: PASS"
           else
             echo "::error::Firebase Messaging was not resolved in releaseRuntimeClasspath."
-
-            echo ""
-            echo "Relevant dependency output:"
 
             grep -Ei \
               "firebase|capacitor|messaging" \
@@ -942,6 +1067,22 @@ jobs:
             --stacktrace
 
           echo "FIREBASEAPP JAVA COMPILE: PASS"
+
+      - name: Verify release manifest merge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RKMS_ROOT/android"
+
+          echo "Verifying Android release manifest..."
+
+          ./gradlew \
+            :app:processReleaseMainManifest \
+            --no-daemon \
+            --stacktrace
+
+          echo "RELEASE MANIFEST MERGE: PASS"
 
       - name: Build signed release APK
         shell: bash
@@ -1078,6 +1219,10 @@ jobs:
             "targetSdkVersion[[:space:]]*=[[:space:]]*36" \
             android/variables.gradle
 
+          grep -Eq \
+            "minSdkVersion[[:space:]]*=[[:space:]]*23" \
+            android/variables.gradle
+
           grep -Fq \
             "gradle-8.11.1-bin.zip" \
             android/gradle/wrapper/gradle-wrapper.properties
@@ -1093,6 +1238,7 @@ jobs:
           echo "Build tools: ${BUILD_TOOLS}"
           echo "Gradle: 8.11.1"
           echo "AGP: 8.9.1"
+          echo "Min SDK: ${MIN_SDK}"
           echo "Target SDK: 36"
           echo "APK: $RKMS_RELEASE_APK"
           echo "=============================================="
@@ -1120,6 +1266,7 @@ jobs:
           echo "BUILD: SUCCESS"
           echo "API: Android 36"
           echo "TARGET: Android 16"
+          echo "MIN SDK: 23"
           echo "TYPE: RELEASE APK"
           echo "DEBUG APK: NOT BUILT"
           echo "AAB: NOT BUILT"
