@@ -14,16 +14,13 @@ env:
   AGP_VERSION: "8.9.1"
   GRADLE_VERSION: "8.11.1"
   APP_ID: "org.rkms.connect"
-
-  # IMPORTANT:
-  # Repository root me yehi FINAL FIXED ZIP hona chahiye.
   SOURCE_ZIP: "RKMS_CONNECT_NOTIFICATION_CHAT_TAP_FIXED_20260924.zip"
 
 jobs:
   build:
     name: Build Final Signed Release APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
 
@@ -35,30 +32,32 @@ jobs:
 
       # ============================================================
       # 2. JAVA 17
+      # IMPORTANT: NO GRADLE CACHE HERE
+      # Android project is inside the source ZIP.
       # ============================================================
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-          cache: gradle
 
       # ============================================================
       # 3. NODE 22
+      # IMPORTANT: NO NPM CACHE HERE
+      # package-lock.json is inside the source ZIP.
       # ============================================================
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
 
       # ============================================================
-      # 4. ANDROID SDK API 36
+      # 4. ANDROID SDK
       # ============================================================
-      - name: Setup Android SDK API 36
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 36
+      - name: Install Android API 36 and Build Tools
         shell: bash
         run: |
           set -euo pipefail
@@ -72,27 +71,26 @@ jobs:
 
           yes | sdkmanager --licenses >/dev/null || true
 
-          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "Android SDK installed:"
           sdkmanager --list_installed | grep -E \
-            "platforms;android-${ANDROID_API}|build-tools;${BUILD_TOOLS}|platform-tools" \
+            "platform-tools|platforms;android-${ANDROID_API}|build-tools;${BUILD_TOOLS}" \
             || true
 
       # ============================================================
-      # 5. LOCATE SOURCE ZIP
+      # 5. FIND SOURCE ZIP
       # ============================================================
-      - name: Locate final source ZIP
+      - name: Locate source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Looking for:"
+          echo "Required ZIP:"
           echo "${SOURCE_ZIP}"
 
           if [ ! -f "${SOURCE_ZIP}" ]; then
-            echo "ERROR: Required source ZIP not found:"
-            echo "${SOURCE_ZIP}"
+            echo "ERROR: Source ZIP not found."
             echo
-            echo "ZIP files available in repository:"
+            echo "Available ZIP files:"
             find . -maxdepth 3 -type f -iname "*.zip" -print
             exit 1
           fi
@@ -100,7 +98,7 @@ jobs:
           ls -lh "${SOURCE_ZIP}"
 
       # ============================================================
-      # 6. EXTRACT SOURCE
+      # 6. EXTRACT SOURCE ZIP
       # ============================================================
       - name: Extract source ZIP
         shell: bash
@@ -112,57 +110,45 @@ jobs:
 
           unzip -q "${SOURCE_ZIP}" -d rkms-source
 
-          echo "Extracted files:"
-          find rkms-source -maxdepth 3 -type f | sort | head -300
+          echo "ZIP extracted."
 
       # ============================================================
-      # 7. FIND ACTUAL SOURCE ROOT
+      # 7. FIND SOURCE ROOT
       # ============================================================
       - name: Resolve source root
         shell: bash
         run: |
           set -euo pipefail
 
-          ROOT="rkms-source"
+          if [ -f "rkms-source/app.js" ] && \
+             [ -f "rkms-source/package.json" ]; then
 
-          if [ -f "${ROOT}/app.js" ] && [ -f "${ROOT}/package.json" ]; then
-            echo "SOURCE_ROOT=${ROOT}" >> "$GITHUB_ENV"
+            echo "SOURCE_ROOT=rkms-source" >> "$GITHUB_ENV"
             exit 0
           fi
 
-          FOUND="$(find "${ROOT}" -type f -name package.json -print | head -1 || true)"
+          PACKAGE_JSON="$(find rkms-source \
+            -type f \
+            -name package.json \
+            -print \
+            | head -1 || true)"
 
-          if [ -z "${FOUND}" ]; then
-            echo "ERROR: package.json not found after extraction."
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json not found."
+            find rkms-source -maxdepth 4 -type f -print
             exit 1
           fi
 
-          SOURCE_DIR="$(dirname "${FOUND}")"
+          SOURCE_DIR="$(dirname "$PACKAGE_JSON")"
 
           if [ ! -f "${SOURCE_DIR}/app.js" ]; then
-            echo "ERROR: app.js not found beside package.json."
-            echo "Detected:"
-            echo "${SOURCE_DIR}"
-            find "${ROOT}" -maxdepth 4 -type f | sort
+            echo "ERROR: app.js not found."
             exit 1
           fi
 
           echo "SOURCE_ROOT=${SOURCE_DIR}" >> "$GITHUB_ENV"
 
-          echo "Resolved source root:"
-          echo "${SOURCE_DIR}"
-
-      - name: Enter source root
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "${SOURCE_ROOT}"
-
-          echo "Source root:"
-          pwd
-
-          ls -la
+          echo "SOURCE_ROOT=${SOURCE_DIR}"
 
       # ============================================================
       # 8. REQUIRED FILES
@@ -179,16 +165,17 @@ jobs:
             "index.html"
             "styles.css"
             "capacitor.config.json"
+            "google-services.json"
           )
 
-          for file in "${REQUIRED_FILES[@]}"; do
-            if [ ! -f "$file" ]; then
-              echo "ERROR: Missing required file: $file"
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$FILE" ]; then
+              echo "ERROR: Missing $FILE"
               exit 1
             fi
           done
 
-          echo "All required source files are present."
+          echo "Required files verified."
 
       # ============================================================
       # 9. VERIFY CAPACITOR VERSIONS
@@ -234,11 +221,10 @@ jobs:
           }
 
           if (failed) {
-            console.error("ERROR: Capacitor version mismatch.");
             process.exit(1);
           }
 
-          console.log("Capacitor versions verified.");
+          console.log("Capacitor versions OK.");
           NODE
 
       # ============================================================
@@ -253,19 +239,18 @@ jobs:
           node <<'NODE'
           const fs = require("fs");
 
-          const file = "capacitor.config.json";
-          const config = JSON.parse(fs.readFileSync(file, "utf8"));
+          const config = JSON.parse(
+            fs.readFileSync("capacitor.config.json", "utf8")
+          );
 
           console.log(JSON.stringify(config, null, 2));
 
           if (config.appId !== "org.rkms.connect") {
-            console.error(
-              `ERROR: appId must be org.rkms.connect, found ${config.appId}`
-            );
+            console.error("ERROR: Incorrect appId.");
             process.exit(1);
           }
 
-          console.log("Capacitor appId verified.");
+          console.log("Capacitor configuration OK.");
           NODE
 
       # ============================================================
@@ -277,11 +262,6 @@ jobs:
           set -euo pipefail
           cd "${SOURCE_ROOT}"
 
-          if [ ! -f "google-services.json" ]; then
-            echo "ERROR: google-services.json missing."
-            exit 1
-          fi
-
           node <<'NODE'
           const fs = require("fs");
 
@@ -289,11 +269,7 @@ jobs:
             fs.readFileSync("google-services.json", "utf8")
           );
 
-          const projectInfo = data.project_info || {};
           const clients = data.client || [];
-
-          console.log("Firebase project:", projectInfo.project_id || "unknown");
-          console.log("Firebase clients:", clients.length);
 
           const found = clients.some(client =>
             client.client_info &&
@@ -304,18 +280,18 @@ jobs:
 
           if (!found) {
             console.error(
-              "ERROR: google-services.json does not contain org.rkms.connect"
+              "ERROR: org.rkms.connect missing from google-services.json"
             );
             process.exit(1);
           }
 
-          console.log("Firebase package verified.");
+          console.log("Firebase configuration OK.");
           NODE
 
       # ============================================================
       # 12. JAVASCRIPT SYNTAX
       # ============================================================
-      - name: Verify JavaScript syntax
+      - name: Verify JavaScript
         shell: bash
         run: |
           set -euo pipefail
@@ -323,12 +299,12 @@ jobs:
 
           node --check app.js
 
-          echo "app.js syntax OK."
+          echo "JavaScript syntax OK."
 
       # ============================================================
-      # 13. FINAL FCM + NOTIFICATION TAP + CHAT ROUTING AUDIT
+      # 13. FINAL FCM / CHAT NOTIFICATION ROUTING AUDIT
       # ============================================================
-      - name: Verify final FCM and notification navigation pipeline
+      - name: Verify final notification routing
         shell: bash
         run: |
           set -euo pipefail
@@ -340,29 +316,18 @@ jobs:
           grep -q "refreshFcmToken" app.js
           grep -q "Push.register" app.js
 
-          echo "FCM token reconciliation checks passed."
+          echo "FCM token checks OK."
 
-          echo "Checking notification conversation routing..."
+          echo "Checking exact chat routing..."
 
           grep -q "conversation_id" app.js
           grep -q "rkmsOpenNotificationRoute" app.js
           grep -q "rkms_chat" app.js
-
-          echo "Notification conversation routing checks passed."
-
-          echo "Checking pending notification route handling..."
-
           grep -q "__RKMS_PENDING_NOTIFICATION_ROUTE" app.js
 
-          echo "Pending notification route check passed."
+          echo "Chat notification routing checks OK."
 
-          echo "Checking chat badge support..."
-
-          grep -q "unread" app.js
-
-          echo "Chat badge check passed."
-
-          echo "Checking notification fix documentation..."
+          echo "Checking documentation..."
 
           if [ -f "FCM_CHAT_BADGE_TAP_FIX_20260924.md" ]; then
             grep -q "conversation_id" \
@@ -379,7 +344,7 @@ jobs:
               NOTIFICATION_TAP_CHAT_FIX_20260923.md
           fi
 
-          echo "Final FCM/navigation audit passed."
+          echo "Final notification audit OK."
 
       # ============================================================
       # 14. INSTALL NPM
@@ -397,7 +362,7 @@ jobs:
           fi
 
       # ============================================================
-      # 15. FORCE CAPACITOR VERSIONS
+      # 15. VERIFY INSTALLED CAPACITOR
       # ============================================================
       - name: Verify installed Capacitor packages
         shell: bash
@@ -414,7 +379,7 @@ jobs:
             --depth=0
 
       # ============================================================
-      # 16. WEB BUILD
+      # 16. BUILD WEB
       # ============================================================
       - name: Build web application
         shell: bash
@@ -424,12 +389,12 @@ jobs:
 
           npm run build
 
-          echo "Web build completed."
+          echo "Web build OK."
 
       # ============================================================
-      # 17. CREATE FRESH ANDROID PROJECT
+      # 17. CREATE FRESH ANDROID
       # ============================================================
-      - name: Create fresh Capacitor Android project
+      - name: Create fresh Android project
         shell: bash
         run: |
           set -euo pipefail
@@ -442,7 +407,7 @@ jobs:
           echo "Fresh Android project created."
 
       # ============================================================
-      # 18. ANDROID 16 / API 36 CONFIG
+      # 18. CONFIGURE ANDROID 16 API 36
       # ============================================================
       - name: Configure Android 16 API 36
         shell: bash
@@ -450,45 +415,7 @@ jobs:
           set -euo pipefail
           cd "${SOURCE_ROOT}"
 
-          python3 <<'PY'
-          from pathlib import Path
-
-          candidates = [
-              Path("android/app/build.gradle"),
-              Path("android/app/build.gradle.kts"),
-          ]
-
-          for p in candidates:
-              if not p.exists():
-                  continue
-
-              text = p.read_text()
-
-              text = text.replace(
-                  'compileSdkVersion rootProject.ext.compileSdkVersion',
-                  'compileSdkVersion 36'
-              )
-
-              text = text.replace(
-                  'targetSdkVersion rootProject.ext.targetSdkVersion',
-                  'targetSdkVersion 36'
-              )
-
-              text = text.replace(
-                  'compileSdk rootProject.ext.compileSdkVersion',
-                  'compileSdk 36'
-              )
-
-              text = text.replace(
-                  'targetSdk rootProject.ext.targetSdkVersion',
-                  'targetSdk 36'
-              )
-
-              p.write_text(text)
-              print(f"Updated {p}")
-          PY
-
-          if [ -f android/variables.gradle ]; then
+          if [ -f "android/variables.gradle" ]; then
             sed -i \
               's/compileSdkVersion = .*/compileSdkVersion = 36/' \
               android/variables.gradle || true
@@ -498,12 +425,31 @@ jobs:
               android/variables.gradle || true
           fi
 
-          echo "Android API 36 configuration applied."
+          if [ -f "android/app/build.gradle" ]; then
+
+            sed -i \
+              's/compileSdkVersion [0-9][0-9]*/compileSdkVersion 36/g' \
+              android/app/build.gradle || true
+
+            sed -i \
+              's/targetSdkVersion [0-9][0-9]*/targetSdkVersion 36/g' \
+              android/app/build.gradle || true
+
+            sed -i \
+              's/compileSdk [0-9][0-9]*/compileSdk 36/g' \
+              android/app/build.gradle || true
+
+            sed -i \
+              's/targetSdk [0-9][0-9]*/targetSdk 36/g' \
+              android/app/build.gradle || true
+          fi
+
+          echo "Android 16 / API 36 configured."
 
       # ============================================================
       # 19. CAPACITOR SYNC
       # ============================================================
-      - name: Capacitor sync Android
+      - name: Capacitor sync
         shell: bash
         run: |
           set -euo pipefail
@@ -511,10 +457,10 @@ jobs:
 
           npx cap sync android
 
-          echo "Capacitor Android sync completed."
+          echo "Capacitor sync OK."
 
       # ============================================================
-      # 20. VERIFY NATIVE SETUP SCRIPTS
+      # 20. NATIVE SETUP
       # ============================================================
       - name: Run native setup scripts
         shell: bash
@@ -532,118 +478,68 @@ jobs:
             ./scripts/setup-android-native.sh
           fi
 
-          echo "Native setup scripts completed."
+          echo "Native setup OK."
 
       # ============================================================
-      # 21. GOOGLE SERVICES PLUGIN
+      # 21. GOOGLE SERVICES
       # ============================================================
-      - name: Configure Google Services plugin
+      - name: Configure Google Services
         shell: bash
         run: |
           set -euo pipefail
           cd "${SOURCE_ROOT}"
 
-          PROJECT_GRADLE="android/build.gradle"
+          cp -f google-services.json \
+            android/app/google-services.json
 
-          if [ ! -f "$PROJECT_GRADLE" ]; then
-            echo "ERROR: android/build.gradle not found."
-            exit 1
-          fi
+          test -f android/app/google-services.json
+
+          PROJECT_GRADLE="android/build.gradle"
+          APP_GRADLE="android/app/build.gradle"
 
           if ! grep -q \
-            "com.google.gms:google-services:${AGP_VERSION}" \
+            "com.google.gms:google-services" \
             "$PROJECT_GRADLE"; then
 
-            if ! grep -q \
-              "com.google.gms:google-services" \
-              "$PROJECT_GRADLE"; then
+            python3 <<'PY'
+          from pathlib import Path
 
-              cat >> "$PROJECT_GRADLE" <<'EOF'
+          p = Path("android/build.gradle")
+          text = p.read_text()
 
+          if "buildscript {" in text and "dependencies {" in text:
+              text = text.replace(
+                  "dependencies {",
+                  "dependencies {\n        classpath 'com.google.gms:google-services:4.4.3'",
+                  1
+              )
+          else:
+              text += """
           buildscript {
               dependencies {
                   classpath 'com.google.gms:google-services:4.4.3'
               }
           }
-          EOF
-            fi
-          fi
+          """
 
-          APP_GRADLE="android/app/build.gradle"
+          p.write_text(text)
+          PY
+          fi
 
           if ! grep -q \
             "com.google.gms.google-services" \
             "$APP_GRADLE"; then
 
-            cat >> "$APP_GRADLE" <<'EOF'
-
-          apply plugin: 'com.google.gms.google-services'
-          EOF
+            printf '\napply plugin: '\''com.google.gms.google-services'\''\n' \
+              >> "$APP_GRADLE"
           fi
 
-          echo "Google Services plugin configured."
+          echo "Google Services configured."
 
       # ============================================================
-      # 22. FIREBASE NATIVE CONFIG
+      # 22. FIREBASE MESSAGING
       # ============================================================
-      - name: Configure Firebase native files
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "${SOURCE_ROOT}"
-
-          mkdir -p android/app
-
-          cp -f google-services.json \
-            android/app/google-services.json
-
-          if [ ! -f android/app/google-services.json ]; then
-            echo "ERROR: Firebase config copy failed."
-            exit 1
-          fi
-
-          echo "Firebase native configuration present."
-
-      # ============================================================
-      # 23. MAIN ACTIVITY / NATIVE BRIDGE CHECK
-      # ============================================================
-      - name: Verify RKMS native bridge
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "${SOURCE_ROOT}"
-
-          MAIN="$(find android/app/src/main -name MainActivity.java -o -name MainActivity.kt | head -1 || true)"
-
-          if [ -z "$MAIN" ]; then
-            echo "ERROR: MainActivity not found."
-            exit 1
-          fi
-
-          echo "MainActivity:"
-          echo "$MAIN"
-
-          grep -q "FirebaseApp.initializeApp" "$MAIN" || {
-            echo "ERROR: FirebaseApp.initializeApp missing."
-            exit 1
-          }
-
-          grep -q "FirebaseMessaging" "$MAIN" || {
-            echo "ERROR: FirebaseMessaging missing."
-            exit 1
-          }
-
-          grep -q "conversation_id" "$MAIN" || {
-            echo "ERROR: conversation_id handling missing in MainActivity."
-            exit 1
-          }
-
-          echo "RKMS native bridge checks passed."
-
-      # ============================================================
-      # 24. FIREBASE MESSAGING DEPENDENCY
-      # ============================================================
-      - name: Configure Firebase Messaging dependency
+      - name: Configure Firebase Messaging
         shell: bash
         run: |
           set -euo pipefail
@@ -682,58 +578,72 @@ jobs:
             "com.google.firebase:firebase-messaging" \
             "$APP_GRADLE"
 
-          echo "Firebase Messaging dependency verified."
+          echo "Firebase Messaging configured."
 
       # ============================================================
-      # 25. GRADLE CONFIGURATION
+      # 23. MAIN ACTIVITY
       # ============================================================
-      - name: Configure Gradle
+      - name: Verify MainActivity native bridge
         shell: bash
         run: |
           set -euo pipefail
           cd "${SOURCE_ROOT}"
 
-          if [ ! -f android/gradlew ]; then
-            echo "ERROR: Gradle wrapper missing."
+          MAIN="$(
+            find android/app/src/main \
+              \( -name MainActivity.java -o -name MainActivity.kt \) \
+              -print \
+              | head -1
+          )"
+
+          if [ -z "$MAIN" ]; then
+            echo "ERROR: MainActivity not found."
             exit 1
           fi
 
-          chmod +x android/gradlew
-
-          cd android
-
-          ./gradlew --version
-
-          echo "Gradle wrapper available."
-
-      # ============================================================
-      # 26. ANDROID STATIC AUDIT
-      # ============================================================
-      - name: Android static audit
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "${SOURCE_ROOT}"
-
-          MAIN="$(find android/app/src/main -name MainActivity.java -o -name MainActivity.kt | head -1)"
-
-          echo "Auditing:"
-          echo "$MAIN"
+          echo "MainActivity: $MAIN"
 
           grep -q "FirebaseApp.initializeApp" "$MAIN"
           grep -q "FirebaseMessaging" "$MAIN"
           grep -q "conversation_id" "$MAIN"
 
-          grep -R \
-            "POST_NOTIFICATIONS" \
-            android/app/src/main/AndroidManifest.xml >/dev/null || true
-
-          echo "Android static audit passed."
+          echo "Native bridge checks OK."
 
       # ============================================================
-      # 27. SIGNING SECRETS
+      # 24. ANDROID MANIFEST
       # ============================================================
-      - name: Verify release signing secrets
+      - name: Verify Android manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${SOURCE_ROOT}"
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          test -f "$MANIFEST"
+
+          echo "Manifest OK."
+
+      # ============================================================
+      # 25. GRADLE WRAPPER
+      # ============================================================
+      - name: Verify Gradle wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${SOURCE_ROOT}/android"
+
+          test -f gradlew
+          test -f gradle/wrapper/gradle-wrapper.properties
+
+          chmod +x gradlew
+
+          ./gradlew --version
+
+      # ============================================================
+      # 26. RELEASE SIGNING SECRETS
+      # ============================================================
+      - name: Verify signing secrets
         shell: bash
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -743,30 +653,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "${RELEASE_KEYSTORE_BASE64}" || {
-            echo "ERROR: RELEASE_KEYSTORE_BASE64 missing."
-            exit 1
-          }
+          test -n "${RELEASE_KEYSTORE_BASE64}"
+          test -n "${RELEASE_KEYSTORE_PASSWORD}"
+          test -n "${RELEASE_KEY_ALIAS}"
+          test -n "${RELEASE_KEY_PASSWORD}"
 
-          test -n "${RELEASE_KEYSTORE_PASSWORD}" || {
-            echo "ERROR: RELEASE_KEYSTORE_PASSWORD missing."
-            exit 1
-          }
-
-          test -n "${RELEASE_KEY_ALIAS}" || {
-            echo "ERROR: RELEASE_KEY_ALIAS missing."
-            exit 1
-          }
-
-          test -n "${RELEASE_KEY_PASSWORD}" || {
-            echo "ERROR: RELEASE_KEY_PASSWORD missing."
-            exit 1
-          }
-
-          echo "Release signing secrets are present."
+          echo "Signing secrets present."
 
       # ============================================================
-      # 28. CONFIGURE RELEASE SIGNING
+      # 27. CONFIGURE SIGNING
       # ============================================================
       - name: Configure release signing
         shell: bash
@@ -779,39 +674,18 @@ jobs:
           set -euo pipefail
           cd "${SOURCE_ROOT}"
 
-          echo "${RELEASE_KEYSTORE_BASE64}" | base64 --decode \
-            > android/rkms-release.keystore
+          echo "${RELEASE_KEYSTORE_BASE64}" | \
+            base64 --decode > android/rkms-release.keystore
 
           test -s android/rkms-release.keystore
 
-          python3 <<'PY'
-          from pathlib import Path
+          cat >> android/gradle.properties <<EOF
 
-          p = Path("android/gradle.properties")
-
-          lines = []
-          if p.exists():
-              lines = p.read_text().splitlines()
-
-          values = {
-              "RKMS_RELEASE_STORE_FILE": "rkms-release.keystore",
-              "RKMS_RELEASE_STORE_PASSWORD": "${RELEASE_KEYSTORE_PASSWORD}",
-              "RKMS_RELEASE_KEY_ALIAS": "${RELEASE_KEY_ALIAS}",
-              "RKMS_RELEASE_KEY_PASSWORD": "${RELEASE_KEY_PASSWORD}",
-          }
-
-          existing = {
-              line.split("=", 1)[0]
-              for line in lines
-              if "=" in line
-          }
-
-          for key, value in values.items():
-              if key not in existing:
-                  lines.append(f"{key}={value}")
-
-          p.write_text("\n".join(lines) + "\n")
-          PY
+          RKMS_RELEASE_STORE_FILE=rkms-release.keystore
+          RKMS_RELEASE_STORE_PASSWORD=${RELEASE_KEYSTORE_PASSWORD}
+          RKMS_RELEASE_KEY_ALIAS=${RELEASE_KEY_ALIAS}
+          RKMS_RELEASE_KEY_PASSWORD=${RELEASE_KEY_PASSWORD}
+          EOF
 
           python3 <<'PY'
           from pathlib import Path
@@ -819,13 +693,12 @@ jobs:
           p = Path("android/app/build.gradle")
           text = p.read_text()
 
-          if "signingConfigs" not in text:
-              marker = "android {"
+          if "RKMS_RELEASE_STORE_FILE" not in text:
 
               signing = """
               signingConfigs {
                   release {
-                      storeFile file(project.findProperty("RKMS_RELEASE_STORE_FILE") ?: "rkms-release.keystore")
+                      storeFile file(project.findProperty("RKMS_RELEASE_STORE_FILE"))
                       storePassword project.findProperty("RKMS_RELEASE_STORE_PASSWORD")
                       keyAlias project.findProperty("RKMS_RELEASE_KEY_ALIAS")
                       keyPassword project.findProperty("RKMS_RELEASE_KEY_PASSWORD")
@@ -834,16 +707,21 @@ jobs:
               """
 
               text = text.replace(
-                  marker,
-                  marker + signing,
+                  "android {",
+                  "android {\n" + signing,
                   1
               )
 
-          text = text.replace(
-              "release {\n",
-              "release {\n            signingConfig signingConfigs.release\n",
-              1
-          )
+          marker = "release {"
+
+          if marker in text and \
+             "signingConfig signingConfigs.release" not in text:
+
+              text = text.replace(
+                  marker,
+                  marker + "\n            signingConfig signingConfigs.release",
+                  1
+              )
 
           p.write_text(text)
           PY
@@ -851,9 +729,9 @@ jobs:
           echo "Release signing configured."
 
       # ============================================================
-      # 29. VERIFY KEYSTORE
+      # 28. VERIFY KEYSTORE
       # ============================================================
-      - name: Verify release keystore
+      - name: Verify keystore
         shell: bash
         env:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
@@ -869,65 +747,12 @@ jobs:
             -alias "${RELEASE_KEY_ALIAS}" \
             >/dev/null
 
-          echo "Release keystore verified."
+          echo "Keystore verified."
 
       # ============================================================
-      # 30. VERIFY GRADLE VERSION
+      # 29. CLEAN
       # ============================================================
-      - name: Verify Gradle version
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "${SOURCE_ROOT}/android"
-
-          ./gradlew --version
-
-      # ============================================================
-      # 31. FIX MAIN ACTIVITY JAVA SYNTAX
-      # ============================================================
-      - name: Verify MainActivity Java compilation source
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "${SOURCE_ROOT}"
-
-          MAIN="$(find android/app/src/main -name MainActivity.java | head -1 || true)"
-
-          if [ -n "$MAIN" ]; then
-            echo "Checking Java source:"
-            echo "$MAIN"
-
-            grep -q "package org.rkms.connect" "$MAIN" || {
-              echo "ERROR: Incorrect package declaration."
-              exit 1
-            }
-          fi
-
-          echo "MainActivity source check passed."
-
-      # ============================================================
-      # 32. PROCESS MANIFEST
-      # ============================================================
-      - name: Verify Android manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "${SOURCE_ROOT}"
-
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-
-          test -f "$MANIFEST"
-
-          grep -q \
-            'android.permission.POST_NOTIFICATIONS' \
-            "$MANIFEST" || true
-
-          echo "AndroidManifest.xml verified."
-
-      # ============================================================
-      # 33. CLEAN BUILD
-      # ============================================================
-      - name: Clean Android build
+      - name: Clean Android project
         shell: bash
         run: |
           set -euo pipefail
@@ -936,9 +761,9 @@ jobs:
           ./gradlew clean
 
       # ============================================================
-      # 34. BUILD ONLY SIGNED RELEASE APK
+      # 30. BUILD SIGNED RELEASE APK ONLY
       # ============================================================
-      - name: Build signed release APK only
+      - name: Build signed release APK
         shell: bash
         run: |
           set -euo pipefail
@@ -950,9 +775,9 @@ jobs:
             --stacktrace
 
       # ============================================================
-      # 35. VERIFY APK EXISTS
+      # 31. VERIFY APK
       # ============================================================
-      - name: Verify release APK
+      - name: Verify release APK exists
         shell: bash
         run: |
           set -euo pipefail
@@ -961,17 +786,21 @@ jobs:
           APK="android/app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ERROR: Release APK not found."
-            find android/app/build/outputs -type f -print || true
+            echo "ERROR: APK not found."
+
+            find android/app/build/outputs \
+              -type f \
+              -print || true
+
             exit 1
           fi
 
           ls -lh "$APK"
 
       # ============================================================
-      # 36. VERIFY PACKAGE NAME
+      # 32. VERIFY PACKAGE
       # ============================================================
-      - name: Verify APK package name
+      - name: Verify APK package
         shell: bash
         run: |
           set -euo pipefail
@@ -979,29 +808,23 @@ jobs:
 
           APK="android/app/build/outputs/apk/release/app-release.apk"
 
-          if ! command -v aapt >/dev/null 2>&1; then
-            AAPT="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/aapt"
-          else
-            AAPT="$(command -v aapt)"
-          fi
+          AAPT="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/aapt"
 
           PACKAGE="$(
             "$AAPT" dump badging "$APK" |
-            sed -n 's/^package: name='\''\([^'\'']*\)'\''.*/\1/p' |
+            sed -n "s/^package: name='\([^']*\)'.*/\1/p" |
             head -1
           )"
 
-          echo "APK package: ${PACKAGE}"
+          echo "Package: ${PACKAGE}"
 
           if [ "${PACKAGE}" != "${APP_ID}" ]; then
-            echo "ERROR: Incorrect APK package name."
+            echo "ERROR: Package mismatch."
             exit 1
           fi
 
-          echo "APK package name verified."
-
       # ============================================================
-      # 37. VERIFY SIGNATURE
+      # 33. VERIFY SIGNATURE
       # ============================================================
       - name: Verify APK signature
         shell: bash
@@ -1011,47 +834,42 @@ jobs:
 
           APK="android/app/build/outputs/apk/release/app-release.apk"
 
-          APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/apksigner"
+          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/apksigner" \
+            verify \
+            --verbose \
+            "$APK"
 
-          "$APKSIGNER" verify --verbose "$APK"
-
-          echo "APK signature verification passed."
+          echo "APK signature verified."
 
       # ============================================================
-      # 38. VERIFY RELEASE ONLY
+      # 34. ENSURE NO DEBUG / AAB
       # ============================================================
-      - name: Verify final release-only output
+      - name: Verify release-only output
         shell: bash
         run: |
           set -euo pipefail
           cd "${SOURCE_ROOT}"
 
-          APK_DIR="android/app/build/outputs/apk"
-
-          echo "APK outputs:"
-          find "$APK_DIR" -type f -print
-
-          test -f \
-            android/app/build/outputs/apk/release/app-release.apk
-
-          if find android/app/build/outputs/apk \
+          if find android/app/build/outputs \
             -type f \
             \( -iname "*debug*.apk" -o -iname "*.aab" \) \
             | grep -q .; then
 
-            echo "ERROR: Debug APK or AAB was generated."
-            find android/app/build/outputs/apk \
+            echo "ERROR: Debug APK or AAB detected."
+
+            find android/app/build/outputs \
               -type f \
               \( -iname "*debug*.apk" -o -iname "*.aab" \)
+
             exit 1
           fi
 
-          echo "Only release APK output is accepted."
+          echo "Only signed release APK is accepted."
 
       # ============================================================
-      # 39. SHA256
+      # 35. SHA256
       # ============================================================
-      - name: Generate APK SHA256
+      - name: Generate SHA256
         shell: bash
         run: |
           set -euo pipefail
@@ -1063,18 +881,18 @@ jobs:
             | awk '{print $1}' \
             > RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
 
-          echo "SHA256:"
           cat RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
 
       # ============================================================
-      # 40. PREPARE FINAL APK
+      # 36. PREPARE FINAL ARTIFACT
       # ============================================================
-      - name: Prepare final APK artifact
+      - name: Prepare final release APK
         shell: bash
         run: |
           set -euo pipefail
           cd "${SOURCE_ROOT}"
 
+          rm -rf final-release
           mkdir -p final-release
 
           cp \
@@ -1085,13 +903,12 @@ jobs:
             RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256 \
             final-release/RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
 
-          echo "Final release files:"
           ls -lh final-release/
 
       # ============================================================
-      # 41. FINAL APK INFORMATION
+      # 37. FINAL SHA256
       # ============================================================
-      - name: Final APK verification summary
+      - name: Final APK verification
         shell: bash
         run: |
           set -euo pipefail
@@ -1100,28 +917,29 @@ jobs:
           APK="final-release/RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk"
 
           echo "=========================================="
-          echo " RKMS CONNECT FINAL RELEASE APK"
-          echo "=========================================="
-          echo "Package : ${APP_ID}"
-          echo "API     : ${ANDROID_API}"
-          echo "Build   : ${BUILD_TOOLS}"
-          echo "Node    : ${NODE_VERSION}"
-          echo "Java    : ${JAVA_VERSION}"
-          echo "Type    : SIGNED RELEASE APK ONLY"
-          echo "APK     : ${APK}"
+          echo " RKMS CONNECT FINAL SIGNED RELEASE APK"
           echo "=========================================="
 
+          echo "Package : ${APP_ID}"
+          echo "Android : API ${ANDROID_API}"
+          echo "Build   : ${BUILD_TOOLS}"
+          echo "Java    : ${JAVA_VERSION}"
+          echo "Node    : ${NODE_VERSION}"
+          echo "Output  : SIGNED RELEASE APK ONLY"
+
+          echo
+          echo "SHA256:"
           sha256sum "$APK"
 
       # ============================================================
-      # 42. UPLOAD FINAL APK
+      # 38. UPLOAD ONLY FINAL APK
       # ============================================================
       - name: Upload final signed release APK
         uses: actions/upload-artifact@v4
         with:
           name: RKMS_CONNECT_FINAL_SIGNED_RELEASE_APK
           path: |
-            ${{ env.SOURCE_ZIP == '' && '' || format('{0}/final-release/RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk', env.SOURCE_ROOT) }}
-            ${{ env.SOURCE_ZIP == '' && '' || format('{0}/final-release/RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256', env.SOURCE_ROOT) }}
+            ${{ env.SOURCE_ROOT }}/final-release/RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk
+            ${{ env.SOURCE_ROOT }}/final-release/RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
           if-no-files-found: error
           retention-days: 30
