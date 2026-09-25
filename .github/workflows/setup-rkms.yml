@@ -143,25 +143,50 @@ jobs:
 
           unzip -q "$SOURCE_ZIP" -d extracted
 
-          PACKAGE_JSON="$(
-            find extracted \
-              -type f \
-              -name package.json \
-              -print -quit || true
-          )"
+          # IMPORTANT:
+          # The final ZIP contains package.json both at the project root
+          # and inside dist/. Always prefer the ROOT package.json.
+          if [ -f "extracted/package.json" ]; then
+            PACKAGE_JSON="extracted/package.json"
+          else
+            PACKAGE_JSON="$(
+              find extracted \
+                -type f \
+                -name package.json \
+                -print -quit || true
+            )"
+          fi
 
-          if [ -z "$PACKAGE_JSON" ]; then
+          if [ -z "$PACKAGE_JSON" ] || [ ! -f "$PACKAGE_JSON" ]; then
             echo "ERROR: package.json not found inside ZIP."
             exit 1
           fi
 
           SOURCE_ROOT="$(dirname "$PACKAGE_JSON")"
 
+          echo "Selected package.json:"
+          echo "$PACKAGE_JSON"
+
+          echo "Selected SOURCE_ROOT:"
+          echo "$SOURCE_ROOT"
+
+          # The source ZIP must use its project root, not dist/.
+          if [ "$SOURCE_ROOT" != "extracted" ]; then
+            echo "ERROR: Wrong source root selected."
+            echo "Expected: extracted"
+            echo "Found:    $SOURCE_ROOT"
+            exit 1
+          fi
+
           cp -a "$SOURCE_ROOT"/. source/
 
-          echo "SOURCE_ROOT=$SOURCE_ROOT"
-
           test -f source/package.json
+          test -f source/assets/rkms-logo-transparent.png
+          test -f source/app.js
+          test -f source/capacitor.config.json
+
+          echo "Source root verification: PASS"
+          echo "Root assets verification: PASS"
 
       - name: Verify required source files
         shell: bash
@@ -315,30 +340,11 @@ jobs:
             python3 scripts/verify-native-bridge.py
           fi
 
-      # ==========================================================
-      # FIXED ONLY THIS STEP:
-      # verify-rkms-final.py expects assets/... at source root,
-      # while the duplicate-free ZIP keeps web assets in dist/assets.
-      # We create a temporary verification-only compatibility path.
-      # No duplicate asset is added to the final ZIP.
-      # ==========================================================
       - name: Verify RKMS final
         shell: bash
         run: |
           set -euo pipefail
           cd source
-
-          echo "Preparing verification paths..."
-
-          if [ ! -d "assets" ] && [ -d "dist/assets" ]; then
-            ln -s "dist/assets" "assets"
-            echo "Temporary compatibility link created: assets -> dist/assets"
-          fi
-
-          if [ ! -f "assets/rkms-logo-transparent.png" ] && \
-             [ -f "dist/assets/rkms-logo-transparent.png" ]; then
-            echo "Logo available through dist/assets"
-          fi
 
           if [ -f scripts/verify-rkms-final.py ]; then
             python3 scripts/verify-rkms-final.py
