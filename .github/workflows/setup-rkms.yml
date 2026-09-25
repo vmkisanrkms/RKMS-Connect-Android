@@ -315,15 +315,39 @@ jobs:
             python3 scripts/verify-native-bridge.py
           fi
 
+      # ==========================================================
+      # FIXED ONLY THIS STEP:
+      # verify-rkms-final.py expects assets/... at source root,
+      # while the duplicate-free ZIP keeps web assets in dist/assets.
+      # We create a temporary verification-only compatibility path.
+      # No duplicate asset is added to the final ZIP.
+      # ==========================================================
       - name: Verify RKMS final
         shell: bash
         run: |
           set -euo pipefail
           cd source
 
+          echo "Preparing verification paths..."
+
+          if [ ! -d "assets" ] && [ -d "dist/assets" ]; then
+            ln -s "dist/assets" "assets"
+            echo "Temporary compatibility link created: assets -> dist/assets"
+          fi
+
+          if [ ! -f "assets/rkms-logo-transparent.png" ] && \
+             [ -f "dist/assets/rkms-logo-transparent.png" ]; then
+            echo "Logo available through dist/assets"
+          fi
+
           if [ -f scripts/verify-rkms-final.py ]; then
             python3 scripts/verify-rkms-final.py
+          else
+            echo "ERROR: scripts/verify-rkms-final.py not found."
+            exit 1
           fi
+
+          echo "RKMS final verification: PASS"
 
       - name: Verify chat microphone
         shell: bash
@@ -359,8 +383,6 @@ jobs:
           test -f package.json
           test -f capacitor.config.json
 
-          echo "Checking Capacitor Android package..."
-
           node <<'NODE'
           const fs = require('fs');
 
@@ -388,8 +410,6 @@ jobs:
           echo "Android 16 verification source check: PASS"
 
           if [ -f scripts/verify-android-16.py ]; then
-            echo "Checking legacy Android verification script syntax only..."
-
             python3 -m py_compile \
               scripts/verify-android-16.py
 
