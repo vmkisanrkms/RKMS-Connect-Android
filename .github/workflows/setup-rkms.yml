@@ -14,7 +14,9 @@ env:
   AGP_VERSION: "8.9.1"
   GRADLE_VERSION: "8.11.1"
   APP_ID: "org.rkms.connect"
-  SOURCE_ZIP: "RKMS_CONNECT_FINAL_CONTENT_RULES_CREATOR_ACTIONS_FIXED_KEYPAD_NO_DUPLICATES_FINAL_20260925.zip"
+
+  # FINAL TIMESTAMP-FIXED SOURCE ZIP
+  SOURCE_ZIP: "RKMS_CONNECT_FINAL_CONTENT_V2_TIMESTAMP_DISPLAY_FIXED_20260926.zip"
 
 jobs:
   build-release-apk:
@@ -23,8 +25,16 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # ============================================================
+      # JAVA 17
+      # ============================================================
 
       - name: Setup Java 17
         uses: actions/setup-java@v5
@@ -36,8 +46,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           java -version
           javac -version
+
+      # ============================================================
+      # NODE 22
+      # ============================================================
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -48,8 +63,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           node --version
           npm --version
+
+      # ============================================================
+      # ANDROID SDK
+      # ============================================================
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
@@ -93,15 +113,22 @@ jobs:
           adb version
           sdkmanager --version
 
-      - name: Locate RKMS source ZIP
+          echo "Android SDK tools: PASS"
+
+      # ============================================================
+      # LOCATE FINAL SOURCE ZIP
+      # ============================================================
+
+      - name: Locate RKMS final source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Looking for final source ZIP:"
+          echo "Expected final source ZIP:"
           echo "$SOURCE_ZIP"
 
           if [ ! -f "$SOURCE_ZIP" ]; then
+
             FOUND_ZIP="$(
               find . \
                 -type f \
@@ -115,7 +142,7 @@ jobs:
               echo "Expected:"
               echo "$SOURCE_ZIP"
               echo
-              echo "ZIP files available:"
+              echo "Available ZIP files:"
               find . \
                 -type f \
                 -iname "*.zip" \
@@ -131,6 +158,10 @@ jobs:
           echo "FINAL SOURCE ZIP FOUND:"
           ls -lh "$SOURCE_ZIP"
 
+      # ============================================================
+      # EXTRACT SOURCE
+      # ============================================================
+
       - name: Extract RKMS source
         shell: bash
         run: |
@@ -143,9 +174,10 @@ jobs:
 
           unzip -q "$SOURCE_ZIP" -d extracted
 
-          # IMPORTANT:
-          # The final ZIP contains package.json both at the project root
-          # and inside dist/. Always prefer the ROOT package.json.
+          # --------------------------------------------------------
+          # ROOT package.json MUST be preferred.
+          # --------------------------------------------------------
+
           if [ -f "extracted/package.json" ]; then
             PACKAGE_JSON="extracted/package.json"
           else
@@ -170,7 +202,6 @@ jobs:
           echo "Selected SOURCE_ROOT:"
           echo "$SOURCE_ROOT"
 
-          # The source ZIP must use its project root, not dist/.
           if [ "$SOURCE_ROOT" != "extracted" ]; then
             echo "ERROR: Wrong source root selected."
             echo "Expected: extracted"
@@ -187,6 +218,120 @@ jobs:
 
           echo "Source root verification: PASS"
           echo "Root assets verification: PASS"
+
+      # ============================================================
+      # FIX / RESTORE ROOT PACKAGE LOCK
+      #
+      # FINAL ZIP contains package-lock.json under dist/.
+      # npm ci requires package-lock.json in the project root.
+      #
+      # We verify package.json first and then restore the exact
+      # lockfile from the ZIP's dist build output.
+      # ============================================================
+
+      - name: Restore root package-lock.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          if [ -f "package-lock.json" ]; then
+
+            echo "Root package-lock.json already exists."
+            echo "Using root package-lock.json."
+
+          elif [ -f "dist/package-lock.json" ]; then
+
+            echo "Root package-lock.json missing."
+            echo "Using verified dist/package-lock.json."
+
+            cp "dist/package-lock.json" "package-lock.json"
+
+          else
+
+            echo "ERROR: package-lock.json not found."
+            echo "Neither root nor dist/package-lock.json exists."
+            exit 1
+
+          fi
+
+          test -s package-lock.json
+
+          echo "package-lock.json:"
+          ls -lh package-lock.json
+
+          node <<'NODE'
+          const fs = require('fs');
+
+          const pkg = JSON.parse(
+            fs.readFileSync('package.json', 'utf8')
+          );
+
+          const lock = JSON.parse(
+            fs.readFileSync('package-lock.json', 'utf8')
+          );
+
+          if (pkg.name !== lock.name) {
+            console.error(
+              `ERROR: package name mismatch: package.json=${pkg.name}, lock=${lock.name}`
+            );
+            process.exit(1);
+          }
+
+          if (pkg.version !== lock.version) {
+            console.error(
+              `ERROR: package version mismatch: package.json=${pkg.version}, lock=${lock.version}`
+            );
+            process.exit(1);
+          }
+
+          if (lock.lockfileVersion !== 3) {
+            console.error(
+              `ERROR: Expected lockfileVersion 3, found ${lock.lockfileVersion}`
+            );
+            process.exit(1);
+          }
+
+          const pkgRoot = lock.packages?.[""];
+
+          if (!pkgRoot) {
+            console.error(
+              "ERROR: package-lock.json root package entry missing."
+            );
+            process.exit(1);
+          }
+
+          const expected = {
+            '@capacitor/core': '6.2.2',
+            '@capacitor/android': '6.2.2',
+            '@capacitor/app': '6.0.3',
+            '@capacitor/push-notifications': '6.0.3',
+            '@capacitor/cli': '6.2.2'
+          };
+
+          const all = {
+            ...(pkgRoot.dependencies || {}),
+            ...(pkgRoot.devDependencies || {})
+          };
+
+          for (const [name, version] of Object.entries(expected)) {
+            if (all[name] !== version) {
+              console.error(
+                `ERROR: ${name}: expected ${version}, found ${all[name] || 'missing'}`
+              );
+              process.exit(1);
+            }
+
+            console.log(`PASS: ${name} ${version}`);
+          }
+
+          console.log("package-lock.json consistency: PASS");
+          NODE
+
+      # ============================================================
+      # REQUIRED SOURCE FILES
+      # ============================================================
 
       - name: Verify required source files
         shell: bash
@@ -209,15 +354,21 @@ jobs:
           )
 
           for file in "${REQUIRED_FILES[@]}"; do
+
             test -f "$file" || {
               echo "ERROR: Missing required file: $file"
               exit 1
             }
 
             echo "FOUND: $file"
+
           done
 
           echo "Required source files: PASS"
+
+      # ============================================================
+      # CAPACITOR VERSIONS
+      # ============================================================
 
       - name: Verify Capacitor versions
         shell: bash
@@ -247,6 +398,7 @@ jobs:
           };
 
           for (const [name, version] of Object.entries(expected)) {
+
             if (all[name] !== version) {
               console.error(
                 `ERROR: ${name} expected ${version}, found ${all[name] || 'missing'}`
@@ -256,7 +408,13 @@ jobs:
 
             console.log(`PASS: ${name} ${version}`);
           }
+
+          console.log("Capacitor versions: PASS");
           NODE
+
+      # ============================================================
+      # CAPACITOR CONFIG
+      # ============================================================
 
       - name: Verify Capacitor configuration
         shell: bash
@@ -265,14 +423,20 @@ jobs:
 
           cd source
 
-          grep -q '"appId"[[:space:]]*:[[:space:]]*"org.rkms.connect"' \
+          grep -q \
+            '"appId"[[:space:]]*:[[:space:]]*"org.rkms.connect"' \
             capacitor.config.json
 
-          grep -q '"webDir"[[:space:]]*:[[:space:]]*"dist"' \
+          grep -q \
+            '"webDir"[[:space:]]*:[[:space:]]*"dist"' \
             capacitor.config.json
 
           echo "Capacitor APP ID: PASS"
           echo "Capacitor webDir: PASS"
+
+      # ============================================================
+      # FIREBASE CONFIG
+      # ============================================================
 
       - name: Verify Firebase configuration
         shell: bash
@@ -289,6 +453,10 @@ jobs:
 
           echo "Firebase package: PASS"
 
+      # ============================================================
+      # JAVASCRIPT
+      # ============================================================
+
       - name: Verify JavaScript syntax
         shell: bash
         run: |
@@ -300,80 +468,158 @@ jobs:
 
           echo "app.js syntax: PASS"
 
+      # ============================================================
+      # FCM
+      # ============================================================
+
       - name: Verify FCM pipeline
         shell: bash
         run: |
           set -euo pipefail
+
           cd source
 
           if [ -f scripts/verify-fcm-pipeline.py ]; then
             python3 scripts/verify-fcm-pipeline.py
           fi
 
+      # ============================================================
+      # WEBVIEW NOTIFICATION ROUTING
+      # ============================================================
+
       - name: Verify WebView notification routing
         shell: bash
         run: |
           set -euo pipefail
+
           cd source
 
           if [ -f scripts/verify-webview-notification-fix.py ]; then
             python3 scripts/verify-webview-notification-fix.py
           fi
 
+      # ============================================================
+      # SAVED LOGIN
+      # ============================================================
+
       - name: Verify saved login
         shell: bash
         run: |
           set -euo pipefail
+
           cd source
 
           if [ -f scripts/verify-saved-login.py ]; then
             python3 scripts/verify-saved-login.py
           fi
 
+      # ============================================================
+      # NATIVE BRIDGE
+      # ============================================================
+
       - name: Verify native bridge
         shell: bash
         run: |
           set -euo pipefail
+
           cd source
 
           if [ -f scripts/verify-native-bridge.py ]; then
             python3 scripts/verify-native-bridge.py
           fi
 
+      # ============================================================
+      # RKMS FINAL VERIFICATION
+      # ============================================================
+
       - name: Verify RKMS final
         shell: bash
         run: |
           set -euo pipefail
+
           cd source
 
-          if [ -f scripts/verify-rkms-final.py ]; then
-            python3 scripts/verify-rkms-final.py
-          else
+          if [ ! -f scripts/verify-rkms-final.py ]; then
             echo "ERROR: scripts/verify-rkms-final.py not found."
             exit 1
           fi
 
+          python3 scripts/verify-rkms-final.py
+
           echo "RKMS final verification: PASS"
+
+      # ============================================================
+      # CHAT MICROPHONE
+      # ============================================================
 
       - name: Verify chat microphone
         shell: bash
         run: |
           set -euo pipefail
+
           cd source
 
           if [ -f scripts/verify-chat-mic-final.py ]; then
             python3 scripts/verify-chat-mic-final.py
           fi
 
-      - name: Verify final three point fix
+      # ============================================================
+      # FOUR POINT / FINAL FIX
+      # ============================================================
+
+      - name: Verify final content and timestamp fixes
         shell: bash
         run: |
           set -euo pipefail
+
           cd source
 
           if [ -f scripts/verify-final-three-point-fix.py ]; then
             python3 scripts/verify-final-three-point-fix.py
           fi
+
+          if [ -f scripts/verify-home-content-final.py ]; then
+            python3 scripts/verify-home-content-final.py
+          fi
+
+          if [ -f scripts/verify-final-login-navigation.py ]; then
+            python3 scripts/verify-final-login-navigation.py
+          fi
+
+          echo "Final Content V2 verification: PASS"
+
+      # ============================================================
+      # TIMESTAMP DISPLAY VERIFICATION
+      # ============================================================
+
+      - name: Verify timestamp display rule
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          echo "Checking timestamp display implementation..."
+
+          grep -q "अंतिम बदलाव" app.js
+
+          # Updated content must display only final-update information.
+          # The old two-line simultaneous creator/update display must not
+          # remain in the final card implementation.
+
+          if grep -q \
+            "डाली गई.*अंतिम बदलाव\|डाली गई:.*अंतिम बदलाव" \
+            app.js; then
+
+            echo "ERROR: Both initial and update timestamps appear together."
+            exit 1
+          fi
+
+          echo "Timestamp display rule: PASS"
+
+      # ============================================================
+      # ANDROID 16 SOURCE VERIFICATION
+      # ============================================================
 
       - name: Verify Android 16
         shell: bash
@@ -413,16 +659,18 @@ jobs:
           );
           NODE
 
-          echo "Android 16 verification source check: PASS"
-
           if [ -f scripts/verify-android-16.py ]; then
             python3 -m py_compile \
               scripts/verify-android-16.py
 
-            echo "Legacy verification script syntax: PASS"
+            echo "Android 16 verification script syntax: PASS"
           fi
 
-          echo "Android 16 / API 36 pre-build verification: PASS"
+          echo "Android 16 / API 36 source verification: PASS"
+
+      # ============================================================
+      # FINAL NOTIFICATION / CHAT BACK FLOW
+      # ============================================================
 
       - name: Verify final notification navigation and back flow
         shell: bash
@@ -432,11 +680,6 @@ jobs:
           cd source
 
           echo "Checking final FCM token reconciliation..."
-
-          if [ -f FCM_TOKEN_RECONCILIATION_FIX_20260924.md ]; then
-            grep -q "FirebaseMessaging" \
-              FCM_TOKEN_RECONCILIATION_FIX_20260924.md
-          fi
 
           grep -q "rkmsNativeFcmToken" app.js
           grep -q "refreshFcmToken" app.js
@@ -464,16 +707,19 @@ jobs:
 
           echo "Chat badge + notification tap source: PASS"
 
-          echo "Checking notification navigation documentation..."
-
           if [ -f NOTIFICATION_TAP_CHAT_FIX_20260923.md ]; then
+
             grep -q "conversation_id" \
               NOTIFICATION_TAP_CHAT_FIX_20260923.md
+
           fi
 
           echo "Notification tap routing documentation: PASS"
-
           echo "Final navigation source verification: PASS"
+
+      # ============================================================
+      # INSTALL NPM
+      # ============================================================
 
       - name: Install npm dependencies
         shell: bash
@@ -482,7 +728,17 @@ jobs:
 
           cd source
 
-          npm ci --no-audit --no-fund
+          test -f package-lock.json
+
+          npm ci \
+            --no-audit \
+            --no-fund
+
+          echo "npm dependencies installed: PASS"
+
+      # ============================================================
+      # VERIFY PUSH PLUGIN
+      # ============================================================
 
       - name: Verify installed push notifications
         shell: bash
@@ -502,6 +758,10 @@ jobs:
             console.log('push-notifications:',p.version);
           "
 
+      # ============================================================
+      # BUILD WEB
+      # ============================================================
+
       - name: Build web application
         shell: bash
         run: |
@@ -513,8 +773,57 @@ jobs:
 
           test -d dist
           test -f dist/index.html
+          test -f dist/app.js
 
           echo "Web build: PASS"
+
+      # ============================================================
+      # VERIFY SOURCE / DIST HASHES
+      # ============================================================
+
+      - name: Verify source and dist synchronization
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          test -f app.js
+          test -f dist/app.js
+
+          test -f styles.css
+          test -f dist/styles.css
+
+          test -f index.html
+          test -f dist/index.html
+
+          SRC_APP="$(sha256sum app.js | awk '{print $1}')"
+          DIST_APP="$(sha256sum dist/app.js | awk '{print $1}')"
+
+          SRC_CSS="$(sha256sum styles.css | awk '{print $1}')"
+          DIST_CSS="$(sha256sum dist/styles.css | awk '{print $1}')"
+
+          SRC_HTML="$(sha256sum index.html | awk '{print $1}')"
+          DIST_HTML="$(sha256sum dist/index.html | awk '{print $1}')"
+
+          echo "app.js     $SRC_APP"
+          echo "dist/app.js $DIST_APP"
+
+          echo "styles.css     $SRC_CSS"
+          echo "dist/styles.css $DIST_CSS"
+
+          echo "index.html     $SRC_HTML"
+          echo "dist/index.html $DIST_HTML"
+
+          test "$SRC_APP" = "$DIST_APP"
+          test "$SRC_CSS" = "$DIST_CSS"
+          test "$SRC_HTML" = "$DIST_HTML"
+
+          echo "Source/dist synchronization: PASS"
+
+      # ============================================================
+      # CREATE FRESH ANDROID PROJECT
+      # ============================================================
 
       - name: Create fresh Android project
         shell: bash
@@ -530,6 +839,12 @@ jobs:
           test -d android
           test -f android/gradlew
 
+          echo "Fresh Android project: PASS"
+
+      # ============================================================
+      # CONFIGURE ANDROID 16
+      # ============================================================
+
       - name: Configure Android 16 API 36
         shell: bash
         run: |
@@ -540,6 +855,10 @@ jobs:
           chmod +x scripts/configure-android-16.sh
 
           ./scripts/configure-android-16.sh
+
+      # ============================================================
+      # ENFORCE SDK 36
+      # ============================================================
 
       - name: Enforce Android SDK 36
         shell: bash
@@ -564,13 +883,19 @@ jobs:
 
           fi
 
-          grep -q "compileSdkVersion = 36" \
+          grep -q \
+            "compileSdkVersion = 36" \
             android/variables.gradle
 
-          grep -q "targetSdkVersion = 36" \
+          grep -q \
+            "targetSdkVersion = 36" \
             android/variables.gradle
 
           echo "compileSdk/targetSdk 36: PASS"
+
+      # ============================================================
+      # CAPACITOR SYNC
+      # ============================================================
 
       - name: Sync Capacitor
         shell: bash
@@ -580,6 +905,12 @@ jobs:
           cd source
 
           npx cap sync android
+
+          echo "Capacitor sync: PASS"
+
+      # ============================================================
+      # NATIVE INTEGRATION
+      # ============================================================
 
       - name: Setup RKMS Android native integration
         shell: bash
@@ -594,6 +925,12 @@ jobs:
 
           test -f \
             android/app/src/main/java/org/rkms/connect/RKMSNativeBridge.java
+
+          echo "RKMS native bridge: PASS"
+
+      # ============================================================
+      # GOOGLE SERVICES
+      # ============================================================
 
       - name: Ensure Google Services plugin version
         shell: bash
@@ -641,6 +978,7 @@ jobs:
 
             printf '\napply plugin: "com.google.gms.google-services"\n' \
               >> android/app/build.gradle
+
           fi
 
       - name: Verify Google Services plugin
@@ -660,6 +998,10 @@ jobs:
 
           echo "Google Services: PASS"
 
+      # ============================================================
+      # FIREBASE NATIVE CONFIG
+      # ============================================================
+
       - name: Verify Firebase native configuration
         shell: bash
         run: |
@@ -674,6 +1016,10 @@ jobs:
             android/app/google-services.json
 
           echo "Firebase native configuration: PASS"
+
+      # ============================================================
+      # MAIN ACTIVITY
+      # ============================================================
 
       - name: Verify MainActivity
         shell: bash
@@ -699,6 +1045,10 @@ jobs:
 
           echo "MainActivity notification routing: PASS"
 
+      # ============================================================
+      # FIREBASE MESSAGING
+      # ============================================================
+
       - name: Ensure Firebase Messaging dependency
         shell: bash
         run: |
@@ -721,7 +1071,9 @@ jobs:
           """
 
           if "dependencies {" not in text:
-              raise SystemExit("dependencies block not found")
+              raise SystemExit(
+                  "dependencies block not found"
+              )
 
           text = text.replace(
               "dependencies {",
@@ -737,6 +1089,10 @@ jobs:
           grep -q "firebase-messaging" "$APP_GRADLE"
 
           echo "Firebase Messaging dependency: PASS"
+
+      # ============================================================
+      # GRADLE CONFIG
+      # ============================================================
 
       - name: Verify final Android configuration
         shell: bash
@@ -762,6 +1118,10 @@ jobs:
 
           echo "Android configuration: PASS"
 
+      # ============================================================
+      # RESOLVE GRADLE DEPENDENCIES
+      # ============================================================
+
       - name: Resolve Gradle dependencies
         shell: bash
         run: |
@@ -773,6 +1133,12 @@ jobs:
             --no-daemon \
             --stacktrace \
             dependencies
+
+          echo "Gradle dependency resolution: PASS"
+
+      # ============================================================
+      # STATIC ANDROID AUDIT
+      # ============================================================
 
       - name: Static Android audit
         shell: bash
@@ -790,25 +1156,47 @@ jobs:
 
           test -n "$MAIN_ACTIVITY"
 
-          grep -q "FirebaseApp.initializeApp" "$MAIN_ACTIVITY"
-          grep -q "RKMSNativeBridge" "$MAIN_ACTIVITY"
-          grep -q "onNewIntent" "$MAIN_ACTIVITY"
-          grep -q "conversation_id" "$MAIN_ACTIVITY"
-          grep -q "rkmsOpenNotificationRoute" "$MAIN_ACTIVITY"
+          grep -q \
+            "FirebaseApp.initializeApp" \
+            "$MAIN_ACTIVITY"
 
-          grep -Rqs "POST_NOTIFICATIONS" \
+          grep -q \
+            "RKMSNativeBridge" \
+            "$MAIN_ACTIVITY"
+
+          grep -q \
+            "onNewIntent" \
+            "$MAIN_ACTIVITY"
+
+          grep -q \
+            "conversation_id" \
+            "$MAIN_ACTIVITY"
+
+          grep -q \
+            "rkmsOpenNotificationRoute" \
+            "$MAIN_ACTIVITY"
+
+          grep -Rqs \
+            "POST_NOTIFICATIONS" \
             android/app/src/main
 
-          grep -Rqs "RECORD_AUDIO" \
+          grep -Rqs \
+            "RECORD_AUDIO" \
             android/app/src/main
 
-          grep -Rqs "rkms_notifications_v3" \
+          grep -Rqs \
+            "rkms_notifications_v3" \
             android/app/src/main
 
-          grep -Rqs "rkms_priority_v2" \
+          grep -Rqs \
+            "rkms_priority_v2" \
             android/app/src/main
 
           echo "Static Android audit: PASS"
+
+      # ============================================================
+      # SIGNING SECRETS
+      # ============================================================
 
       - name: Verify release signing secrets
         shell: bash
@@ -827,6 +1215,10 @@ jobs:
 
           echo "Release signing secrets: PASS"
 
+      # ============================================================
+      # RELEASE SIGNING CONFIG
+      # ============================================================
+
       - name: Configure release signing
         shell: bash
         env:
@@ -842,6 +1234,10 @@ jobs:
           chmod +x scripts/configure-release-signing.sh
 
           ./scripts/configure-release-signing.sh
+
+      # ============================================================
+      # VERIFY SIGNING CONFIG
+      # ============================================================
 
       - name: Verify release signing configuration
         shell: bash
@@ -862,18 +1258,40 @@ jobs:
 
           grep -q "signingConfigs" "$APP_GRADLE"
           grep -q "release {" "$APP_GRADLE"
-          grep -q "storeFile file(\"release.keystore\")" "$APP_GRADLE"
-          grep -q "System.getenv(\"RKMS_KEYSTORE_PASSWORD\")" "$APP_GRADLE"
-          grep -q "System.getenv(\"RKMS_KEY_ALIAS\")" "$APP_GRADLE"
-          grep -q "System.getenv(\"RKMS_KEY_PASSWORD\")" "$APP_GRADLE"
-          grep -q "signingConfig signingConfigs.release" "$APP_GRADLE"
+          grep -q \
+            "storeFile file(\"release.keystore\")" \
+            "$APP_GRADLE"
 
-          if grep -q "RKMS_KEYSTORE_ABS" "$APP_GRADLE"; then
+          grep -q \
+            'System.getenv("RKMS_KEYSTORE_PASSWORD")' \
+            "$APP_GRADLE"
+
+          grep -q \
+            'System.getenv("RKMS_KEY_ALIAS")' \
+            "$APP_GRADLE"
+
+          grep -q \
+            'System.getenv("RKMS_KEY_PASSWORD")' \
+            "$APP_GRADLE"
+
+          grep -q \
+            "signingConfig signingConfigs.release" \
+            "$APP_GRADLE"
+
+          if grep -q \
+            "RKMS_KEYSTORE_ABS" \
+            "$APP_GRADLE"; then
+
             echo "ERROR: obsolete RKMS_KEYSTORE_ABS reference found."
             exit 1
+
           fi
 
           echo "Release signing configuration: PASS"
+
+      # ============================================================
+      # VALIDATE KEYSTORE
+      # ============================================================
 
       - name: Validate release keystore
         shell: bash
@@ -896,6 +1314,10 @@ jobs:
 
           echo "Keystore validation: PASS"
 
+      # ============================================================
+      # GRADLE VERSION
+      # ============================================================
+
       - name: Verify Gradle version
         shell: bash
         run: |
@@ -904,6 +1326,10 @@ jobs:
           cd source/android
 
           ./gradlew --version
+
+      # ============================================================
+      # MAIN ACTIVITY SAFETY CHECK
+      # ============================================================
 
       - name: Fix MainActivity Java syntax
         shell: bash
@@ -947,6 +1373,7 @@ jobs:
 
             echo "ERROR: Malformed Java quotes still present."
             exit 1
+
           fi
 
           if grep -q \
@@ -955,9 +1382,14 @@ jobs:
 
             echo "ERROR: onResume() still has protected visibility."
             exit 1
+
           fi
 
           echo "MainActivity Java syntax/access fix: PASS"
+
+      # ============================================================
+      # VALIDATE RELEASE CONFIGURATION
+      # ============================================================
 
       - name: Validate release configuration
         shell: bash
@@ -976,6 +1408,12 @@ jobs:
             :app:compileReleaseJavaWithJavac \
             :app:processReleaseMainManifest
 
+          echo "Release configuration compilation: PASS"
+
+      # ============================================================
+      # CLEAN
+      # ============================================================
+
       - name: Clean release build
         shell: bash
         run: |
@@ -986,6 +1424,12 @@ jobs:
           ./gradlew \
             --no-daemon \
             clean
+
+          echo "Clean build: PASS"
+
+      # ============================================================
+      # BUILD FINAL SIGNED RELEASE APK
+      # ============================================================
 
       - name: Build Signed Release APK
         shell: bash
@@ -1002,6 +1446,12 @@ jobs:
             --no-daemon \
             --stacktrace \
             :app:assembleRelease
+
+          echo "Signed Release APK build: PASS"
+
+      # ============================================================
+      # VERIFY APK OUTPUT
+      # ============================================================
 
       - name: Verify release APK output
         shell: bash
@@ -1029,9 +1479,15 @@ jobs:
               ;;
           esac
 
+          test -f "$APK"
+
           ls -lh "$APK"
 
           echo "Release APK output: PASS"
+
+      # ============================================================
+      # ENSURE NO AAB
+      # ============================================================
 
       - name: Verify no AAB is required
         shell: bash
@@ -1047,9 +1503,14 @@ jobs:
 
             echo "ERROR: AAB generated."
             exit 1
+
           fi
 
           echo "APK-only output: PASS"
+
+      # ============================================================
+      # PACKAGE NAME
+      # ============================================================
 
       - name: Verify APK package name
         shell: bash
@@ -1071,7 +1532,8 @@ jobs:
 
           PACKAGE_NAME="$(
             "$AAPT" dump badging "$APK" \
-              | sed -n "s/^package: name='\([^']*\)'.*/\1/p" \
+              | sed -n \
+                "s/^package: name='\([^']*\)'.*/\1/p" \
               | head -1
           )"
 
@@ -1080,6 +1542,10 @@ jobs:
           test "$PACKAGE_NAME" = "org.rkms.connect"
 
           echo "Package name: PASS"
+
+      # ============================================================
+      # APK SIGNATURE
+      # ============================================================
 
       - name: Verify APK signature
         shell: bash
@@ -1105,6 +1571,10 @@ jobs:
 
           echo "APK signature: PASS"
 
+      # ============================================================
+      # RELEASE SIGNATURE SECOND CHECK
+      # ============================================================
+
       - name: Verify APK is release signed
         shell: bash
         run: |
@@ -1129,6 +1599,10 @@ jobs:
 
           echo "Release APK signature verification: PASS"
 
+      # ============================================================
+      # APK SHA256
+      # ============================================================
+
       - name: Generate APK SHA256
         shell: bash
         run: |
@@ -1144,6 +1618,10 @@ jobs:
           )"
 
           sha256sum "$APK"
+
+      # ============================================================
+      # PREPARE FINAL APK
+      # ============================================================
 
       - name: Prepare final APK
         shell: bash
@@ -1179,6 +1657,10 @@ jobs:
             ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk \
             ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
 
+      # ============================================================
+      # FINAL ARTIFACT CHECK
+      # ============================================================
+
       - name: Final artifact check
         shell: bash
         run: |
@@ -1191,6 +1673,10 @@ jobs:
           echo "=============================================="
           echo "RKMS FINAL SIGNED RELEASE APK READY"
           echo "=============================================="
+
+      # ============================================================
+      # UPLOAD FINAL APK
+      # ============================================================
 
       - name: Upload final signed release APK
         uses: actions/upload-artifact@v4
