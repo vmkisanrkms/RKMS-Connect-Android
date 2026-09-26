@@ -216,7 +216,7 @@ jobs:
           echo "Root assets verification: PASS"
 
       # ============================================================
-      # FIX / RESTORE ROOT PACKAGE LOCK
+      # RESTORE ROOT PACKAGE LOCK
       # ============================================================
 
       - name: Restore root package-lock.json
@@ -1244,6 +1244,7 @@ jobs:
 
           grep -q "signingConfigs" "$APP_GRADLE"
           grep -q "release {" "$APP_GRADLE"
+
           grep -q \
             "storeFile file(\"release.keystore\")" \
             "$APP_GRADLE"
@@ -1282,4 +1283,393 @@ jobs:
       - name: Validate release keystore
         shell: bash
         env:
-          RK
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          KEYSTORE="android/app/release.keystore"
+
+          test -f "$KEYSTORE"
+
+          keytool \
+            -list \
+            -keystore "$KEYSTORE" \
+            -storepass "$RKMS_KEYSTORE_PASSWORD" \
+            >/dev/null
+
+          echo "Keystore validation: PASS"
+
+      # ============================================================
+      # GRADLE VERSION
+      # ============================================================
+
+      - name: Verify Gradle version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source/android
+
+          ./gradlew --version
+
+      # ============================================================
+      # MAIN ACTIVITY SAFETY CHECK
+      # ============================================================
+
+      - name: Fix MainActivity Java syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          MAIN_ACTIVITY="$(
+            find android/app/src/main \
+              -type f \
+              -name MainActivity.java \
+              -print -quit || true
+          )"
+
+          test -n "$MAIN_ACTIVITY"
+
+          sed -i \
+            's/""NOT_READY""/"NOT_READY"/g' \
+            "$MAIN_ACTIVITY"
+
+          sed -i \
+            's/""ERROR""/"ERROR"/g' \
+            "$MAIN_ACTIVITY"
+
+          sed -i \
+            's/""WAIT""/"WAIT"/g' \
+            "$MAIN_ACTIVITY"
+
+          sed -i \
+            's/""OK""/"OK"/g' \
+            "$MAIN_ACTIVITY"
+
+          sed -i \
+            's/@Override protected void onResume()/@Override public void onResume()/g' \
+            "$MAIN_ACTIVITY"
+
+          if grep -q \
+            '""NOT_READY""\|""ERROR""\|""WAIT""\|""OK""' \
+            "$MAIN_ACTIVITY"; then
+
+            echo "ERROR: Malformed Java quotes still present."
+            exit 1
+
+          fi
+
+          if grep -q \
+            '@Override protected void onResume()' \
+            "$MAIN_ACTIVITY"; then
+
+            echo "ERROR: onResume() still has protected visibility."
+            exit 1
+
+          fi
+
+          echo "MainActivity Java syntax/access fix: PASS"
+
+      # ============================================================
+      # VALIDATE RELEASE CONFIGURATION
+      # ============================================================
+
+      - name: Validate release configuration
+        shell: bash
+        env:
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          cd source/android
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            :app:compileReleaseJavaWithJavac \
+            :app:processReleaseMainManifest
+
+          echo "Release configuration compilation: PASS"
+
+      # ============================================================
+      # CLEAN
+      # ============================================================
+
+      - name: Clean release build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source/android
+
+          ./gradlew \
+            --no-daemon \
+            clean
+
+          echo "Clean build: PASS"
+
+      # ============================================================
+      # BUILD FINAL SIGNED RELEASE APK
+      # ============================================================
+
+      - name: Build Signed Release APK
+        shell: bash
+        env:
+          RKMS_KEYSTORE_PASSWORD: ${{ secrets.RKMS_KEYSTORE_PASSWORD }}
+          RKMS_KEY_ALIAS: ${{ secrets.RKMS_KEY_ALIAS }}
+          RKMS_KEY_PASSWORD: ${{ secrets.RKMS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          cd source/android
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            :app:assembleRelease
+
+          echo "Signed Release APK build: PASS"
+
+      # ============================================================
+      # VERIFY APK OUTPUT
+      # ============================================================
+
+      - name: Verify release APK output
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          APK="$(
+            find android/app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print -quit || true
+          )"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Release APK not generated."
+            exit 1
+          fi
+
+          case "$APK" in
+            *debug*)
+              echo "ERROR: Debug APK detected."
+              exit 1
+              ;;
+          esac
+
+          test -f "$APK"
+
+          ls -lh "$APK"
+
+          echo "Release APK output: PASS"
+
+      # ============================================================
+      # ENSURE NO AAB
+      # ============================================================
+
+      - name: Verify no AAB is required
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          if find android/app/build/outputs \
+            -type f \
+            -name "*.aab" \
+            | grep -q .; then
+
+            echo "ERROR: AAB generated."
+            exit 1
+
+          fi
+
+          echo "APK-only output: PASS"
+
+      # ============================================================
+      # PACKAGE NAME
+      # ============================================================
+
+      - name: Verify APK package name
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          APK="$(
+            find android/app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print -quit
+          )"
+
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
+          AAPT="$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt"
+
+          PACKAGE_NAME="$(
+            "$AAPT" dump badging "$APK" \
+              | sed -n \
+                "s/^package: name='\([^']*\)'.*/\1/p" \
+              | head -1
+          )"
+
+          echo "APK package: $PACKAGE_NAME"
+
+          test "$PACKAGE_NAME" = "org.rkms.connect"
+
+          echo "Package name: PASS"
+
+      # ============================================================
+      # APK SIGNATURE
+      # ============================================================
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          APK="$(
+            find android/app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print -quit
+          )"
+
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
+
+          "$APKSIGNER" verify \
+            --verbose \
+            "$APK"
+
+          echo "APK signature: PASS"
+
+      # ============================================================
+      # RELEASE SIGNATURE SECOND CHECK
+      # ============================================================
+
+      - name: Verify APK is release signed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          APK="$(
+            find android/app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print -quit
+          )"
+
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
+
+          "$APKSIGNER" verify \
+            --verbose \
+            "$APK"
+
+          echo "Release APK signature verification: PASS"
+
+      # ============================================================
+      # APK SHA256
+      # ============================================================
+
+      - name: Generate APK SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          APK="$(
+            find android/app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print -quit
+          )"
+
+          sha256sum "$APK"
+
+      # ============================================================
+      # PREPARE FINAL APK
+      # ============================================================
+
+      - name: Prepare final APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd source
+
+          APK="$(
+            find android/app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print -quit
+          )"
+
+          test -n "$APK"
+          test -f "$APK"
+
+          cp "$APK" \
+            ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk
+
+          sha256sum \
+            ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk \
+            > ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
+
+          test -s \
+            ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk
+
+          test -s \
+            ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
+
+          ls -lh \
+            ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk \
+            ../RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
+
+      # ============================================================
+      # FINAL ARTIFACT CHECK
+      # ============================================================
+
+      - name: Final artifact check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk
+          test -f RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
+
+          echo
+          echo "=============================================="
+          echo "RKMS FINAL SIGNED RELEASE APK READY"
+          echo "=============================================="
+
+      # ============================================================
+      # UPLOAD FINAL APK
+      # ============================================================
+
+      - name: Upload final signed release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RKMS-CONNECT-FINAL-SIGNED-RELEASE-APK
+          if-no-files-found: error
+          path: |
+            RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk
+            RKMS_CONNECT_FINAL_SIGNED_RELEASE.apk.sha256
